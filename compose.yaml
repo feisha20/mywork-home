@@ -18,6 +18,7 @@ services:
       CODEX_ARCHIVE_DIR: /records/codex/archived_sessions
       CLAUDE_PROJECTS_DIR: /records/claude/projects
       WORKBUDDY_PROJECTS_DIR: /records/workbuddy/projects
+      ZCODE_DB_DIR: /records/zcode/db
       WORKBENCH_RUNTIME_DIR: /app/.runtime
       WORKBENCH_SYNC_CONCURRENCY: ${WORKBENCH_SYNC_CONCURRENCY:-3}
     extra_hosts:
@@ -43,6 +44,11 @@ services:
       - type: bind
         source: ${WORKBUDDY_PROJECTS_DIR:-${HOME}/.workbuddy/projects}
         target: /records/workbuddy/projects
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${ZCODE_DB_DIR:-${HOME}/.zcode/cli/db}
+        target: /records/zcode/db
         read_only: true
         bind: { create_host_path: false }
       - harness-runtime:/app/.runtime

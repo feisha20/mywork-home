@@ -41,6 +41,7 @@ try {
     CODEX_ARCHIVE_DIR: existing.CODEX_ARCHIVE_DIR ?? join(hostHome, '.codex/archived_sessions'),
     CLAUDE_PROJECTS_DIR: existing.CLAUDE_PROJECTS_DIR ?? join(hostHome, '.claude/projects'),
     WORKBUDDY_PROJECTS_DIR: existing.WORKBUDDY_PROJECTS_DIR ?? join(hostHome, '.workbuddy/projects'),
+    ZCODE_DB_DIR: existing.ZCODE_DB_DIR ?? join(hostHome, '.zcode/cli/db'),
     SYNC_INTERVAL_MS: existing.SYNC_INTERVAL_MS ?? '600000',
   }
   delete values.WORKBENCH_ADMIN_DATABASE_URL

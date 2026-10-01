@@ -1,9 +1,11 @@
 import type { Task } from '../src/domain/workbench.js'
 
+export type SessionSource = Exclude<Task['source'], 'manual' | 'zentao'>
+
 export interface Evidence {
   messageId: string
   sessionId: string
-  source: 'codex' | 'claude' | 'workbuddy'
+  source: SessionSource
   projectPath: string
   timestamp: string
   quote: string
@@ -30,7 +32,7 @@ export interface SyncRun {
   id: string
   status: 'running' | 'succeeded' | 'partial_failed' | 'failed' | 'interrupted'
   phase: SyncPhase
-  activeSource?: 'codex' | 'claude' | 'workbuddy' | null
+  activeSource?: SessionSource | null
   startedAt: string
   finishedAt: string | null
   scannedFiles: number
@@ -46,5 +48,5 @@ export interface WorkbenchSnapshot {
   tasks: Task[]
   dailyReports: DailyReport[]
   harness: { run: SyncRun | null; nextSyncAt: string | null; model: string }
-  sources: Record<'codex' | 'claude' | 'workbuddy', { available: boolean; sessionCount: number; error: string | null }>
+  sources: Record<SessionSource, { available: boolean; sessionCount: number; error: string | null }>
 }

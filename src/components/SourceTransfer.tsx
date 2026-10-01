@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import type { SourceId } from '../domain/workbench'
+import { CAPTURE_SOURCES } from '../domain/workbench'
 
 export type CaptureSource = Exclude<SourceId, 'manual'>
 export type CaptureRefs<T extends HTMLElement = HTMLDivElement> = Record<CaptureSource, RefObject<T | null>>
@@ -16,7 +17,7 @@ interface SourceTransferProps {
 }
 interface Point { x: number; y: number }
 interface Circuit { source: CaptureSource; path: string; start: Point; end: Point }
-const channels: CaptureSource[] = ['zentao', 'claude', 'codex', 'workbuddy']
+const channels = CAPTURE_SOURCES
 
 // 折角使用短斜线，与背景电路线保持一致。
 function circuitPath(points: Point[]): string {
@@ -34,7 +35,7 @@ function circuitPath(points: Point[]): string {
   return `${path} L ${end.x} ${end.y}`
 }
 
-// 常驻四条电路线；空闲缓流、采集加速，后台停止测量和流光。
+// 每个渠道常驻一条电路线；空闲缓流、采集加速，后台停止测量和流光。
 export function SourceTransfer({ frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, working, visible }: SourceTransferProps) {
   const [geometry, setGeometry] = useState<{ circuits: Circuit[]; width: number; height: number } | null>(null)
   const layerRef = useRef<SVGSVGElement>(null)
@@ -62,13 +63,13 @@ export function SourceTransfer({ frameRef, sourceRefs, sourcePorts, bottomPins, 
         const port = ports[index]!.getBoundingClientRect(), pin = pins[index]!.getBoundingClientRect()
         const start = { x: port.left + port.width / 2 - bounds.left, y: port.top + port.height / 2 - bounds.top }
         const end = { x: pin.left + pin.width / 2 - bounds.left, y: pin.bottom - bounds.top }
-        // 两侧各保留两条平行线路，下排走外侧，上排走内侧。
+        // 后续各排逐渐走外侧，上排走内侧。
         const spacing = 12 + row * 8
         const lane = (columnLeft ? leftEdge - spacing : rightEdge + spacing) - bounds.left
         const gapBelowChip = firstRowTop - end.y
         // 外侧线路在较高的位置收拢，内侧线路在较低的位置收拢，避免交叉。
         const clearance = Math.max(12, Math.min(28, gapBelowChip - 8))
-        const bridge = horizontal ? Math.max(end.y, matrixBottom) + (row ? 8 : 16) : end.y + clearance * (row ? .6 : 1)
+        const bridge = horizontal ? Math.max(end.y, matrixBottom) + (Math.ceil(channels.length / 2) - row) * 8 : end.y + clearance * Math.pow(.6, row)
         const points = [start, { x: lane, y: start.y }, { x: lane, y: bridge }, { x: end.x, y: bridge }, end]
         // 路径起点固定为采集渠道，终点固定为芯片；递减偏移沿起点向终点传输。
         return { source, path: circuitPath(points), start: points[0], end: points.at(-1)! }

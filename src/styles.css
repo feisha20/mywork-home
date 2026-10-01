@@ -232,6 +232,7 @@ body {
 .src-claude { background: #FEF3C7; color: #B45309; }
 .src-codex { background: #F3E8FF; color: #7E22CE; }
 .src-workbuddy { background: #DCFCE7; color: #15803D; }
+.src-zcode { background: #E0F2FE; color: #0369A1; }
 
 .task-id {
   font-size: 11px;
@@ -639,6 +640,7 @@ body {
 .engine-node-pill:hover {
   border-color: rgba(255, 104, 56, 0.35);
 }
+.engine-node-pill:last-child:nth-child(odd) { grid-column: 1 / -1; }
 
 .node-meta {
   display: flex;

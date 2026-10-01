@@ -1,9 +1,9 @@
 import { createRef, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { SOURCES } from '../domain/workbench'
-import type { SourceId } from '../domain/workbench'
+import { CAPTURE_SOURCES, SOURCES } from '../domain/workbench'
 import type { WorkbenchSnapshot } from '../../shared/contracts'
 import { SourceTransfer } from './SourceTransfer'
+import type { CaptureRefs } from './SourceTransfer'
 
 export type TransferPhase = 'idle' | 'inbound' | 'orbit' | 'outbound'
 
@@ -29,15 +29,17 @@ interface ProcessorHubProps {
   visible: boolean
 }
 
-const engineSources: Exclude<SourceId, 'manual'>[] = ['zentao', 'claude', 'codex', 'workbuddy']
-// 上排接内侧引脚，下排接外侧引脚，让左右线路对称且不交叉。
-const bottomPinSources = ['codex', 'zentao', null, 'claude', 'workbuddy'] as const
+// 上排接内侧引脚，后续各排接外侧引脚，避免采集线路交叉。
+const bottomPinSources = ['zcode', 'codex', 'zentao', null, 'claude', 'workbuddy'] as const
+function createCaptureRefs<T extends HTMLElement>(): CaptureRefs<T> {
+  return Object.fromEntries(CAPTURE_SOURCES.map((source) => [source, createRef<T>()])) as CaptureRefs<T>
+}
 
 export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, completedCount, status, harness, sources, onSync, syncDisabled, visible }: ProcessorHubProps) {
   const hubRef = useRef<HTMLElement>(null)
-  const [sourceRefs] = useState(() => ({ codex: createRef<HTMLDivElement>(), claude: createRef<HTMLDivElement>(), zentao: createRef<HTMLDivElement>(), workbuddy: createRef<HTMLDivElement>() }))
-  const [sourcePorts] = useState(() => ({ codex: createRef<HTMLSpanElement>(), claude: createRef<HTMLSpanElement>(), zentao: createRef<HTMLSpanElement>(), workbuddy: createRef<HTMLSpanElement>() }))
-  const [bottomPins] = useState(() => ({ codex: createRef<HTMLSpanElement>(), claude: createRef<HTMLSpanElement>(), zentao: createRef<HTMLSpanElement>(), workbuddy: createRef<HTMLSpanElement>() }))
+  const [sourceRefs] = useState(() => createCaptureRefs<HTMLDivElement>())
+  const [sourcePorts] = useState(() => createCaptureRefs<HTMLSpanElement>())
+  const [bottomPins] = useState(() => createCaptureRefs<HTMLSpanElement>())
   const running = harness?.run?.status === 'running'
   const energized = running || phase !== 'idle' || routing
   const labels = { scanning: '扫描记录', extracting: '抽取工作事项', saving: '保存事项', idle: '同步结束' }
@@ -93,15 +95,18 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
 
       <div className="engine-matrix-wrap">
         <div className="engine-status-strip">
-          {engineSources.map((source, index) => (
-            <div className={`engine-node-pill${index % 2 === 0 ? ' source-on-left' : ''}${source === activeSource ? ' is-extracting' : ''}`} ref={sourceRefs[source]} key={source}>
-              <div className="node-meta">
-                <span className="node-name">{SOURCES[source].label}</span>
-                <span className="node-status">{source in (sources ?? {}) ? sources?.[source as 'codex' | 'claude' | 'workbuddy']?.available ? `${sources[source as 'codex' | 'claude' | 'workbuddy'].sessionCount} 个会话 · 已接入` : sources?.[source as 'codex' | 'claude' | 'workbuddy']?.error ?? '等待扫描' : '待接入'}</span>
+          {CAPTURE_SOURCES.map((source, index) => {
+            const state = source === 'zentao' ? undefined : sources?.[source]
+            return (
+              <div className={`engine-node-pill${index % 2 === 0 ? ' source-on-left' : ''}${source === activeSource ? ' is-extracting' : ''}`} ref={sourceRefs[source]} key={source}>
+                <div className="node-meta">
+                  <span className="node-name">{SOURCES[source].label}</span>
+                  <span className="node-status">{state ? state.available ? `${state.sessionCount} 个会话 · 已接入` : state.error ?? '等待扫描' : source === 'zentao' ? '待接入' : '等待扫描'}</span>
+                </div>
+                <span className="node-pulse" ref={sourcePorts[source]} aria-hidden="true" />
               </div>
-              <span className="node-pulse" ref={sourcePorts[source]} aria-hidden="true" />
-            </div>
-          ))}
+            )
+          })}
         </div>
         <div className="center-stats-badge">
           <span className={`count-box${energized ? ' is-active' : ''}`} role="status" aria-live="polite">{running && phase === 'idle' ? `${activeSource ? `${SOURCES[activeSource].label} · ` : ''}${labels[run!.phase]}` : status}</span>

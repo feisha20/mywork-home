@@ -3,8 +3,10 @@ import { createReadStream } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { redact } from './redact.js'
+import type { SessionSource } from '../shared/contracts.js'
 
-export type Source = 'codex' | 'claude' | 'workbuddy'
+export type Source = SessionSource
+export type JsonlSource = Exclude<Source, 'zcode'>
 export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string }
 export interface Cursor { path: string; source: Source; inode: string; offset: number; context: RecordContext; modifiedAt: number }
 export interface SourceMessage {
@@ -20,7 +22,7 @@ function textContent(content: unknown): string {
   return content.filter((block) => block && ['text', 'input_text', 'output_text'].includes(block.type)).map((block) => block.text ?? '').join('\n')
 }
 
-export function initialContext(path: string, source: Source): RecordContext {
+export function initialContext(path: string, source: JsonlSource): RecordContext {
   const ids = basename(path).match(/[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gi)
   return {
     sessionId: source === 'codex' ? ids?.[0] ?? basename(path, '.jsonl') : basename(path, '.jsonl'),
@@ -31,7 +33,7 @@ export function initialContext(path: string, source: Source): RecordContext {
 }
 
 // 仅提取用户与助手文字，不把工具返回值当作用户要求。
-export function normalizeRecord(row: Json, source: Source, context: RecordContext, secrets: string[] = []): SourceMessage | null {
+export function normalizeRecord(row: Json, source: JsonlSource, context: RecordContext, secrets: string[] = []): SourceMessage | null {
   const payload = row.payload ?? {}
   if (source === 'codex') {
     if (row.type === 'session_meta') {
@@ -90,7 +92,7 @@ export function normalizeRecord(row: Json, source: Source, context: RecordContex
   }
 }
 
-export function isSkippableRecordLine(line: Buffer, source: Source): boolean {
+export function isSkippableRecordLine(line: Buffer, source: JsonlSource): boolean {
   if (source === 'workbuddy') {
     return line.includes('"type":"function_call') || line.includes('"type": "function_call')
       || line.includes('"type":"reasoning"') || line.includes('"type": "reasoning"')
@@ -115,7 +117,7 @@ export async function listRecordFiles(root: string): Promise<string[]> {
 }
 
 // 字节游标只越过完整行；末尾半行留到下次，不会截断 UTF-8 字符。
-export async function readDelta(path: string, source: Source, previous: Cursor | null, cutoff: string, secrets: string[]) {
+export async function readDelta(path: string, source: JsonlSource, previous: Cursor | null, cutoff: string, secrets: string[]) {
   const info = await stat(path)
   const inode = String(info.ino)
   const reset = !previous || previous.inode !== inode || info.size < previous.offset || (previous.modifiedAt !== Math.trunc(info.mtimeMs) && info.size === previous.offset)

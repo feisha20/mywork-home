@@ -37,6 +37,11 @@ records/
 sessions/
 archived_sessions/
 *.jsonl
+# 本机会话 SQLite 数据库及其临时写入文件
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 coverage/
 *.tsbuildinfo
 .vite/

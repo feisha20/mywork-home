@@ -5,7 +5,8 @@ import type { SyncRun, WorkbenchSnapshot } from '../shared/contracts.js'
 import type { Config } from './config.js'
 import type { Extractor } from './harness.js'
 import { Store } from './store.js'
-import { listRecordFiles, readDelta, type Source, type SourceMessage } from './records.js'
+import { listRecordFiles, readDelta, type JsonlSource, type SourceMessage } from './records.js'
+import { ZcodeReader } from './zcode.js'
 import { redact } from './redact.js'
 
 export function messageBatches(messages: SourceMessage[], maxCharacters = 30000): SourceMessage[][] {
@@ -34,6 +35,7 @@ export class SyncService {
     codex: { available: false, sessionCount: 0, error: '尚未扫描' },
     claude: { available: false, sessionCount: 0, error: '尚未扫描' },
     workbuddy: { available: false, sessionCount: 0, error: '尚未扫描' },
+    zcode: { available: false, sessionCount: 0, error: '尚未扫描' },
   }
   constructor(readonly store: Store, private config: Config, private extractor: Extractor) {}
   async start() {
@@ -100,14 +102,14 @@ export class SyncService {
   private async execute(run: SyncRun, lock: PoolClient) {
     try {
       const cutoff = await this.store.cutoff()
-      const roots: [Source, string][] = [
+      const roots: [JsonlSource, string][] = [
         ['codex', this.config.CODEX_SESSIONS_DIR],
         ['codex', this.config.CODEX_ARCHIVE_DIR],
         ['claude', this.config.CLAUDE_PROJECTS_DIR],
         ['workbuddy', this.config.WORKBUDDY_PROJECTS_DIR],
       ]
       const secrets = [this.config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(this.config.DATABASE_URL).password)]
-      for (const source of ['codex', 'claude', 'workbuddy'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
+      for (const source of ['codex', 'claude', 'workbuddy', 'zcode'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
       for (const [source, root] of roots) {
         if (this.stopping) break
         run.activeSource = source; await this.store.saveRun(run)
@@ -132,6 +134,28 @@ export class SyncService {
             if (run.scannedFiles % 20 === 0) await this.store.saveRun(run)
           } catch { this.error(run, `${source}：部分记录读取失败，下次同步重试`) }
         }
+      }
+      if (!this.stopping) {
+        run.activeSource = 'zcode'; await this.store.saveRun(run)
+        let reader: ZcodeReader | undefined
+        try {
+          reader = new ZcodeReader(this.config.ZCODE_DB_DIR)
+          const sessions = reader.sessions(cutoff)
+          this.sources.zcode.available = true
+          for (const session of sessions) {
+            if (this.stopping) break
+            try {
+              const cursor = await this.store.cursor(reader.cursorPath(session))
+              const delta = reader.readDelta(session, cursor, cutoff, secrets)
+              run.newMessages += await this.store.ingest(delta.messages, delta.cursor)
+              if (delta.invalid) this.error(run, `Zcode：跳过 ${delta.invalid} 条损坏会话记录`)
+            } catch { this.error(run, 'Zcode：部分会话读取失败，下次同步重试') }
+          }
+          run.scannedFiles++
+        } catch {
+          this.sources.zcode.error = '会话数据库不存在、无法读取或格式不兼容'
+          this.error(run, `Zcode：${this.sources.zcode.error}`)
+        } finally { reader?.close() }
       }
       for (const entry of await this.store.sourceCounts()) {
         if (this.sources[entry.source]) this.sources[entry.source].sessionCount = entry.count

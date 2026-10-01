@@ -3,10 +3,12 @@ export const SOURCES = {
   claude: { label: 'Claude Code', className: 'src-claude' },
   codex: { label: 'Codex', className: 'src-codex' },
   workbuddy: { label: 'WorkBuddy', className: 'src-workbuddy' },
+  zcode: { label: 'Zcode', className: 'src-zcode' },
   manual: { label: '手动添加', className: 'src-manual' },
 } as const
 
 export type SourceId = keyof typeof SOURCES
+export const CAPTURE_SOURCES = ['zentao', 'claude', 'codex', 'workbuddy', 'zcode'] as const
 
 export interface Task {
   id: string
