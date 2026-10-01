@@ -1,0 +1,48 @@
+{
+  "name": "mywork-home",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "npm run build:web && npm run build:server",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "dev:server": "tsx watch server/main.ts",
+    "build:web": "tsc -b && vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "node dist-server/server/main.js",
+    "db:init": "tsx server/bootstrap.ts",
+    "tasks:summarize": "tsx server/summarize.ts",
+    "test:integration": "node scripts/integration.mjs",
+    "test:harness": "RUN_HARNESS_TESTS=true vitest run server/harness.integration.test.ts"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-sdk-client": "0.2.0-rc.2",
+    "@fastify/static": "^10.1.5",
+    "dotenv": "^18.0.5",
+    "fastify": "^5.12.5",
+    "motion": "^12.0.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "vite": "^8.1.0",
+    "vitest": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

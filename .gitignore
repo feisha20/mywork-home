@@ -21,3 +21,27 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+# macOS / 编辑器通用
+.DS_Store
+.idea/
+*.log
+node_modules/
+
+# 前端构建与本机开发产物
+dist/
+dist-server/
+# 会话抽取和工作日报模型的本机运行数据
+.runtime/
+# 本机会话副本与抽取调试记录
+records/
+sessions/
+archived_sessions/
+*.jsonl
+coverage/
+*.tsbuildinfo
+.vite/
+.npm-cache/
+.env
+.env.*
+.env.tmp.*
+!.env.example
