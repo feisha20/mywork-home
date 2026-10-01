@@ -43,8 +43,8 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     await migrate(pool); await migrate(pool)
     store = new Store(pool)
     directory = await mkdtemp(join(tmpdir(), 'workbench-db-'))
-    for (const name of ['codex', 'archive', 'claude']) await mkdir(join(directory, name))
-    const config = loadConfig({ DATABASE_URL: process.env.TEST_DATABASE_URL, CODEX_SESSIONS_DIR: join(directory, 'codex'), CODEX_ARCHIVE_DIR: join(directory, 'archive'), CLAUDE_PROJECTS_DIR: join(directory, 'claude'), SYNC_ENABLED: 'false', STATIC_DIR: join(directory, 'no-static') })
+    for (const name of ['codex', 'archive', 'claude', 'workbuddy']) await mkdir(join(directory, name))
+    const config = loadConfig({ DATABASE_URL: process.env.TEST_DATABASE_URL, CODEX_SESSIONS_DIR: join(directory, 'codex'), CODEX_ARCHIVE_DIR: join(directory, 'archive'), CLAUDE_PROJECTS_DIR: join(directory, 'claude'), WORKBUDDY_PROJECTS_DIR: join(directory, 'workbuddy'), SYNC_ENABLED: 'false', STATIC_DIR: join(directory, 'no-static') })
     const reports = new DailyReportService(store, { async generateDailyReport(_day, records, previous) {
       reportInputs.push(records.map((task) => task.id))
       return [{ text: '完善测试计划，汇总相关工作进展。', topic: '测试计划', taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...records.map((task) => task.id)])] }]

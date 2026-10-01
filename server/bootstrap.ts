@@ -40,6 +40,7 @@ try {
     CODEX_SESSIONS_DIR: existing.CODEX_SESSIONS_DIR ?? join(hostHome, '.codex/sessions'),
     CODEX_ARCHIVE_DIR: existing.CODEX_ARCHIVE_DIR ?? join(hostHome, '.codex/archived_sessions'),
     CLAUDE_PROJECTS_DIR: existing.CLAUDE_PROJECTS_DIR ?? join(hostHome, '.claude/projects'),
+    WORKBUDDY_PROJECTS_DIR: existing.WORKBUDDY_PROJECTS_DIR ?? join(hostHome, '.workbuddy/projects'),
     SYNC_INTERVAL_MS: existing.SYNC_INTERVAL_MS ?? '600000',
   }
   delete values.WORKBENCH_ADMIN_DATABASE_URL

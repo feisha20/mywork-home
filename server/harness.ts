@@ -1,4 +1,5 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -77,7 +78,7 @@ export function parseSummaries(raw: string, tasks: Task[]): { taskId: string; ti
 }
 
 export class HarnessExtractor implements Extractor {
-  private active: DeepSeekHarness | null = null
+  private active = new Set<DeepSeekHarness>()
   private stopped = false
   constructor(private config: Config, private runtimeName = 'harness') {}
   async extract(messages: SourceMessage[], context: SourceMessage[], tasks: Task[]) {
@@ -120,7 +121,8 @@ export class HarnessExtractor implements Extractor {
     timeoutMs = this.config.WORKBENCH_BATCH_TIMEOUT_MS, maxAttempts = 2): Promise<T> {
     if (this.stopped) throw new Error('抽取服务正在关闭')
     if (!this.config.WORKBENCH_LLM_API_KEY) throw new Error('尚未配置模型密钥 WORKBENCH_LLM_API_KEY')
-    const directory = resolve(this.config.WORKBENCH_RUNTIME_DIR, this.runtimeName)
+    const runId = randomUUID()
+    const directory = resolve(this.config.WORKBENCH_RUNTIME_DIR, this.runtimeName, runId)
     await mkdir(join(directory, 'home'), { recursive: true, mode: 0o700 })
     const patch = join(directory, 'workbench.patch.yml')
     await writeFile(patch, JSON.stringify(harnessPatch(this.config, systemPrompt), null, 2), { mode: 0o600 })
@@ -133,7 +135,7 @@ export class HarnessExtractor implements Extractor {
       env: { PATH: process.env.PATH, HOME: directory, LANG: 'zh_CN.UTF-8',
         WORKBENCH_LLM_API_KEY: this.config.WORKBENCH_LLM_API_KEY },
     })
-    this.active = harness
+    this.active.add(harness)
     let timer: NodeJS.Timeout | undefined
     try {
       return await Promise.race([
@@ -165,9 +167,13 @@ export class HarnessExtractor implements Extractor {
       ])
     } finally {
       clearTimeout(timer)
-      await harness.close()
-      if (this.active === harness) this.active = null
+      this.active.delete(harness)
+      await harness.close().catch(() => {})
+      await rm(directory, { recursive: true, force: true }).catch(() => {})
     }
   }
-  async close() { this.stopped = true; await this.active?.close() }
+  async close() {
+    this.stopped = true
+    await Promise.all([...this.active].map((harness) => harness.close().catch(() => {})))
+  }
 }

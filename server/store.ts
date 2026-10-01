@@ -201,9 +201,10 @@ export class Store {
           updated++
         } else {
           if (item.taskId) throw new Error('模型返回了未知事项 ID')
+          const prefix = first.source === 'codex' ? 'CX' : first.source === 'workbuddy' ? 'WB' : 'CC'
           const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,project_path,status_origin,evidence,recorded_at)
             VALUES($1,$2,$3,$4,$5,$6,$7,'ai',$8,$9) ON CONFLICT(id) DO NOTHING`,
-          [id, `${first.source === 'codex' ? 'CX' : 'CC'}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence), last.timestamp])
+          [id, `${prefix}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence), last.timestamp])
           created += result.rowCount ?? 0
         }
       }
@@ -224,6 +225,6 @@ export class Store {
       WHERE data->>'status'='running'`, [new Date().toISOString()])
   }
   async sourceCounts() {
-    return (await this.pool.query('SELECT source,count(*)::int AS count FROM workbench.source_sessions GROUP BY source')).rows as { source: 'codex' | 'claude'; count: number }[]
+    return (await this.pool.query('SELECT source,count(*)::int AS count FROM workbench.source_sessions GROUP BY source')).rows as { source: 'codex' | 'claude' | 'workbuddy'; count: number }[]
   }
 }

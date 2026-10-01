@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile, appendFile, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { initialContext, normalizeRecord, readDelta } from './records.js'
+import { initialContext, isSkippableRecordLine, normalizeRecord, readDelta } from './records.js'
 import { redact } from './redact.js'
 import { messageBatches } from './sync.js'
 
@@ -31,6 +31,63 @@ describe('会话记录适配与脱敏', () => {
     expect(ctx.parentSessionId).toBe('session-1')
     expect(normalizeRecord({ ...row, isMeta: true }, 'claude', ctx)).toBeNull()
     expect(normalizeRecord({ ...row, isCompactSummary: true }, 'claude', ctx)).toBeNull()
+  })
+  it('WorkBuddy提取用户与助手文字，解析数字时间戳并关联子代理', () => {
+    const ctx = initialContext('/project/session-wb-1/subagents/agent-wb-1.jsonl', 'workbuddy')
+    expect(ctx.parentSessionId).toBe('session-wb-1')
+    const userRow = {
+      type: 'message', role: 'user', id: 'wb-msg-1', sessionId: 'session-wb-1', cwd: '/Users/linjt/kst_workbuddy/周报',
+      timestamp: 1790767106278,
+      content: [{ type: 'input_text', text: '<system-reminder data-role="user-context">系统提示</system-reminder><cb_summary>历史摘要</cb_summary><user_query>整理本周周报</user_query>' }],
+    }
+    const userMsg = normalizeRecord(userRow, 'workbuddy', ctx)!
+    expect(userMsg.text).toBe('整理本周周报')
+    expect(userMsg.source).toBe('workbuddy')
+    expect(userMsg.rootSessionId).toBe('session-wb-1')
+    expect(userMsg.projectPath).toBe('/Users/linjt/kst_workbuddy/周报')
+    expect(userMsg.timestamp).toBe(new Date(1790767106278).toISOString())
+
+    const assistantRow = {
+      type: 'message', role: 'assistant', id: 'wb-msg-2', sessionId: 'session-wb-1', cwd: '/Users/linjt/kst_workbuddy/周报',
+      timestamp: 1790767280938,
+      content: [{ type: 'output_text', text: '本周周报已整理完成' }],
+    }
+    const assistantMsg = normalizeRecord(assistantRow, 'workbuddy', ctx)!
+    expect(assistantMsg.text).toBe('本周周报已整理完成')
+    expect(assistantMsg.role).toBe('assistant')
+
+    expect(normalizeRecord({ type: 'session-meta', sessionId: 'session-wb-1' }, 'workbuddy', ctx)).toBeNull()
+    expect(normalizeRecord({ type: 'function_call', name: 'Read' }, 'workbuddy', ctx)).toBeNull()
+    expect(normalizeRecord({ type: 'reasoning', rawContent: [{ type: 'reasoning_text', text: '思考中' }] }, 'workbuddy', ctx)).toBeNull()
+  })
+  it('快速预过滤跳过非消息行，且不误伤讨论工具或推理的用户消息', async () => {
+    // 应当被预过滤的各来源记录行
+    expect(isSkippableRecordLine(Buffer.from('{"type":"function_call","name":"Read"}'), 'workbuddy')).toBe(true)
+    expect(isSkippableRecordLine(Buffer.from('{"type": "function_call_result","result":"ok"}'), 'workbuddy')).toBe(true)
+    expect(isSkippableRecordLine(Buffer.from('{"type":"reasoning","rawContent":[]}'), 'workbuddy')).toBe(true)
+    expect(isSkippableRecordLine(Buffer.from('{"type":"file-history-snapshot"}'), 'workbuddy')).toBe(true)
+    expect(isSkippableRecordLine(Buffer.from('{"type":"ai-title"}'), 'workbuddy')).toBe(true)
+    expect(isSkippableRecordLine(Buffer.from('{"isMeta":true}'), 'claude')).toBe(true)
+    expect(isSkippableRecordLine(Buffer.from('{"channel":"analysis"}'), 'codex')).toBe(true)
+
+    // 不应被跳过的消息行（即使内容中包含相关关键字）
+    const normalMsg = Buffer.from(JSON.stringify({
+      type: 'message', role: 'user', timestamp: 1790767106278,
+      content: [{ type: 'input_text', text: '请解释 {"type":"function_call"} 和 reasoning 的作用' }],
+    }))
+    expect(isSkippableRecordLine(normalMsg, 'workbuddy')).toBe(false)
+
+    // readDelta 遇上大量工具行时无需反序列化，正常读取有效消息
+    const toolLine = JSON.stringify({ type: 'function_call_result', dump: 'large data'.repeat(100) })
+    const validLine = JSON.stringify({
+      type: 'message', role: 'user', id: 'm-1', sessionId: 's-1', cwd: '/work',
+      timestamp: 1790767106278,
+      content: [{ type: 'input_text', text: '讨论 function_call 的优化方案' }],
+    })
+    const path = await file(`${toolLine}\n${validLine}\n${toolLine}\n`)
+    const delta = await readDelta(path, 'workbuddy', null, cutoff, [])
+    expect(delta.messages).toHaveLength(1)
+    expect(delta.messages[0].text).toBe('讨论 function_call 的优化方案')
   })
   it('不提交末尾半行，追加完成后只读取新增记录且保留中文', async () => {
     const one = JSON.stringify(claude('中文事项一')), two = JSON.stringify(claude('中文事项二', 'message-2'))

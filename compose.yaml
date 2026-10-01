@@ -17,7 +17,9 @@ services:
       CODEX_SESSIONS_DIR: /records/codex/sessions
       CODEX_ARCHIVE_DIR: /records/codex/archived_sessions
       CLAUDE_PROJECTS_DIR: /records/claude/projects
+      WORKBUDDY_PROJECTS_DIR: /records/workbuddy/projects
       WORKBENCH_RUNTIME_DIR: /app/.runtime
+      WORKBENCH_SYNC_CONCURRENCY: ${WORKBENCH_SYNC_CONCURRENCY:-3}
     extra_hosts:
       - host.docker.internal:host-gateway
     ports:
@@ -36,6 +38,11 @@ services:
       - type: bind
         source: ${CLAUDE_PROJECTS_DIR:-${HOME}/.claude/projects}
         target: /records/claude/projects
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${WORKBUDDY_PROJECTS_DIR:-${HOME}/.workbuddy/projects}
+        target: /records/workbuddy/projects
         read_only: true
         bind: { create_host_path: false }
       - harness-runtime:/app/.runtime

@@ -15,8 +15,10 @@ const environment = z.object({
   CODEX_SESSIONS_DIR: z.string().default(join(homedir(), '.codex/sessions')),
   CODEX_ARCHIVE_DIR: z.string().default(join(homedir(), '.codex/archived_sessions')),
   CLAUDE_PROJECTS_DIR: z.string().default(join(homedir(), '.claude/projects')),
+  WORKBUDDY_PROJECTS_DIR: z.string().default(join(homedir(), '.workbuddy/projects')),
   WORKBENCH_RUNTIME_DIR: z.string().default(resolve('.runtime')),
   WORKBENCH_BATCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(180_000),
+  WORKBENCH_SYNC_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
   STATIC_DIR: z.string().default(resolve('dist')),
 })
 

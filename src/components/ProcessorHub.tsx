@@ -97,7 +97,7 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
             <div className={`engine-node-pill${index % 2 === 0 ? ' source-on-left' : ''}${source === activeSource ? ' is-extracting' : ''}`} ref={sourceRefs[source]} key={source}>
               <div className="node-meta">
                 <span className="node-name">{SOURCES[source].label}</span>
-                <span className="node-status">{source === 'codex' || source === 'claude' ? sources?.[source]?.available ? `${sources[source].sessionCount} 个会话 · 已接入` : sources?.[source]?.error ?? '等待扫描' : '待接入'}</span>
+                <span className="node-status">{source in (sources ?? {}) ? sources?.[source as 'codex' | 'claude' | 'workbuddy']?.available ? `${sources[source as 'codex' | 'claude' | 'workbuddy'].sessionCount} 个会话 · 已接入` : sources?.[source as 'codex' | 'claude' | 'workbuddy']?.error ?? '等待扫描' : '待接入'}</span>
               </div>
               <span className="node-pulse" ref={sourcePorts[source]} aria-hidden="true" />
             </div>

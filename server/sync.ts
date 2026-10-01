@@ -28,10 +28,12 @@ export class SyncService {
   private run: SyncRun | null = null
   private timer: NodeJS.Timeout | null = null
   private stopping = false
+  private runSavePromise: Promise<void> = Promise.resolve()
   nextSyncAt: string | null = null
   sources: WorkbenchSnapshot['sources'] = {
     codex: { available: false, sessionCount: 0, error: '尚未扫描' },
     claude: { available: false, sessionCount: 0, error: '尚未扫描' },
+    workbuddy: { available: false, sessionCount: 0, error: '尚未扫描' },
   }
   constructor(readonly store: Store, private config: Config, private extractor: Extractor) {}
   async start() {
@@ -74,6 +76,7 @@ export class SyncService {
     }
     this.run = { id: randomUUID(), status: 'running', phase: 'scanning', startedAt: new Date().toISOString(), finishedAt: null,
       activeSource: null, scannedFiles: 0, newMessages: 0, newTasks: 0, updatedTasks: 0, failedBatches: 0, errors: [] }
+    this.runSavePromise = Promise.resolve()
     try { await this.store.saveRun(this.run) }
     catch (error) {
       try { await lock.query('SELECT pg_advisory_unlock(73921002)') }
@@ -87,12 +90,24 @@ export class SyncService {
     return run
   }
   private error(run: SyncRun, message: string) { if (run.errors.length < 20) run.errors.push(redact(message, [this.config.WORKBENCH_LLM_API_KEY])) }
+  private saveRunProgress(run: SyncRun): Promise<void> {
+    this.runSavePromise = this.runSavePromise
+      .catch(() => {})
+      .then(() => this.store.saveRun(run))
+      .catch(() => {})
+    return this.runSavePromise
+  }
   private async execute(run: SyncRun, lock: PoolClient) {
     try {
       const cutoff = await this.store.cutoff()
-      const roots: [Source, string][] = [['codex', this.config.CODEX_SESSIONS_DIR], ['codex', this.config.CODEX_ARCHIVE_DIR], ['claude', this.config.CLAUDE_PROJECTS_DIR]]
+      const roots: [Source, string][] = [
+        ['codex', this.config.CODEX_SESSIONS_DIR],
+        ['codex', this.config.CODEX_ARCHIVE_DIR],
+        ['claude', this.config.CLAUDE_PROJECTS_DIR],
+        ['workbuddy', this.config.WORKBUDDY_PROJECTS_DIR],
+      ]
       const secrets = [this.config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(this.config.DATABASE_URL).password)]
-      for (const source of ['codex', 'claude'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
+      for (const source of ['codex', 'claude', 'workbuddy'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
       for (const [source, root] of roots) {
         if (this.stopping) break
         run.activeSource = source; await this.store.saveRun(run)
@@ -118,8 +133,10 @@ export class SyncService {
           } catch { this.error(run, `${source}：部分记录读取失败，下次同步重试`) }
         }
       }
-      for (const entry of await this.store.sourceCounts()) this.sources[entry.source].sessionCount = entry.count
-      run.phase = 'extracting'; run.activeSource = null; await this.store.saveRun(run)
+      for (const entry of await this.store.sourceCounts()) {
+        if (this.sources[entry.source]) this.sources[entry.source].sessionCount = entry.count
+      }
+      run.phase = 'extracting'; run.activeSource = null; await this.saveRunProgress(run)
       const groups = new Map<string, SourceMessage[]>()
       const rootCache = new Map<string, string>()
       for (const message of await this.store.pendingMessages()) {
@@ -132,21 +149,24 @@ export class SyncService {
         groups.get(key)!.push(message)
       }
       let modelUnavailable = false
-      for (const [key, messages] of groups) {
-        if (this.stopping || modelUnavailable) break
+      const entries = [...groups.entries()]
+      const concurrency = Math.min(this.config.WORKBENCH_SYNC_CONCURRENCY, entries.length)
+      let nextIndex = 0
+
+      const processGroup = async ([key, messages]: [string, SourceMessage[]]) => {
         for (const batch of messageBatches(messages)) {
-          if (this.stopping) break
+          if (this.stopping || modelUnavailable) break
           const id = this.store.batchId(batch)
           if (!await this.store.startBatch(id, key, batch)) continue
           try {
             const context = await this.store.contextMessages(batch[0].source, batch[0].rootSessionId, batch[0].timestamp, batch[0].projectPath)
             const tasks = await this.store.projectTasks(batch[0].projectPath)
-            run.phase = 'extracting'; run.activeSource = batch[0].source; await this.store.saveRun(run)
+            run.phase = 'extracting'; run.activeSource = batch[0].source; await this.saveRunProgress(run)
             const items = await this.extractor.extract(batch, context, tasks)
-            run.phase = 'saving'; await this.store.saveRun(run)
+            run.phase = 'saving'; await this.saveRunProgress(run)
             const counts = await this.store.applyExtraction(id, batch, context, items)
             run.newTasks += counts.created; run.updatedTasks += counts.updated
-            await this.store.saveRun(run)
+            await this.saveRunProgress(run)
           } catch (error) {
             // 不存储上游完整错误，避免 SDK 把提示词或请求头带入日志。
             const reason = error instanceof Error && /超时|校验|密钥|正在关闭/.test(error.message) ? redact(error.message, secrets) : '模型接入或抽取失败，请检查配置及套餐额度'
@@ -157,6 +177,16 @@ export class SyncService {
           }
         }
       }
+
+      const workers = Array.from({ length: concurrency }, async () => {
+        while (nextIndex < entries.length && !this.stopping && !modelUnavailable) {
+          const entry = entries[nextIndex++]
+          if (!entry) break
+          await processGroup(entry)
+        }
+      })
+      await Promise.all(workers)
+      await this.runSavePromise
       run.status = this.stopping ? 'interrupted' : run.errors.length ? 'partial_failed' : 'succeeded'
     } catch { run.status = 'failed'; this.error(run, '同步失败，请检查数据库连接；已有记录和进度已保留') }
     finally {

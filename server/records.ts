@@ -4,7 +4,7 @@ import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { redact } from './redact.js'
 
-export type Source = 'codex' | 'claude'
+export type Source = 'codex' | 'claude' | 'workbuddy'
 export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string }
 export interface Cursor { path: string; source: Source; inode: string; offset: number; context: RecordContext; modifiedAt: number }
 export interface SourceMessage {
@@ -24,7 +24,8 @@ export function initialContext(path: string, source: Source): RecordContext {
   const ids = basename(path).match(/[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gi)
   return {
     sessionId: source === 'codex' ? ids?.[0] ?? basename(path, '.jsonl') : basename(path, '.jsonl'),
-    projectPath: '', parentSessionId: source === 'claude' && basename(dirname(path)) === 'subagents' ? basename(dirname(dirname(path))) : null,
+    projectPath: '',
+    parentSessionId: (source === 'claude' || source === 'workbuddy') && basename(dirname(path)) === 'subagents' ? basename(dirname(dirname(path))) : null,
     turnId: '',
   }
 }
@@ -61,21 +62,46 @@ export function normalizeRecord(row: Json, source: Source, context: RecordContex
       role = 'assistant'; text = textContent(payload.item.text ?? payload.item.content)
     } else return null
     eventId = `${context.turnId || row.timestamp}:${role}:${digest(text)}`
-  } else {
+  } else if (source === 'claude') {
     if (!['user', 'assistant'].includes(row.type) || row.isMeta || row.isCompactSummary) return null
     role = row.type; text = textContent(row.message?.content)
     eventId = row.uuid ?? row.message?.id ?? `${row.timestamp}:${digest(text)}`
+  } else {
+    if (row.type !== 'message' || !['user', 'assistant'].includes(row.role)) return null
+    role = row.role; text = textContent(row.content)
+    eventId = row.id ?? row.uuid ?? `${row.timestamp}:${digest(text)}`
   }
-  if (!text.trim() || !Number.isFinite(Date.parse(row.timestamp))) return null
+  const parsedTime = typeof row.timestamp === 'number' ? row.timestamp : Date.parse(row.timestamp)
+  if (!text.trim() || !Number.isFinite(parsedTime)) return null
   if (role === 'user' && /^(?:# AGENTS\.md instructions|<environment_context>|<external_codex_apps_open_page>|<send_user_message_question_reply>)/.test(text.trim())) return null
-  text = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim()
+  text = text.replace(/<system-reminder[\s\S]*?<\/system-reminder>/g, '')
+  if (source === 'workbuddy') {
+    text = text.replace(/<cb_summary>[\s\S]*?<\/cb_summary>/g, '')
+    text = text.replace(/<image_local_path>[\s\S]*?<\/image_local_path>/g, '')
+    text = text.replace(/<user_query>([\s\S]*?)<\/user_query>/g, '$1')
+  }
+  text = text.trim()
   if (!text) return null
   const safe = redact(text, secrets)
   return {
     id: digest(`${source}:${context.sessionId}:${eventId}`), source, sessionId: context.sessionId,
     rootSessionId: context.parentSessionId ?? context.sessionId, projectPath: context.projectPath,
-    role, timestamp: new Date(row.timestamp).toISOString(), text: safe,
+    role, timestamp: new Date(parsedTime).toISOString(), text: safe,
   }
+}
+
+export function isSkippableRecordLine(line: Buffer, source: Source): boolean {
+  if (source === 'workbuddy') {
+    return line.includes('"type":"function_call') || line.includes('"type": "function_call')
+      || line.includes('"type":"reasoning"') || line.includes('"type": "reasoning"')
+      || line.includes('"type":"file-history-snapshot"') || line.includes('"type": "file-history-snapshot"')
+      || line.includes('"type":"ai-title"') || line.includes('"type": "ai-title"')
+  }
+  if (source === 'claude') {
+    return line.includes('"isMeta":true') || line.includes('"isMeta": true')
+      || line.includes('"isCompactSummary":true') || line.includes('"isCompactSummary": true')
+  }
+  return line.includes('"channel":"analysis"') || line.includes('"channel":"reasoning"')
 }
 
 export async function listRecordFiles(root: string): Promise<string[]> {
@@ -109,6 +135,7 @@ export async function readDelta(path: string, source: Source, previous: Cursor |
         droppedBytes = 0
         if (dropping) { dropping = false; continue }
         if (!line.length) continue
+        if (isSkippableRecordLine(line, source)) continue
         try {
           const message = normalizeRecord(JSON.parse(line.toString('utf8')), source, context, secrets)
           if (message && message.timestamp >= cutoff) messages.push(message)
