@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+.runtime
+records
+sessions
+archived_sessions
+*.jsonl
+node_modules
+dist
+dist-server
+coverage
+*.log
+.DS_Store
+.agents
+.codex

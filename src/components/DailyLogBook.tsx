@@ -1,8 +1,9 @@
 import type { RefObject } from 'react'
 import { motion } from 'motion/react'
 import { dateFromKey, recordsForDate, SOURCES } from '../domain/workbench'
-import type { WorkbenchState } from '../domain/workbench'
+import type { Task, WorkbenchState } from '../domain/workbench'
 import { Icon } from './Icon'
+import { TaskEvidence } from './TaskEvidence'
 
 interface DailyLogBookProps {
   state: WorkbenchState
@@ -12,20 +13,22 @@ interface DailyLogBookProps {
   onSelectDay: (day: string) => void
   deckRef: RefObject<HTMLDivElement | null>
   recentId: string | null
+  onReopen: (task: Task) => void
+  disabled: boolean
 }
 
 function shortLabel(day: string, today: string) {
   if (day === today) return '今日'
   const yesterday = dateFromKey(today)
-  yesterday.setDate(yesterday.getDate() - 1)
+  yesterday.setTime(yesterday.getTime() - 86400000)
   if (dateFromKey(day).getTime() === yesterday.getTime()) return '昨日'
-  return new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(dateFromKey(day))
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', weekday: 'short' }).format(dateFromKey(day))
 }
 
-const fullDate = new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
-const logTime = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+const fullDate = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
+const logTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
 
-export function DailyLogBook({ state, days, today, selectedDay, onSelectDay, deckRef, recentId }: DailyLogBookProps) {
+export function DailyLogBook({ state, days, today, selectedDay, onSelectDay, deckRef, recentId, onReopen, disabled }: DailyLogBookProps) {
   const selectedIndex = Math.max(0, days.indexOf(selectedDay))
   const count = recordsForDate(state, selectedDay).length
   return (
@@ -84,6 +87,8 @@ export function DailyLogBook({ state, days, today, selectedDay, onSelectDay, dec
                       </div>
                       <p className="daily-log-text">{task.title}</p>
                       <span className="daily-log-reference">{task.reference}</span>
+                      <TaskEvidence task={task} />
+                      <button className="reopen-task" disabled={disabled} onClick={() => onReopen(task)} aria-label={`恢复为待办：${task.title}`}>恢复为待办</button>
                     </motion.article>
                   ))}
                   {records.length === 0 && <div className="empty-state"><span className="empty-icon"><Icon name="book" /></span><h3>今天的记录，等你写下</h3><p>完成一项待办后，它会出现在这里。</p></div>}

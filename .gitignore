@@ -29,10 +29,18 @@ node_modules/
 
 # 前端构建与本机开发产物
 dist/
+dist-server/
+.runtime/
+# 本机会话副本与抽取调试记录
+records/
+sessions/
+archived_sessions/
+*.jsonl
 coverage/
 *.tsbuildinfo
 .vite/
 .npm-cache/
 .env
 .env.*
+.env.tmp.*
 !.env.example

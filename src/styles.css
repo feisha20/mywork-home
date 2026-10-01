@@ -1075,3 +1075,17 @@ button:focus-visible, input:focus-visible {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   .idle-flow-beam { display: none; }
 }
+
+/* 后端同步状态与来源证据。 */
+.sync-controls { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 18px; color: #64748b; font-size: 12px; text-align: center; }
+.sync-button, .reopen-task, .request-error button { border: 1px solid #fdba74; border-radius: 8px; background: #fff7ed; color: #9a3412; padding: 8px 12px; cursor: pointer; font: inherit; }
+.sync-button:disabled, .reopen-task:disabled { opacity: .5; cursor: wait; }
+.sync-controls details { max-width: 320px; text-align: left; }
+.sync-controls small { opacity: .8; }
+.task-evidence { font-size: 11px; margin-top: 8px; color: #64748b; max-width: 100%; overflow-wrap: anywhere; }
+.task-evidence summary { cursor: pointer; }
+.task-evidence blockquote { margin: 8px 0; padding: 8px 10px; border-left: 2px solid #fdba74; background: #fff7ed; white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.evidence-path { font-family: monospace; }
+.reopen-task { margin-top: 8px; font-size: 11px; padding: 4px 8px; }
+.request-error { color: #b91c1c; }
+.request-error button { margin-left: 12px; }

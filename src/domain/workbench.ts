@@ -15,6 +15,9 @@ export interface Task {
   title: string
   createdAt: string
   completedAt: string | null
+  projectPath?: string
+  statusOrigin?: 'manual' | 'ai'
+  evidence?: import('../../shared/contracts.js').Evidence[]
 }
 
 export interface WorkbenchState {
@@ -23,20 +26,21 @@ export interface WorkbenchState {
 }
 
 export function dateKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
 }
 
 export function dateFromKey(key: string): Date {
   const [year, month, day] = key.split('-').map(Number)
-  return new Date(year, month - 1, day, 12)
+  return new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T12:00:00+08:00`)
 }
 
 export function recentWorkdays(today: Date, count = 4): string[] {
-  const cursor = new Date(today)
+  const cursor = dateFromKey(dateKey(today))
   const days = [dateKey(cursor)]
   while (days.length < count) {
-    cursor.setDate(cursor.getDate() - 1)
-    if (cursor.getDay() !== 0 && cursor.getDay() !== 6) days.push(dateKey(cursor))
+    cursor.setTime(cursor.getTime() - 86_400_000)
+    const weekday = new Date(`${dateKey(cursor)}T00:00:00Z`).getUTCDay()
+    if (weekday !== 0 && weekday !== 6) days.push(dateKey(cursor))
   }
   return days
 }
@@ -76,9 +80,7 @@ export function addTask(state: WorkbenchState, title: string, id: string, now: D
 export function createDemoState(today: Date): WorkbenchState {
   const days = recentWorkdays(today)
   const at = (day: string, hour: number, minute = 0) => {
-    const date = dateFromKey(day)
-    date.setHours(hour, minute, 0, 0)
-    return date.toISOString()
+    return new Date(`${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`).toISOString()
   }
   const pending: Array<[SourceId, string, string]> = [
     ['zentao', 'BUG-20489', '核心支付通道偶发超时及分布式事务一致性复验'],

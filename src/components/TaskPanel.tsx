@@ -4,23 +4,27 @@ import { AnimatePresence, motion } from 'motion/react'
 import { SOURCES } from '../domain/workbench'
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
+import { TaskEvidence } from './TaskEvidence'
 
 interface TaskPanelProps {
   tasks: Task[]
   panelRef: RefObject<HTMLElement | null>
   activeId: string | null
-  onAdd: (title: string) => void
+  disabled?: boolean
+  onAdd: (title: string) => Promise<void>
   onComplete: (task: Task, button: HTMLButtonElement) => void
 }
 
-export function TaskPanel({ tasks, panelRef, activeId, onAdd, onComplete }: TaskPanelProps) {
+export function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComplete }: TaskPanelProps) {
   const [title, setTitle] = useState('')
-  const busy = activeId !== null
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  const [adding, setAdding] = useState(false)
+  const busy = activeId !== null || !!disabled || adding
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!title.trim() || busy) return
-    onAdd(title)
-    setTitle('')
+    setAdding(true)
+    try { await onAdd(title); setTitle('') } catch { /* 请求失败时保留输入内容。 */ }
+    finally { setAdding(false) }
   }
 
   return (
@@ -50,6 +54,7 @@ export function TaskPanel({ tasks, panelRef, activeId, onAdd, onComplete }: Task
                   <span className="task-id">{task.reference}</span>
                 </div>
                 <p className="task-text" title={task.title}>{task.title}</p>
+                <TaskEvidence task={task} />
               </div>
               <button
                 className="btn-pipe-transfer"
@@ -72,7 +77,7 @@ export function TaskPanel({ tasks, panelRef, activeId, onAdd, onComplete }: Task
         )}
       </div>
 
-      <form className="quick-add-box" onSubmit={handleSubmit}>
+      <form className="quick-add-box" onSubmit={(event) => { void handleSubmit(event) }}>
         <Icon name="plus" className="quick-add-icon" />
         <input
           className="quick-add-input"
@@ -83,7 +88,7 @@ export function TaskPanel({ tasks, panelRef, activeId, onAdd, onComplete }: Task
           disabled={busy}
           onChange={(event) => setTitle(event.target.value)}
         />
-        <button className="quick-add-btn" disabled={busy || !title.trim()} type="submit">添加</button>
+        <button className="quick-add-btn" disabled={busy || !title.trim()} type="submit">{adding ? '保存中' : '添加'}</button>
       </form>
       <span className="panel-footnote">手动添加的事项也会自动收进日报</span>
     </section>

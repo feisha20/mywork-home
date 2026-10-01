@@ -1,0 +1,69 @@
+name: mywork-home
+x-workbench-image: &workbench-image
+  image: mywork-home:local
+  build: .
+services:
+  workbench:
+    <<: *workbench-image
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${WORKBENCH_DB_USER:-mywork_home_app}:${WORKBENCH_DB_PASSWORD:-}@${WORKBENCH_DB_HOST:-host.docker.internal}:${WORKBENCH_DB_PORT:-5432}/${WORKBENCH_DB_NAME:-mywork_home}
+      HOST: 0.0.0.0
+      PORT: 8787
+      CODEX_SESSIONS_DIR: /records/codex/sessions
+      CODEX_ARCHIVE_DIR: /records/codex/archived_sessions
+      CLAUDE_PROJECTS_DIR: /records/claude/projects
+      WORKBENCH_RUNTIME_DIR: /app/.runtime
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - 127.0.0.1:${WORKBENCH_PORT:-8787}:8787
+    volumes:
+      - type: bind
+        source: ${CODEX_SESSIONS_DIR:-${HOME}/.codex/sessions}
+        target: /records/codex/sessions
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${CODEX_ARCHIVE_DIR:-${HOME}/.codex/archived_sessions}
+        target: /records/codex/archived_sessions
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${CLAUDE_PROJECTS_DIR:-${HOME}/.claude/projects}
+        target: /records/claude/projects
+        read_only: true
+        bind: { create_host_path: false }
+      - harness-runtime:/app/.runtime
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 30s
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    logging:
+      driver: json-file
+      options: { max-size: 10m, max-file: '3' }
+  init-db:
+    <<: *workbench-image
+    profiles: [setup]
+    user: ${LOCAL_UID:-1000}:${LOCAL_GID:-1000}
+    command: [node, dist-server/server/bootstrap.js]
+    environment:
+      WORKBENCH_ADMIN_DATABASE_URL: ${WORKBENCH_ADMIN_DATABASE_URL:-}
+      WORKBENCH_LLM_API_KEY: ${WORKBENCH_LLM_API_KEY:-}
+      WORKBENCH_HOST_HOME: ${HOME}
+      SETUP_ENV_PATH: /bootstrap/.env
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - .:/bootstrap
+volumes:
+  harness-runtime:

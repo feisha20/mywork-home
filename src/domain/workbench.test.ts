@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { addTask, completeTask, createDemoState, dateKey, decodeSnapshot, recentWorkdays, recordsForDate } from './workbench'
 
-const today = new Date(2026, 8, 30, 14, 0)
+const today = new Date('2026-09-30T14:00:00+08:00')
 
 describe('工作台记录', () => {
   it('跨周末与月界仍能生成最近工作日', () => {
-    expect(recentWorkdays(new Date(2026, 8, 1))).toEqual(['2026-09-01', '2026-08-31', '2026-08-28', '2026-08-27'])
+    expect(recentWorkdays(new Date('2026-09-01T00:00:00+08:00'))).toEqual(['2026-09-01', '2026-08-31', '2026-08-28', '2026-08-27'])
   })
 
   it('同一任务只归档一次，原状态保持不变', () => {
@@ -20,7 +20,7 @@ describe('工作台记录', () => {
 
   it('跨日归档进入完成当天，保留历史记录', () => {
     const initial = createDemoState(today)
-    const tomorrow = new Date(2026, 9, 1, 0, 1)
+    const tomorrow = new Date('2026-10-01T00:01:00+08:00')
     const completed = completeTask(initial, initial.tasks[0].id, tomorrow)
     expect(recordsForDate(completed, '2026-09-30')).toHaveLength(2)
     expect(recordsForDate(completed, '2026-10-01')[0].id).toBe(initial.tasks[0].id)
@@ -50,5 +50,9 @@ describe('工作台记录', () => {
     const initial = createDemoState(today)
     const completed = completeTask(initial, initial.tasks[0].id, today)
     expect(recordsForDate(completed, dateKey(today)).map((task) => task.reference)).toEqual(['BUG-20489', 'SESSION-882', 'TASK-1002'])
+  })
+  it('不同宿主机时区均以北京时间划分日报', () => {
+    expect(dateKey(new Date('2026-09-30T15:59:59Z'))).toBe('2026-09-30')
+    expect(dateKey(new Date('2026-09-30T16:00:00Z'))).toBe('2026-10-01')
   })
 })
