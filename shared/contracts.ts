@@ -14,6 +14,7 @@ export interface SyncRun {
   id: string
   status: 'running' | 'succeeded' | 'partial_failed' | 'failed' | 'interrupted'
   phase: SyncPhase
+  activeSource?: 'codex' | 'claude' | null
   startedAt: string
   finishedAt: string | null
   scannedFiles: number

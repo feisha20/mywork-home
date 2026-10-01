@@ -1,7 +1,9 @@
+import { createRef, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { SOURCES } from '../domain/workbench'
 import type { SourceId } from '../domain/workbench'
 import type { WorkbenchSnapshot } from '../../shared/contracts'
+import { SourceTransfer } from './SourceTransfer'
 
 export type TransferPhase = 'idle' | 'inbound' | 'orbit' | 'outbound'
 
@@ -28,22 +30,26 @@ interface ProcessorHubProps {
 const engineSources: SourceId[] = ['zentao', 'claude', 'codex', 'workbuddy']
 
 export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCount, status, harness, sources, onSync, syncDisabled }: ProcessorHubProps) {
+  const hubRef = useRef<HTMLElement>(null)
+  const [sourceRefs] = useState(() => ({ codex: createRef<HTMLDivElement>(), claude: createRef<HTMLDivElement>() }))
   const running = harness?.run?.status === 'running'
-  const energized = running || phase === 'orbit' || phase === 'outbound'
+  const energized = running || phase !== 'idle'
   const labels = { scanning: '扫描记录', extracting: '抽取工作事项', saving: '保存事项', idle: '同步结束' }
   const run = harness?.run
+  const activeSource = running && (run?.phase === 'scanning' || run?.phase === 'extracting') ? run.activeSource ?? null : null
   const syncTime = run?.finishedAt ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' }).format(new Date(run.finishedAt)) : null
   return (
-    <section className="center-processor-hub" aria-label="工作流处理核心">
+    <section className="center-processor-hub" ref={hubRef} aria-label="工作流处理核心">
+      {activeSource && <SourceTransfer key={activeSource} frameRef={hubRef} sourceRef={sourceRefs[activeSource]} targetRef={refs.chip} />}
       <div className="hub-top-hud">
         <div className="hud-stat-col">
-          <span className="stat-num accent">{String(completedCount).padStart(2, '0')}<small>项</small></span>
-          <span className="stat-lbl">今日已完成</span>
+          <span className="stat-num">{String(pendingCount).padStart(2, '0')}<small>项</small></span>
+          <span className="stat-lbl">待推进</span>
         </div>
         <div className="hud-mini-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <span className="wave-bar" key={index} />)}</div>
         <div className="hud-stat-col hud-stat-right">
-          <span className="stat-num">{String(pendingCount).padStart(2, '0')}<small>项</small></span>
-          <span className="stat-lbl">等待推进</span>
+          <span className="stat-num accent">{String(completedCount).padStart(2, '0')}<small>项</small></span>
+          <span className="stat-lbl">今日已完成</span>
         </div>
       </div>
 
@@ -77,7 +83,7 @@ export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCo
       <div className="engine-matrix-wrap">
         <div className="engine-status-strip">
           {engineSources.map((source) => (
-            <div className="engine-node-pill" key={source}>
+            <div className={`engine-node-pill${source === activeSource ? ' is-extracting' : ''}`} ref={source === 'codex' || source === 'claude' ? sourceRefs[source] : undefined} key={source}>
               <div className="node-meta">
                 <span className="node-name">{SOURCES[source].label}</span>
                 <span className="node-status">{source === 'codex' || source === 'claude' ? sources?.[source]?.available ? `${sources[source].sessionCount} 个会话 · 已接入` : sources?.[source]?.error ?? '等待扫描' : '待接入'}</span>
@@ -87,7 +93,7 @@ export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCo
           ))}
         </div>
         <div className="center-stats-badge">
-          <span className={`count-box${phase !== 'idle' ? ' is-active' : ''}`} role="status" aria-live="polite">{status}</span>
+          <span className={`count-box${energized ? ' is-active' : ''}`} role="status" aria-live="polite">{running && phase === 'idle' ? `${activeSource ? `${SOURCES[activeSource].label} · ` : ''}${labels[run!.phase]}` : status}</span>
         </div>
         <div className="sync-controls" aria-live="polite">
           <button className="sync-button" onClick={onSync} disabled={syncDisabled || running}>{running ? labels[run!.phase] : '同步本机记录'}</button>

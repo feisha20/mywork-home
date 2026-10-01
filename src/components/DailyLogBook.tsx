@@ -30,15 +30,11 @@ const logTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', ho
 
 export function DailyLogBook({ state, days, today, selectedDay, onSelectDay, deckRef, recentId, onReopen, disabled }: DailyLogBookProps) {
   const selectedIndex = Math.max(0, days.indexOf(selectedDay))
-  const count = recordsForDate(state, selectedDay).length
   return (
     <section className="dashboard-panel daily-panel" aria-labelledby="daily-heading">
-      <div className="panel-kicker">02 / 每日沉淀</div>
       <div className="panel-header">
-        <h2 id="daily-heading"><Icon name="book" />工作日报</h2>
-        <span className="tech-badge">{selectedDay === today ? '今日' : selectedDay.slice(5)} {count} 项已完成</span>
+        <h2 id="daily-heading"><Icon name="book" />工作日志</h2>
       </div>
-      <p className="panel-description">每一次完成，都留下可回看的工作记录。</p>
       <div className="book-wrapper">
         <nav className="day-selector-strip" aria-label="日报日期">
           {[...days].reverse().map((day) => (
@@ -82,13 +78,17 @@ export function DailyLogBook({ state, days, today, selectedDay, onSelectDay, dec
                       className={`daily-log-card${task.id === recentId ? ' just-arrived' : ''}`}
                     >
                       <div className="daily-log-top">
-                        <span className="daily-log-source">{SOURCES[task.source].label}</span>
+                        <div className="daily-log-source-group">
+                          <span className="daily-log-source">{SOURCES[task.source].label}</span>
+                          <span className="daily-log-reference">{task.reference}</span>
+                        </div>
                         <time className="daily-log-time" dateTime={task.completedAt!}>{logTime.format(new Date(task.completedAt!))}</time>
                       </div>
-                      <p className="daily-log-text">{task.title}</p>
-                      <span className="daily-log-reference">{task.reference}</span>
-                      <TaskEvidence task={task} />
-                      <button className="reopen-task" disabled={disabled} onClick={() => onReopen(task)} aria-label={`恢复为待办：${task.title}`}>恢复为待办</button>
+                      <p className="daily-log-text" title={task.title}>{task.title}</p>
+                      <div className="daily-log-actions">
+                        <TaskEvidence task={task} />
+                        <button className="reopen-task" disabled={disabled} onClick={() => onReopen(task)} aria-label={`恢复为待办：${task.title}`}>恢复待办</button>
+                      </div>
                     </motion.article>
                   ))}
                   {records.length === 0 && <div className="empty-state"><span className="empty-icon"><Icon name="book" /></span><h3>今天的记录，等你写下</h3><p>完成一项待办后，它会出现在这里。</p></div>}
@@ -97,11 +97,6 @@ export function DailyLogBook({ state, days, today, selectedDay, onSelectDay, dec
               </div>
             )
           })}
-        </div>
-        <div className="book-controls">
-          <button className="page-turn-btn" disabled={selectedIndex >= days.length - 1} onClick={() => onSelectDay(days[selectedIndex + 1])}><Icon name="chevron-left" /><span>查看更早</span></button>
-          <span className="page-counter">{selectedIndex + 1} / {days.length}</span>
-          <button className="page-turn-btn" disabled={selectedIndex === 0} onClick={() => onSelectDay(days[selectedIndex - 1])}><span>查看较新</span><Icon name="chevron-right" /></button>
         </div>
       </div>
     </section>

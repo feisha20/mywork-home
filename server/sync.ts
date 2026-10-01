@@ -73,7 +73,7 @@ export class SyncService {
       return run
     }
     this.run = { id: randomUUID(), status: 'running', phase: 'scanning', startedAt: new Date().toISOString(), finishedAt: null,
-      scannedFiles: 0, newMessages: 0, newTasks: 0, updatedTasks: 0, failedBatches: 0, errors: [] }
+      activeSource: null, scannedFiles: 0, newMessages: 0, newTasks: 0, updatedTasks: 0, failedBatches: 0, errors: [] }
     try { await this.store.saveRun(this.run) }
     catch (error) {
       try { await lock.query('SELECT pg_advisory_unlock(73921002)') }
@@ -95,6 +95,7 @@ export class SyncService {
       for (const source of ['codex', 'claude'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
       for (const [source, root] of roots) {
         if (this.stopping) break
+        run.activeSource = source; await this.store.saveRun(run)
         let files: string[]
         try { files = await listRecordFiles(root); this.sources[source].available = true }
         catch { this.sources[source].error = '记录目录不存在或无法读取'; this.error(run, `${source}：记录目录不存在或无法读取`); continue }
@@ -118,7 +119,7 @@ export class SyncService {
         }
       }
       for (const entry of await this.store.sourceCounts()) this.sources[entry.source].sessionCount = entry.count
-      run.phase = 'extracting'; await this.store.saveRun(run)
+      run.phase = 'extracting'; run.activeSource = null; await this.store.saveRun(run)
       const groups = new Map<string, SourceMessage[]>()
       const rootCache = new Map<string, string>()
       for (const message of await this.store.pendingMessages()) {
@@ -140,7 +141,7 @@ export class SyncService {
           try {
             const context = await this.store.contextMessages(batch[0].source, batch[0].rootSessionId, batch[0].timestamp, batch[0].projectPath)
             const tasks = await this.store.projectTasks(batch[0].projectPath)
-            run.phase = 'extracting'; await this.store.saveRun(run)
+            run.phase = 'extracting'; run.activeSource = batch[0].source; await this.store.saveRun(run)
             const items = await this.extractor.extract(batch, context, tasks)
             run.phase = 'saving'; await this.store.saveRun(run)
             const counts = await this.store.applyExtraction(id, batch, context, items)
@@ -159,7 +160,7 @@ export class SyncService {
       run.status = this.stopping ? 'interrupted' : run.errors.length ? 'partial_failed' : 'succeeded'
     } catch { run.status = 'failed'; this.error(run, '同步失败，请检查数据库连接；已有记录和进度已保留') }
     finally {
-      run.phase = 'idle'; run.finishedAt = new Date().toISOString()
+      run.phase = 'idle'; run.activeSource = null; run.finishedAt = new Date().toISOString()
       try { await this.store.saveRun(run) }
       finally {
         try { await lock.query('SELECT pg_advisory_unlock(73921002)') }

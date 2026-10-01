@@ -29,12 +29,9 @@ export function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComple
 
   return (
     <section className="dashboard-panel task-panel" ref={panelRef} aria-labelledby="tasks-heading">
-      <div className="panel-kicker">01 / 工作输入</div>
       <div className="panel-header">
-        <h2 id="tasks-heading"><Icon name="list" />待办事项清单</h2>
-        <span className="tech-badge">{tasks.length} 项待处理</span>
+        <h2 id="tasks-heading"><Icon name="list" />待办事项</h2>
       </div>
-      <p className="panel-description">从一件小事开始，让今天的工作向前一步。</p>
 
       <div className="task-container" aria-label="待办事项">
         <AnimatePresence mode="popLayout" initial={false}>
@@ -46,25 +43,26 @@ export function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComple
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.96, x: 12 }}
               transition={{ duration: 0.25 }}
-              className={`task-card${activeId === task.id ? ' is-transferring' : ''}`}
+              className={`daily-log-card task-card${activeId === task.id ? ' is-transferring' : ''}`}
             >
-              <div className="task-info">
-                <div className="task-tagline">
-                  <span className={`source-chip ${SOURCES[task.source].className}`}>{SOURCES[task.source].label}</span>
-                  <span className="task-id">{task.reference}</span>
+              <div className="daily-log-top">
+                <div className="daily-log-source-group">
+                  <span className="daily-log-source">{SOURCES[task.source].label}</span>
+                  <span className="daily-log-reference">{task.reference}</span>
                 </div>
-                <p className="task-text" title={task.title}>{task.title}</p>
-                <TaskEvidence task={task} />
               </div>
-              <button
-                className="btn-pipe-transfer"
-                disabled={busy}
-                onClick={(event) => onComplete(task, event.currentTarget)}
-                aria-label={`完成任务：${task.title}`}
-              >
-                <span>{activeId === task.id ? '传输中' : '完成'}</span>
-                <Icon name="arrow" />
-              </button>
+              <p className="daily-log-text" title={task.title}>{task.title}</p>
+              <div className="daily-log-actions">
+                <TaskEvidence task={task} />
+                <button
+                  className="reopen-task complete-task"
+                  disabled={busy}
+                  onClick={(event) => onComplete(task, event.currentTarget)}
+                  aria-label={`完成任务：${task.title}`}
+                >
+                  <span>{activeId === task.id ? '传输中' : '完成'}</span>
+                </button>
+              </div>
             </motion.article>
           ))}
         </AnimatePresence>

@@ -117,6 +117,7 @@ export default function App() {
     finally { setSyncRequested(false) }
   }
   const status = job ? phaseLabels[phase] : recentId ? '✓ 已收进今天的日报' : loading ? '正在连接工作台服务' : phaseLabels.idle
+  const working = snapshot?.harness?.run?.status === 'running' || phase !== 'idle'
   return (
     <div className="app-shell">
       <header className="top-bar">
@@ -125,7 +126,7 @@ export default function App() {
       </header>
       {notice && <p className="storage-notice" role="status">{notice}</p>}
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void refresh() }}>重新连接</button></p>}
-      <main className="stage-container">
+      <main className={`stage-container${working ? ' is-working' : ''}`}>
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path, index) => <g key={path}><path className="idle-track" d={path} /><path className="idle-flow-beam" d={path} style={{ animationDelay: `${index * .75}s` }} /></g>)}</svg>
         <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} disabled={loading || !connected || changingId !== null} onAdd={handleAdd} onComplete={(task, button) => { void handleComplete(task, button) }} />
         <ProcessorHub refs={processorRefs} phase={phase} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} onSync={() => { void handleSync() }} syncDisabled={loading || !connected || syncRequested} />
