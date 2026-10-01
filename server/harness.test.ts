@@ -16,6 +16,13 @@ describe('模型输出边界', () => {
     const item = { title: '修复接口', status: 'completed', evidenceIds: ['evidence-1'] }
     expect(parseExtraction(JSON.stringify({ items: [item, item] }), [message], [], [])).toHaveLength(1)
   })
+  it('模型不能自动完成或修改手工待办与禅道任务', () => {
+    for (const source of ['manual', 'zentao'] as const) {
+      const task = { id: 'protected', reference: 'TASK-1', source, title: '修复接口', createdAt: message.timestamp, completedAt: null }
+      const raw = JSON.stringify({ items: [{ taskId: task.id, title: '修复接口', status: 'completed', evidenceIds: [message.id] }] })
+      expect(() => parseExtraction(raw, [message], [], [task])).toThrow('未知事项 ID')
+    }
+  })
   it('新事项的空ID按未提供处理，生成稳定ID由数据库负责', () => {
     const raw = JSON.stringify({ items: [{ taskId: '', title: '修复接口', status: 'todo', evidenceIds: ['evidence-1'] }] })
     expect(parseExtraction(raw, [message], [], [])[0].taskId).toBeUndefined()

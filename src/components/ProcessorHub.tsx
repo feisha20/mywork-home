@@ -25,11 +25,12 @@ interface ProcessorHubProps {
   sources?: WorkbenchSnapshot['sources']
   onSync: () => void
   syncDisabled: boolean
+  visible: boolean
 }
 
 const engineSources: SourceId[] = ['zentao', 'claude', 'codex', 'workbuddy']
 
-export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCount, status, harness, sources, onSync, syncDisabled }: ProcessorHubProps) {
+export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCount, status, harness, sources, onSync, syncDisabled, visible }: ProcessorHubProps) {
   const hubRef = useRef<HTMLElement>(null)
   const [sourceRefs] = useState(() => ({ codex: createRef<HTMLDivElement>(), claude: createRef<HTMLDivElement>() }))
   const running = harness?.run?.status === 'running'
@@ -40,7 +41,7 @@ export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCo
   const syncTime = run?.finishedAt ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' }).format(new Date(run.finishedAt)) : null
   return (
     <section className="center-processor-hub" ref={hubRef} aria-label="工作流处理核心">
-      {activeSource && <SourceTransfer key={activeSource} frameRef={hubRef} sourceRef={sourceRefs[activeSource]} targetRef={refs.chip} />}
+      {visible && activeSource && <SourceTransfer key={activeSource} frameRef={hubRef} sourceRef={sourceRefs[activeSource]} targetRef={refs.chip} />}
       <div className="hub-top-hud">
         <div className="hud-stat-col">
           <span className="stat-num">{String(pendingCount).padStart(2, '0')}<small>项</small></span>
@@ -49,7 +50,7 @@ export function ProcessorHub({ refs, phase, activePin, pendingCount, completedCo
         <div className="hud-mini-wave" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <span className="wave-bar" key={index} />)}</div>
         <div className="hud-stat-col hud-stat-right">
           <span className="stat-num accent">{String(completedCount).padStart(2, '0')}<small>项</small></span>
-          <span className="stat-lbl">今日已完成</span>
+          <span className="stat-lbl">今日日志</span>
         </div>
       </div>
 

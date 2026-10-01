@@ -137,7 +137,7 @@ export class SyncService {
         for (const batch of messageBatches(messages)) {
           if (this.stopping) break
           const id = this.store.batchId(batch)
-          await this.store.startBatch(id, key, batch)
+          if (!await this.store.startBatch(id, key, batch)) continue
           try {
             const context = await this.store.contextMessages(batch[0].source, batch[0].rootSessionId, batch[0].timestamp, batch[0].projectPath)
             const tasks = await this.store.projectTasks(batch[0].projectPath)

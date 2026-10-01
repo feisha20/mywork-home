@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Pool, type PoolClient } from 'pg'
-import type { Task } from '../src/domain/workbench.js'
+import { requiresManualCompletion, type Task } from '../src/domain/workbench.js'
 import type { Evidence, SyncRun } from '../shared/contracts.js'
 import type { Cursor, SourceMessage } from './records.js'
 import { digest } from './records.js'
@@ -8,6 +8,7 @@ import { digest } from './records.js'
 function taskFromRow(row: any): Task {
   return { id: row.id, reference: row.reference, source: row.source, title: row.title,
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+    recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
     projectPath: row.project_path, statusOrigin: row.status_origin, evidence: row.evidence }
 }
 
@@ -47,6 +48,10 @@ export class Store {
     return taskFromRow(rows[0])
   }
   async setCompleted(id: string, completed: boolean) {
+    const existing = await this.pool.query('SELECT source FROM workbench.tasks WHERE id=$1', [id])
+    if (existing.rows[0] && !['manual', 'zentao'].includes(existing.rows[0].source)) {
+      throw Object.assign(new Error('自动工作记录直接进入日志，无需手动完成或恢复'), { statusCode: 409 })
+    }
     const { rows } = await this.pool.query(`UPDATE workbench.tasks SET completed_at=CASE WHEN $2 THEN coalesce(completed_at,now()) ELSE NULL END,
       status_origin='manual',updated_at=now() WHERE id=$1 RETURNING *`, [id, completed])
     return rows[0] ? taskFromRow(rows[0]) : null
@@ -124,9 +129,11 @@ export class Store {
   }
   batchId(messages: SourceMessage[]) { return digest(`v1:${messages.map((message) => message.id).join(':')}`) }
   async startBatch(id: string, key: string, messages: SourceMessage[]) {
-    await this.pool.query(`INSERT INTO workbench.extraction_batches(id,session_key,message_ids,status,attempts)
-      VALUES($1,$2,$3,'running',1) ON CONFLICT(id) DO UPDATE SET status='running',attempts=workbench.extraction_batches.attempts+1,updated_at=now()`,
+    const { rows } = await this.pool.query(`INSERT INTO workbench.extraction_batches(id,session_key,message_ids,status,attempts)
+      VALUES($1,$2,$3,'running',1) ON CONFLICT(id) DO UPDATE SET status='running',attempts=workbench.extraction_batches.attempts+1,updated_at=now()
+      WHERE workbench.extraction_batches.status<>'succeeded' RETURNING id`,
     [id, key, JSON.stringify(messages.map((message) => message.id))])
+    return rows.length > 0
   }
   async failBatch(id: string, error: string) {
     await this.pool.query("UPDATE workbench.extraction_batches SET status='failed',error=$2,updated_at=now() WHERE id=$1", [id, error])
@@ -151,16 +158,17 @@ export class Store {
         const existing = await client.query('SELECT * FROM workbench.tasks WHERE id=$1 FOR UPDATE', [id])
         if (existing.rows[0]) {
           const task = existing.rows[0]
-          if (task.project_path !== first.projectPath || task.source === 'manual') throw new Error('模型尝试修改其他项目或手工事项')
+          if (task.project_path !== first.projectPath || requiresManualCompletion(task.source)) throw new Error('模型尝试修改其他项目、手工事项或禅道任务')
           const merged = [...task.evidence as Evidence[], ...evidence].filter((entry, index, all) => all.findIndex((other) => other.messageId === entry.messageId) === index)
           await client.query(`UPDATE workbench.tasks SET title=CASE WHEN status_origin='manual' THEN title ELSE $2 END,
-            completed_at=CASE WHEN status_origin='manual' THEN completed_at ELSE $3 END,evidence=$4,updated_at=now() WHERE id=$1`, [id, item.title, completed, JSON.stringify(merged)])
+            completed_at=CASE WHEN status_origin='manual' THEN completed_at ELSE $3 END,evidence=$4,
+            recorded_at=greatest(recorded_at,$5::timestamptz),updated_at=now() WHERE id=$1`, [id, item.title, completed, JSON.stringify(merged), last.timestamp])
           updated++
         } else {
           if (item.taskId) throw new Error('模型返回了未知事项 ID')
-          const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,project_path,status_origin,evidence)
-            VALUES($1,$2,$3,$4,$5,$6,$7,'ai',$8) ON CONFLICT(id) DO NOTHING`,
-          [id, `${first.source === 'codex' ? 'CX' : 'CC'}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence)])
+          const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,project_path,status_origin,evidence,recorded_at)
+            VALUES($1,$2,$3,$4,$5,$6,$7,'ai',$8,$9) ON CONFLICT(id) DO NOTHING`,
+          [id, `${first.source === 'codex' ? 'CX' : 'CC'}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence), last.timestamp])
           created += result.rowCount ?? 0
         }
       }

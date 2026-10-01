@@ -33,6 +33,13 @@ CREATE TABLE workbench.sync_runs (
  id text PRIMARY KEY, data jsonb NOT NULL, started_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE workbench.settings (key text PRIMARY KEY, value text NOT NULL);
+` }, { version: 2, sql: `
+ALTER TABLE workbench.tasks ADD COLUMN recorded_at timestamptz;
+UPDATE workbench.tasks SET recorded_at=coalesce(
+ (SELECT max((entry->>'timestamp')::timestamptz) FROM jsonb_array_elements(evidence) entry),
+ completed_at,created_at
+) WHERE source IN ('codex','claude','workbuddy');
+CREATE INDEX tasks_recorded_idx ON workbench.tasks(recorded_at);
 ` }]
 
 export async function migrate(pool: Pool) {

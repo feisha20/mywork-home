@@ -32,7 +32,7 @@ export function SourceTransfer({ frameRef, sourceRef, targetRef }: SourceTransfe
         const elbow = lane + (left ? corner : -corner)
         path = `M ${x1} ${y1} L ${elbow} ${y1} L ${lane} ${y1 + direction * corner} L ${lane} ${y2 - direction * corner} L ${elbow} ${y2} L ${x2} ${y2}`
       }
-      setGeometry({ path, width: bounds.width, height: bounds.height })
+      setGeometry((current) => current?.path === path && current.width === bounds.width && current.height === bounds.height ? current : { path, width: bounds.width, height: bounds.height })
     }
     measure()
     const observer = new ResizeObserver(measure)

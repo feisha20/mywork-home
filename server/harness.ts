@@ -5,7 +5,7 @@ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { z } from 'zod'
 import type { Config } from './config.js'
 import type { SourceMessage } from './records.js'
-import type { Task } from '../src/domain/workbench.js'
+import { requiresManualCompletion, type Task } from '../src/domain/workbench.js'
 import type { ExtractedItem } from './store.js'
 import { redact } from './redact.js'
 
@@ -50,7 +50,7 @@ export function parseExtraction(raw: string, messages: SourceMessage[], context:
   const result = resultSchema.parse(JSON.parse(cleaned))
   const ids = new Set([...context, ...messages].map((message) => message.id))
   const newIds = new Set(messages.map((message) => message.id))
-  const taskIds = new Set(tasks.filter((task) => task.source !== 'manual').map((task) => task.id))
+  const taskIds = new Set(tasks.filter((task) => !requiresManualCompletion(task.source)).map((task) => task.id))
   for (const item of result.items) {
     if (item.evidenceIds.some((id) => !ids.has(id))) throw new Error('输出包含未知来源证据')
     if (item.taskId && !taskIds.has(item.taskId)) throw new Error('输出包含未知事项 ID')
@@ -80,7 +80,7 @@ export class HarnessExtractor implements Extractor {
     const secrets = [this.config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(this.config.DATABASE_URL).password)]
     const safeMessages = (values: SourceMessage[]) => values.map((message) => ({ ...message, text: redact(message.text, secrets) }))
     const prompt = JSON.stringify({
-      existingTasks: tasks.filter((task) => task.source !== 'manual').map((task) => ({ taskId: task.id, title: redact(task.title, secrets),
+      existingTasks: tasks.filter((task) => !requiresManualCompletion(task.source)).map((task) => ({ taskId: task.id, title: redact(task.title, secrets),
         status: task.completedAt ? 'completed' : 'todo', manualOverride: task.statusOrigin === 'manual',
         evidenceIds: task.evidence?.slice(-3).map((entry) => entry.messageId) })),
       contextMessages: safeMessages(context), newMessages: safeMessages(messages),

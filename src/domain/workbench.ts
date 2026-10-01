@@ -15,6 +15,7 @@ export interface Task {
   title: string
   createdAt: string
   completedAt: string | null
+  recordedAt?: string | null
   projectPath?: string
   statusOrigin?: 'manual' | 'ai'
   evidence?: import('../../shared/contracts.js').Evidence[]
@@ -25,8 +26,9 @@ export interface WorkbenchState {
   tasks: Task[]
 }
 
+const dateKeyFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
 export function dateKey(date: Date): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date)
+  return dateKeyFormatter.format(date)
 }
 
 export function dateFromKey(key: string): Date {
@@ -47,13 +49,23 @@ export function recentWorkdays(today: Date, count = 4): string[] {
 
 export function recordsForDate(state: WorkbenchState, day: string): Task[] {
   return state.tasks
-    .filter((task) => task.completedAt && dateKey(new Date(task.completedAt)) === day)
-    .sort((a, b) => b.completedAt!.localeCompare(a.completedAt!))
+    .filter((task) => { const time = recordTimestamp(task); return time && dateKey(new Date(time)) === day })
+    .sort((a, b) => recordTimestamp(b)!.localeCompare(recordTimestamp(a)!))
+}
+
+export function requiresManualCompletion(source: SourceId): boolean {
+  return source === 'manual' || source === 'zentao'
+}
+
+// 自动工作记录归到来源日期；归档时间与真实完成状态分开保存。
+export function recordTimestamp(task: Task): string | null {
+  if (requiresManualCompletion(task.source)) return task.completedAt
+  return task.recordedAt ?? task.evidence?.reduce<string | null>((latest, entry) => !latest || entry.timestamp > latest ? entry.timestamp : latest, null) ?? task.completedAt ?? task.createdAt
 }
 
 export function completeTask(state: WorkbenchState, id: string, now: Date): WorkbenchState {
   const task = state.tasks.find((item) => item.id === id)
-  if (!task || task.completedAt) return state
+  if (!task || task.completedAt || !requiresManualCompletion(task.source)) return state
   return {
     ...state,
     tasks: state.tasks.map((item) => item.id === id ? { ...item, completedAt: now.toISOString() } : item),
@@ -132,7 +144,8 @@ export function decodeSnapshot(raw: string): WorkbenchState | null {
         || typeof task.source !== 'string' || !Object.hasOwn(SOURCES, task.source)
         || typeof task.title !== 'string' || !task.title.trim() || task.title.length > 300
         || !validTimestamp(task.createdAt)
-        || (task.completedAt !== null && !validTimestamp(task.completedAt))) return null
+        || (task.completedAt !== null && !validTimestamp(task.completedAt))
+        || (task.recordedAt != null && !validTimestamp(task.recordedAt))) return null
       ids.add(task.id)
     }
     return state as unknown as WorkbenchState

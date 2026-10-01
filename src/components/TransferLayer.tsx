@@ -98,11 +98,14 @@ export function TransferLayer({ job, onPhase, onDone }: TransferLayerProps) {
     // 布局变化时直接完成任务，避免旧坐标的轨迹停留在页面上。
     window.addEventListener('resize', finish)
     window.addEventListener('scroll', finish, true)
+    const visibilityChanged = () => { if (document.hidden) finish() }
+    document.addEventListener('visibilitychange', visibilityChanged)
     return () => {
       cancelled = true
       stop?.()
       window.removeEventListener('resize', finish)
       window.removeEventListener('scroll', finish, true)
+      document.removeEventListener('visibilitychange', visibilityChanged)
     }
   }, [job, onPhase, onDone])
 

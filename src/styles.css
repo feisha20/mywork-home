@@ -39,8 +39,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(16px);
+  background: rgba(255, 255, 255, 0.96);
   border-radius: 20px;
   padding: 12px 24px;
   border: 1.5px solid var(--border-light);
@@ -142,13 +141,15 @@ body {
 }
 
 .idle-flow-beam {
+  display: none;
   stroke: var(--activity-color);
   stroke-width: 2.5;
   fill: none;
   stroke-dasharray: 60 480;
   filter: drop-shadow(0 0 5px rgba(var(--activity-rgb), 0.7));
-  animation: idleStream 3s linear infinite;
+  animation: none;
 }
+.stage-container.is-working .idle-flow-beam { display: block; animation: idleStream 3s steps(90, end) infinite; }
 
 @keyframes idleStream {
   0% { stroke-dashoffset: 540; }
@@ -156,8 +157,7 @@ body {
 }
 
 .dashboard-panel {
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.96);
   border-radius: 28px;
   padding: 22px;
   box-shadow: var(--panel-shadow);
@@ -367,8 +367,7 @@ body {
 .hub-top-hud {
   width: 100%;
   max-width: 320px;
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.96);
   border-radius: 18px;
   border: 1px solid var(--border-light);
   padding: 10px 16px;
@@ -409,18 +408,21 @@ body {
 }
 .wave-bar {
   width: 2.5px;
+  height: 100%;
   background: var(--activity-color);
   border-radius: 2px;
-  animation: waveDance 1.6s ease-in-out infinite alternate;
+  transform-origin: bottom;
+  animation: none;
 }
+.stage-container.is-working .wave-bar { animation-name: waveDance; animation-duration: 1.6s; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate; }
 .wave-bar:nth-child(2) { animation-delay: 0.2s; height: 60%; }
 .wave-bar:nth-child(3) { animation-delay: 0.4s; height: 100%; }
 .wave-bar:nth-child(4) { animation-delay: 0.1s; height: 75%; }
 .wave-bar:nth-child(5) { animation-delay: 0.5s; height: 40%; }
 
 @keyframes waveDance {
-  0% { height: 20%; opacity: 0.4; }
-  100% { height: 100%; opacity: 1; }
+  0% { transform: scaleY(0.35); opacity: 0.4; }
+  100% { transform: scaleY(1); opacity: 1; }
 }
 
 .chip-carrier-board {
@@ -582,8 +584,9 @@ body {
   width: 180%;
   height: 180%;
   background: conic-gradient(from 0deg, transparent 0%, rgba(var(--activity-rgb), 0.18) 25%, transparent 50%);
-  animation: coreRotate 5s linear infinite;
+  animation: none;
 }
+.processor-chip.energized .chip-core::before { animation: coreRotate 5s linear infinite; }
 
 @keyframes coreRotate {
   from { transform: rotate(0deg); }
@@ -691,42 +694,33 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  perspective: 1600px;
   position: relative;
 }
 
-.day-selector-strip {
-  display: flex;
-  gap: 6px;
-  margin-bottom: 12px;
-  background: #F1F4F9;
-  padding: 4px;
-  border-radius: 14px;
-}
-
-.day-pill {
-  flex: 1;
-  text-align: center;
-  padding: 6px 0;
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--text-muted);
-  border-radius: 10px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  font-family: "SF Mono", Menlo, Consolas, monospace;
-}
-
-.day-pill.active {
-  background: #FFFFFF;
-  color: var(--accent-orange);
-  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-}
+.log-calendar { position: relative; z-index: 40; }
+.calendar-trigger { width: 30px; height: 30px; display: grid; place-items: center; border: 1px solid var(--border-light); border-radius: 8px; color: var(--text-muted); background: #fff; cursor: pointer; }
+.calendar-trigger svg { width: 17px; height: 17px; }
+.calendar-trigger:hover, .calendar-trigger.active { color: var(--accent-orange); border-color: #fdba74; background: #fff7ed; }
+.calendar-popup { position: absolute; right: 0; top: calc(100% + 8px); width: 272px; padding: 12px; border: 1px solid #d5dfec; border-radius: 14px; background: #fff; box-shadow: 0 12px 32px rgba(36, 53, 78, .18); color: var(--text-main); }
+.calendar-month { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 13px; }
+.calendar-month button { width: 28px; height: 28px; border-radius: 6px; display: grid; place-items: center; cursor: pointer; color: #64748b; }
+.calendar-month svg { width: 16px; height: 16px; }
+.calendar-weekdays, .calendar-dates { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.calendar-weekdays { text-align: center; color: #94a3b8; font-size: 11px; margin-bottom: 6px; }
+.calendar-date { position: relative; height: 31px; border-radius: 7px; font-size: 12px; color: #334155; cursor: pointer; padding: 0 0 3px; }
+.calendar-date.outside-month { color: #aab4c3; }
+.calendar-date.today { box-shadow: inset 0 0 0 1px #fdba74; }
+.calendar-date.has-records::after { content: ''; position: absolute; width: 3px; height: 3px; border-radius: 50%; background: #10b981; bottom: 4px; left: calc(50% - 1.5px); }
+.calendar-month button:hover, .calendar-date:hover { background: #f1f5f9; }
+.calendar-date.selected { background: #fff0e8; color: #c64b25; font-weight: 700; }
+.calendar-footer { margin-top: 10px; padding-top: 9px; border-top: 1px solid #edf1f7; display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #94a3b8; }
+.calendar-footer span { display: flex; align-items: center; gap: 5px; }
+.calendar-footer i { width: 4px; height: 4px; border-radius: 50%; background: #10b981; }
+.calendar-footer button { color: #c64b25; cursor: pointer; padding: 3px; }
 
 .book-deck {
   flex: 1;
   position: relative;
-  transform-style: preserve-3d;
   border-radius: 18px;
 }
 
@@ -751,18 +745,9 @@ body {
   border: 1px solid rgba(226, 232, 240, 0.9);
   padding: 18px 20px;
   box-shadow: 0 8px 25px rgba(160, 175, 200, 0.12);
-  transform-origin: left center;
-  transition: transform 0.65s cubic-bezier(0.645, 0.045, 0.355, 1), box-shadow 0.65s ease;
-  backface-visibility: hidden;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-
-.book-page.flipped {
-  transform: rotateY(-180deg);
-  pointer-events: none;
-  box-shadow: -15px 0 35px rgba(0,0,0,0.15);
 }
 
 .page-header {
@@ -951,10 +936,6 @@ button:focus-visible, input:focus-visible {
 .center-stats-badge .count-box.is-active { color: var(--accent-orange); }
 
 .book-wrapper { min-height: 0; }
-.day-selector-strip { overflow-x: auto; flex-shrink: 0; gap: 4px; margin-bottom: 16px; }
-.day-pill { border: 0; background: transparent; min-width: 56px; padding: 7px 4px; display: flex; flex-direction: column; gap: 3px; font-family: inherit; font-size: 11px; }
-.day-pill small { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9px; font-weight: 400; opacity: 0.8; }
-.day-pill:hover { color: var(--accent-orange); }
 .book-deck { min-height: 0; }
 .book-page { min-width: 0; padding: 18px 18px 12px; pointer-events: none; }
 .book-page.current-page { pointer-events: auto; }
@@ -974,7 +955,7 @@ button:focus-visible, input:focus-visible {
 .daily-log-actions .task-evidence { flex: 1; min-width: 0; margin: 0; font-size: 10px; }
 .daily-log-actions .task-evidence summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .daily-log-actions .reopen-task { flex: 0 0 auto; margin: 0; padding: 5px 9px; font-size: 10px; line-height: 1.2; white-space: nowrap; }
-.daily-log-card.just-arrived { background: #fff4ec; }
+.daily-log-card.just-arrived { background: #fff4ec; animation: logArrival .4s ease-out; }
 .page-bottom-mark { font-size: 8px; color: #acb5c3; letter-spacing: 0.5px; margin: 14px 0 0; padding-top: 10px; border-top: 1px solid #f1f4f8; }
 
 .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; min-height: 160px; text-align: center; color: var(--text-muted); padding: 24px 8px; }
@@ -993,11 +974,14 @@ button:focus-visible, input:focus-visible {
 /* 抽取连线跟随当前来源，从来源卡片向芯片持续输送光束。 */
 .source-transfer-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 5; }
 .source-transfer-track { fill: none; stroke: var(--circuit-idle); stroke-width: 2; stroke-dasharray: 4 4; }
-.source-transfer-beam { fill: none; stroke: var(--activity-color); stroke-width: 2.5; stroke-dasharray: 60 480; filter: drop-shadow(0 0 5px rgba(var(--activity-rgb), .7)); animation: sourcePhotonFlow 3s linear infinite; }
+.source-transfer-beam { fill: none; stroke: var(--activity-color); stroke-width: 2.5; stroke-dasharray: 60 480; filter: drop-shadow(0 0 3px rgba(var(--activity-rgb), .7)); animation: sourcePhotonFlow 3s steps(90, end) infinite; }
 .engine-node-pill.is-extracting { border-color: rgba(255, 104, 56, .65); box-shadow: 0 0 15px rgba(255, 104, 56, .15); }
 .engine-node-pill.is-extracting .node-status { color: #ce5028; }
 .engine-node-pill.is-extracting .node-pulse { background: var(--accent-orange); box-shadow: 0 0 8px var(--accent-orange); }
 @keyframes sourcePhotonFlow { from { stroke-dashoffset: 540; } to { stroke-dashoffset: 0; } }
+
+/* 后台标签页暂停装饰动效，不占用持续绘制资源。 */
+.app-shell.is-background *, .app-shell.is-background *::before, .app-shell.is-background *::after { animation-play-state: paused !important; transition: none !important; }
 
 /* 中等窗口把核心放在上方，保留待办和日报并排。 */
 @media (max-width: 1099px) {

@@ -1,6 +1,5 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import type { FormEvent, RefObject } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
 import { SOURCES } from '../domain/workbench'
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
@@ -15,7 +14,7 @@ interface TaskPanelProps {
   onComplete: (task: Task, button: HTMLButtonElement) => void
 }
 
-export function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComplete }: TaskPanelProps) {
+export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComplete }: TaskPanelProps) {
   const [title, setTitle] = useState('')
   const [adding, setAdding] = useState(false)
   const busy = activeId !== null || !!disabled || adding
@@ -34,38 +33,31 @@ export function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComple
       </div>
 
       <div className="task-container" aria-label="待办事项">
-        <AnimatePresence mode="popLayout" initial={false}>
-          {tasks.map((task) => (
-            <motion.article
-              key={task.id}
-              layout="position"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, x: 12 }}
-              transition={{ duration: 0.25 }}
-              className={`daily-log-card task-card${activeId === task.id ? ' is-transferring' : ''}`}
-            >
-              <div className="daily-log-top">
-                <div className="daily-log-source-group">
-                  <span className="daily-log-source">{SOURCES[task.source].label}</span>
-                  <span className="daily-log-reference">{task.reference}</span>
-                </div>
+        {tasks.map((task) => (
+          <article
+            key={task.id}
+            className={`daily-log-card task-card${activeId === task.id ? ' is-transferring' : ''}`}
+          >
+            <div className="daily-log-top">
+              <div className="daily-log-source-group">
+                <span className="daily-log-source">{SOURCES[task.source].label}</span>
+                <span className="daily-log-reference">{task.reference}</span>
               </div>
-              <p className="daily-log-text" title={task.title}>{task.title}</p>
-              <div className="daily-log-actions">
-                <TaskEvidence task={task} />
-                <button
-                  className="reopen-task complete-task"
-                  disabled={busy}
-                  onClick={(event) => onComplete(task, event.currentTarget)}
-                  aria-label={`完成任务：${task.title}`}
-                >
-                  <span>{activeId === task.id ? '传输中' : '完成'}</span>
-                </button>
-              </div>
-            </motion.article>
-          ))}
-        </AnimatePresence>
+            </div>
+            <p className="daily-log-text" title={task.title}>{task.title}</p>
+            <div className="daily-log-actions">
+              <TaskEvidence task={task} />
+              <button
+                className="reopen-task complete-task"
+                disabled={busy}
+                onClick={(event) => onComplete(task, event.currentTarget)}
+                aria-label={`完成任务：${task.title}`}
+              >
+                <span>{activeId === task.id ? '传输中' : '完成'}</span>
+              </button>
+            </div>
+          </article>
+        ))}
         {tasks.length === 0 && (
           <div className="empty-state">
             <span className="empty-icon"><Icon name="check" /></span>
@@ -88,7 +80,7 @@ export function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComple
         />
         <button className="quick-add-btn" disabled={busy || !title.trim()} type="submit">{adding ? '保存中' : '添加'}</button>
       </form>
-      <span className="panel-footnote">手动添加的事项也会自动收进日报</span>
+      <span className="panel-footnote">待办完成后会自动收进工作日志</span>
     </section>
   )
-}
+})

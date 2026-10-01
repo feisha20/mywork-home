@@ -12,6 +12,7 @@ import { SyncService } from './sync.js'
 import { createApp } from './app.js'
 import type { Extractor } from './harness.js'
 import type { SourceMessage, Cursor } from './records.js'
+import { dateKey, recordsForDate } from '../src/domain/workbench.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
 let pool: Pool, store: Store, sync: SyncService, app: FastifyInstance, directory: string
@@ -44,6 +45,20 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     sync = new SyncService(store, config, fake); await sync.start(); app = await createApp(config, store, sync)
   })
   afterAll(async () => { await app?.close(); await sync?.close(); await pool?.end(); if (directory) await rm(directory, { recursive: true, force: true }) })
+  it('旧自动记录按来源时间迁移，保留原完成状态并可重复执行迁移', async () => {
+    const id = randomUUID(), at = '2026-09-25T03:20:00Z'
+    const evidence = [{ messageId: 'legacy', sessionId: 'legacy', source: 'codex', projectPath: '/legacy', timestamp: at, quote: '整理工作记录' }]
+    // 仅在隔离测试库模拟第一版结构，验证升级不会把历史记录归到同步当天。
+    await pool.query('ALTER TABLE workbench.tasks DROP COLUMN recorded_at')
+    await pool.query('DELETE FROM workbench.schema_migrations WHERE version=2')
+    await pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,evidence)
+      VALUES($1,'CX-legacy','codex','整理工作记录',$2,$3)`, [id, '2026-09-24T01:00:00Z', JSON.stringify(evidence)])
+    await migrate(pool); await migrate(pool)
+    const task = (await store.tasks()).find((row) => row.id === id)!
+    expect(task.recordedAt).toBe('2026-09-25T03:20:00.000Z')
+    expect(task.completedAt).toBeNull()
+    expect(task.evidence).toEqual(evidence)
+  })
   it('数据库持久化、重复完成与恢复未完成', async () => {
     expect((await app.inject({ url: '/api/health' })).statusCode).toBe(200)
     const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: '手工测试事项' } })
@@ -70,10 +85,10 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: 'x'.repeat(301) } })).statusCode).toBe(400)
     expect((await app.inject({ method: 'POST', url: '/api/tasks', headers: { origin: 'https://foreign.example' }, payload: { title: '事项' } })).statusCode).toBe(403)
   })
-  it('首次抽取、重复同步、后续完成以及手动状态保护', async () => {
+  it('自动记录按来源日期归档、重复同步不再抽取、仅新增消息更新', async () => {
     const id = randomUUID(), project = `/__workbench_test__/${id}`
     const file = join(directory, 'codex', `rollout-${id}.jsonl`)
-    const at = new Date().toISOString()
+    const at = new Date(Date.now() - 2 * 86400000).toISOString()
     await writeFile(file, [
       { type: 'session_meta', timestamp: at, payload: { id, cwd: project } },
       { type: 'turn_context', timestamp: at, payload: { turn_id: '1' } },
@@ -81,13 +96,16 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     ].map((row) => JSON.stringify(row)).join('\n') + '\n')
     const first = await waitRun(); expect(first.newTasks).toBe(1)
     const task = (await store.projectTasks(project))[0]; expect(task.completedAt).toBeNull()
+    expect(task.recordedAt).toBe(at)
+    expect(recordsForDate({ version: 1, tasks: [task] }, dateKey(new Date(at)))).toHaveLength(1)
     const callsBefore = calls; const repeat = await waitRun(); expect(repeat.newMessages).toBe(0); expect(calls).toBe(callsBefore)
     await appendFile(file, JSON.stringify({ type: 'response_item', timestamp: new Date().toISOString(), payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '已完成接口修复并通过测试' }] } }) + '\n')
     await waitRun(); expect((await store.projectTasks(project))[0].completedAt).not.toBeNull()
-    await store.setCompleted(task.id, false)
+    const rejected = await app.inject({ method: 'PATCH', url: `/api/tasks/${task.id}`, payload: { completed: false } })
+    expect(rejected.statusCode).toBe(409)
     await appendFile(file, JSON.stringify({ type: 'response_item', timestamp: new Date().toISOString(), payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '已完成回归，确认接口修复交付' }] } }) + '\n')
-    await waitRun(); expect((await store.projectTasks(project))[0].completedAt).toBeNull()
-    expect((await store.projectTasks(project))[0].statusOrigin).toBe('manual')
+    await waitRun(); expect((await store.projectTasks(project))[0].completedAt).not.toBeNull()
+    expect((await store.projectTasks(project))[0].statusOrigin).toBe('ai')
     expect(await store.projectTasks(project)).toHaveLength(1)
   })
   it('事务回滚不丢消息，成功重试后重复应用无副作用', async () => {
@@ -102,6 +120,8 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await store.pendingMessages()).some((entry) => entry.id === message.id)).toBe(true)
     expect((await store.applyExtraction(batchId, [message], [], [item])).created).toBe(1)
     expect(await store.applyExtraction(batchId, [message], [], [item])).toEqual({ created: 0, updated: 0 })
+    expect(await store.startBatch(batchId, `claude:${id}`, [message])).toBe(false)
+    expect((await pool.query('SELECT attempts,status FROM workbench.extraction_batches WHERE id=$1', [batchId])).rows[0]).toEqual({ attempts: 1, status: 'succeeded' })
   })
   it('失败批次保留进度，下轮重试且并发触发不重叠', async () => {
     const id = randomUUID(), project = `/__workbench_test__/${id}`
@@ -122,7 +142,8 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect({ ...changed, title: original.title }).toEqual(original)
     expect((await store.tasks()).find((task) => task.id === manual.id)).toEqual(manual)
     expect(await store.applySummaries([original], [{ taskId: original.id, title: '过期结果' }])).toBe(0)
-    await store.setCompleted(changed.id, false)
+    // 模拟旧版本留下的人工状态，迁移后仍保护历史修改。
+    await pool.query("UPDATE workbench.tasks SET status_origin='manual' WHERE id=$1", [changed.id])
     expect(await store.applySummaries([changed], [{ taskId: changed.id, title: '不应覆盖用户改动' }])).toBe(0)
     expect((await pool.query('SELECT count(*) FROM workbench.source_messages WHERE extracted')).rows[0].count).toBe(rowsBefore)
   })
