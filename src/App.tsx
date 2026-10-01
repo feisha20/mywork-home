@@ -25,7 +25,6 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const today = dateKey(clock)
-  const [selectedDay, setSelectedDay] = useState(today)
   const [job, setJob] = useState<TransferJob | null>(null)
   const [phase, setPhase] = useState<TransferPhase>('idle')
   const [recentId, setRecentId] = useState<string | null>(null)
@@ -88,7 +87,6 @@ export default function App() {
       window.removeEventListener('focus', resume)
     }
   }, [refresh])
-  useEffect(() => { setSelectedDay(today) }, [today])
   useEffect(() => {
     if (!recentId) return
     const timer = window.setTimeout(() => setRecentId(null), 2500)
@@ -99,7 +97,7 @@ export default function App() {
   const finishTransfer = useCallback((taskId: string) => {
     const saved = completedTask.current
     if (saved && saved.id === taskId) setState((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? saved : task) }))
-    const now = new Date(); setClock(now); setSelectedDay(dateKey(now)); setRecentId(taskId)
+    const now = new Date(); setClock(now); setRecentId(taskId)
     setPhase('idle'); setJob(null); setChangingId(null); completedTask.current = null; busy.current = false
     mutationVersion.current++
   }, [])
@@ -108,13 +106,12 @@ export default function App() {
     busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
     try {
       completedTask.current = await updateTask(task.id, true)
-      setSelectedDay(today)
       if (document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches || window.innerWidth < 1100 || !panelRef.current || !deckRef.current || !button.isConnected) { finishTransfer(task.id); return }
       const nextJob = createTransferJob(task.id, task.reference, button, processorRefs, panelRef.current, deckRef.current)
       if (!nextJob) { finishTransfer(task.id); return }
       setPhase('inbound'); setJob(nextJob)
     } catch (cause) { busy.current = false; setChangingId(null); setError(cause instanceof Error ? cause.message : '完成操作失败') }
-  }, [today, finishTransfer, processorRefs])
+  }, [finishTransfer, processorRefs])
   const handleAdd = useCallback(async (title: string) => {
     mutationVersion.current++
     setError(null)
@@ -149,7 +146,7 @@ export default function App() {
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path, index) => <g key={path}><path className="idle-track" d={path} /><path className="idle-flow-beam" d={path} style={{ animationDelay: `${index * .75}s` }} /></g>)}</svg>
         <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} disabled={loading || !connected || changingId !== null} onAdd={handleAdd} onComplete={handleComplete} />
         <ProcessorHub refs={processorRefs} phase={phase} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook state={state} today={today} selectedDay={selectedDay} onSelectDay={setSelectedDay} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null} />
+        <DailyLogBook state={state} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>Codex · Claude Code · 每 10 分钟同步</span></footer>
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}

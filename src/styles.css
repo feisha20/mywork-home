@@ -718,6 +718,25 @@ body {
 .calendar-footer i { width: 4px; height: 4px; border-radius: 50%; background: #10b981; }
 .calendar-footer button { color: #c64b25; cursor: pointer; padding: 3px; }
 
+/* 标题内显示日期；历史日志通过原生弹窗按需展示。 */
+.daily-panel .panel-header { gap: 12px; }
+.daily-panel .panel-header h2 { min-width: 0; flex-wrap: nowrap; white-space: nowrap; gap: 8px; }
+.log-heading-date { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 400; letter-spacing: 0; color: var(--text-muted); }
+.log-calendar { flex: 0 0 auto; }
+/* 明确弹窗高度，用网格保留列表空间，避免 Safari 把自动高度中的 flex 列表压缩为零。 */
+.log-history-dialog { width: min(720px, calc(100vw - 32px)); height: min(720px, calc(100vh - 48px)); height: min(720px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); overflow: hidden; margin: auto; padding: 22px; color: var(--text-main); background: #fff; border: 1px solid #d5dfec; border-radius: 20px; box-shadow: 0 18px 60px rgba(22, 36, 58, .2); }
+.log-history-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.log-history-dialog::backdrop { background: rgba(22, 36, 58, .38); }
+.log-history-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e5ebf3; padding-bottom: 15px; margin-bottom: 16px; flex: 0 0 auto; }
+.log-history-header h2 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; font-size: 17px; }
+.log-history-header time { font-size: 12px; font-weight: 400; color: var(--text-sub); }
+.log-history-header p { font-size: 11px; color: var(--text-muted); margin-top: 7px; }
+.log-history-close { flex: 0 0 auto; display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #e2e8f0; border-radius: 8px; color: var(--text-muted); background: #f8fafc; cursor: pointer; }
+.log-history-close:hover { color: var(--accent-orange); background: #fff7ed; }
+.log-history-close svg { width: 16px; height: 16px; }
+.log-history-dialog .daily-item-list { flex: none; height: 100%; min-height: 0; max-height: none; overflow-y: auto; overflow-x: hidden; padding: 2px 4px 4px 2px; overscroll-behavior: contain; }
+.log-history-dialog .daily-log-text { display: block; -webkit-line-clamp: unset; overflow: visible; }
+
 .book-deck {
   flex: 1;
   position: relative;

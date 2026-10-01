@@ -31,7 +31,8 @@ export function LogCalendar({ selectedDay, today, recordedDays, onSelectDay }: L
   }, [open])
   const select = (day: string) => { onSelectDay(day); setOpen(false); trigger.current?.focus() }
   const [year, number] = month.split('-')
-  return <div className="log-calendar" ref={root} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setOpen(false) }}>
+  // Safari 点击按钮时可能产生 relatedTarget=null 的失焦事件，不能在失焦时卸载日期按钮。
+  return <div className="log-calendar" ref={root}>
     <button className={`calendar-trigger${open ? ' active' : ''}`} ref={trigger} aria-label="选择工作日志日期" title="选择日志日期" aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? 'log-calendar-popup' : undefined}
       onClick={() => { if (!open) setMonth(selectedDay.slice(0, 7)); setOpen(!open) }}><Icon name="calendar" /></button>
     {open && <div className="calendar-popup" ref={popup} id="log-calendar-popup" role="dialog" aria-label="选择工作日志日期">
