@@ -169,7 +169,8 @@ export class SyncService {
     }
   }
   async snapshot(): Promise<WorkbenchSnapshot> {
-    return { version: 1, tasks: await this.store.tasks(), harness: { run: await this.store.latestRun(), nextSyncAt: this.nextSyncAt, model: this.config.WORKBENCH_LLM_MODEL }, sources: this.sources }
+    const [tasks, dailyReports, run] = await Promise.all([this.store.tasks(), this.store.dailyReports(), this.store.latestRun()])
+    return { version: 1, tasks, dailyReports, harness: { run, nextSyncAt: this.nextSyncAt, model: this.config.WORKBENCH_LLM_MODEL }, sources: this.sources }
   }
   async close() {
     this.stopping = true; if (this.timer) clearTimeout(this.timer); this.nextSyncAt = null

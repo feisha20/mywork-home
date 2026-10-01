@@ -42,6 +42,11 @@ UPDATE workbench.tasks SET recorded_at=coalesce(
 CREATE INDEX tasks_recorded_idx ON workbench.tasks(recorded_at);
 ` }, { version: 3, sql: `
 ALTER TABLE workbench.tasks ADD COLUMN deleted_at timestamptz;
+` }, { version: 4, sql: `
+CREATE TABLE workbench.daily_reports (
+ day date PRIMARY KEY, data jsonb NOT NULL,
+ revision integer NOT NULL CHECK (revision > 0), updated_at timestamptz NOT NULL DEFAULT now()
+);
 ` }]
 
 export async function migrate(pool: Pool) {

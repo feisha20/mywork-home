@@ -9,6 +9,22 @@ export interface Evidence {
   quote: string
 }
 
+export interface DailyReportItem {
+  text: string
+  taskIds: string[]
+  topic?: string
+  projectPaths?: string[]
+}
+
+export interface DailyReport {
+  day: string
+  generatedAt: string
+  recordCount: number
+  items: DailyReportItem[]
+  revision: number
+  recordVersions: Record<string, string>
+}
+
 export type SyncPhase = 'scanning' | 'extracting' | 'saving' | 'idle'
 export interface SyncRun {
   id: string
@@ -28,6 +44,7 @@ export interface SyncRun {
 export interface WorkbenchSnapshot {
   version: 1
   tasks: Task[]
+  dailyReports: DailyReport[]
   harness: { run: SyncRun | null; nextSyncAt: string | null; model: string }
   sources: Record<'codex' | 'claude', { available: boolean; sessionCount: number; error: string | null }>
 }

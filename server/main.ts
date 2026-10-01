@@ -5,6 +5,7 @@ import { Store } from './store.js'
 import { HarnessExtractor } from './harness.js'
 import { SyncService } from './sync.js'
 import { createApp } from './app.js'
+import { DailyReportService } from './dailyReport.js'
 
 const config = loadConfig()
 const pool = new Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 5000 })
@@ -12,13 +13,15 @@ pool.on('error', () => console.error('数据库连接异常，后续请求将重
 await migrate(pool)
 const store = new Store(pool)
 const sync = new SyncService(store, config, new HarnessExtractor(config))
-const app = await createApp(config, store, sync)
+// 日报与同步使用独立模型运行目录，避免同时生成时互相覆盖提示词配置。
+const reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness'))
+const app = await createApp(config, store, sync, reports)
 let closing = false
 async function shutdown() {
   if (closing) return
   closing = true
   console.log('正在停止工作台，保存同步进度')
-  try { await app.close(); await sync.close(); await pool.end() }
+  try { await Promise.all([reports.close(), sync.close(), app.close()]); await pool.end() }
   catch { console.error('关闭时发生异常，请检查运行日志'); process.exitCode = 1 }
 }
 process.on('SIGTERM', () => void shutdown())

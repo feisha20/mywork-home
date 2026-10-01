@@ -5,12 +5,16 @@ import { z } from 'zod'
 import type { Config } from './config.js'
 import { Store } from './store.js'
 import { SyncService } from './sync.js'
+import { HarnessExtractor } from './harness.js'
+import { DailyReportError, DailyReportService } from './dailyReport.js'
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
   title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable() })
 
-export async function createApp(config: Config, store: Store, sync: SyncService) {
+export async function createApp(config: Config, store: Store, sync: SyncService,
+  reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness'))) {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 })
+  app.addHook('onClose', () => reports.close())
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api/')) return
     const origin = request.headers.origin
@@ -35,6 +39,18 @@ export async function createApp(config: Config, store: Store, sync: SyncService)
     catch { return reply.code(503).send({ status: 'unavailable' }) }
   })
   app.get('/api/workbench', () => sync.snapshot())
+  app.get('/api/daily-reports/:day', async (request) => {
+    const { day } = z.object({ day: z.iso.date() }).parse(request.params)
+    return store.dailyReport(day)
+  })
+  app.post('/api/daily-reports', async (request, reply) => {
+    const { day, mode } = z.object({ day: z.iso.date(), mode: z.enum(['initial', 'append']).default('initial') }).parse(request.body)
+    try { return await reports.generate(day, mode) }
+    catch (error) {
+      if (error instanceof DailyReportError) return reply.code(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
   app.post('/api/tasks', async (request, reply) => {
     const { title } = z.object({ title: z.string().trim().min(1).max(300) }).parse(request.body)
     return reply.code(201).send(await store.createTask(title))

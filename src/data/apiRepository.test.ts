@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDemoState } from '../domain/workbench'
-import { migrateLegacyTasks, createTask } from './apiRepository'
+import { migrateLegacyTasks, createTask, generateDailyReport, loadOrCreateDailyReport } from './apiRepository'
 
 afterEach(() => { vi.unstubAllGlobals() })
 describe('旧缓存迁移与请求失败', () => {
@@ -25,5 +25,31 @@ describe('旧缓存迁移与请求失败', () => {
   it('网络失败返回可理解的错误', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')))
     await expect(createTask('事项')).rejects.toThrow('无法连接工作台服务')
+  })
+  it('根据所选日期请求日报，模型错误可读，关闭窗口时可以取消等待', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: '工作日报生成超时，请重新生成' }) })
+    vi.stubGlobal('fetch', fetch)
+    await expect(generateDailyReport('2026-09-30')).rejects.toThrow('工作日报生成超时')
+    expect(fetch.mock.calls[0][0]).toBe('/api/daily-reports')
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ day: '2026-09-30' })
+    const controller = new AbortController()
+    fetch.mockImplementation((_url, options) => new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason))))
+    const pending = generateDailyReport('2026-10-01', controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+  it('已有日报再次打开只读取保存内容，未保存时才生成，补充使用明确模式', async () => {
+    const saved = { day: '2026-10-01', revision: 1 }
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => saved })
+    vi.stubGlobal('fetch', fetch)
+    expect(await loadOrCreateDailyReport(saved.day)).toEqual(saved)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch.mock.calls[0][0]).toBe('/api/daily-reports/2026-10-01')
+    expect(fetch.mock.calls[0][1].method).toBeUndefined()
+    fetch.mockResolvedValueOnce({ ok: true, json: async () => null })
+    await loadOrCreateDailyReport(saved.day)
+    expect(fetch.mock.calls[2][1].method).toBe('POST')
+    await generateDailyReport(saved.day, undefined, 'append')
+    expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({ day: saved.day, mode: 'append' })
   })
 })

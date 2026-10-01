@@ -1,7 +1,8 @@
 import { createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { dateKey, recordsForDate, requiresManualCompletion } from './domain/workbench'
 import type { Task, WorkbenchState } from './domain/workbench'
-import type { WorkbenchSnapshot } from '../shared/contracts'
+import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
+import { mergeDailyReports } from '../shared/dailyReports'
 import { createTask, deleteTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
 import { changedCaptureDestinations } from './domain/captureFlow'
@@ -54,7 +55,10 @@ export default function App() {
     const version = mutationVersion.current
     try {
       const result = await fetchWorkbench()
-      setSnapshot((current) => JSON.stringify(current) === JSON.stringify(result) ? current : result); setConnected(true)
+      setSnapshot((current) => {
+        const next = { ...result, dailyReports: mergeDailyReports(current?.dailyReports ?? [], result.dailyReports ?? []) }
+        return JSON.stringify(current) === JSON.stringify(next) ? current : next
+      }); setConnected(true)
       if (connectionError.current) { setError(null); connectionError.current = false }
       // 归档动效期间不让后台刷新提前移除正在传输的卡片。
       if (!busy.current && version === mutationVersion.current) {
@@ -70,6 +74,9 @@ export default function App() {
       return result
     } catch (cause) { connectionError.current = true; setConnected(false); setError(cause instanceof Error ? cause.message : '工作台加载失败'); return null }
     finally { refreshing.current = false }
+  }, [])
+  const handleReportSaved = useCallback((report: DailyReport) => {
+    setSnapshot((current) => current ? { ...current, dailyReports: mergeDailyReports(current.dailyReports ?? [], [report]) } : current)
   }, [])
   useEffect(() => {
     let disposed = false, ready = false
@@ -183,7 +190,7 @@ export default function App() {
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
         <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null} onAdd={handleAdd} onComplete={handleComplete} onDelete={handleDelete} />
         <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook state={state} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
+        <DailyLogBook state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>Codex · Claude Code · 每 10 分钟同步</span></footer>
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}

@@ -13,10 +13,13 @@ import { createApp } from './app.js'
 import type { Extractor } from './harness.js'
 import type { SourceMessage, Cursor } from './records.js'
 import { dateKey, recordsForDate } from '../src/domain/workbench.js'
+import { DailyReportService } from './dailyReport.js'
+import { isRecordInReport } from '../shared/dailyReports.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
 let pool: Pool, store: Store, sync: SyncService, app: FastifyInstance, directory: string
 let calls = 0, shouldFail = false
+const reportInputs: string[][] = []
 const fake: Extractor = {
   async extract(messages, _context, tasks) {
     calls++; if (shouldFail) throw new Error('模型输出未通过校验')
@@ -42,7 +45,11 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     directory = await mkdtemp(join(tmpdir(), 'workbench-db-'))
     for (const name of ['codex', 'archive', 'claude']) await mkdir(join(directory, name))
     const config = loadConfig({ DATABASE_URL: process.env.TEST_DATABASE_URL, CODEX_SESSIONS_DIR: join(directory, 'codex'), CODEX_ARCHIVE_DIR: join(directory, 'archive'), CLAUDE_PROJECTS_DIR: join(directory, 'claude'), SYNC_ENABLED: 'false', STATIC_DIR: join(directory, 'no-static') })
-    sync = new SyncService(store, config, fake); await sync.start(); app = await createApp(config, store, sync)
+    const reports = new DailyReportService(store, { async generateDailyReport(_day, records, previous) {
+      reportInputs.push(records.map((task) => task.id))
+      return [{ text: '完善测试计划，汇总相关工作进展。', topic: '测试计划', taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...records.map((task) => task.id)])] }]
+    }, async close() {} })
+    sync = new SyncService(store, config, fake); await sync.start(); app = await createApp(config, store, sync, reports)
   })
   afterAll(async () => { await app?.close(); await sync?.close(); await pool?.end(); if (directory) await rm(directory, { recursive: true, force: true }) })
   it('旧自动记录按来源时间迁移，保留原完成状态并可重复执行迁移', async () => {
@@ -84,6 +91,32 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: '' } })).statusCode).toBe(400)
     expect((await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: 'x'.repeat(301) } })).statusCode).toBe(400)
     expect((await app.inject({ method: 'POST', url: '/api/tasks', headers: { origin: 'https://foreign.example' }, payload: { title: '事项' } })).statusCode).toBe(403)
+  })
+  it('日报持久化，重复打开不生成，补充只整理新日志且保存版本防止覆盖', async () => {
+    const day = '2026-08-20'
+    const original = { id: randomUUID(), reference: 'TASK-report', source: 'manual' as const, title: '完善测试计划展示', createdAt: `${day}T01:00:00Z`, completedAt: `${day}T02:00:00Z` }
+    await store.importTasks([original])
+    expect((await app.inject({ url: `/api/daily-reports/${day}` })).json()).toBeNull()
+    const first = (await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day } })).json()
+    expect(first.revision).toBe(1); expect(first.recordCount).toBe(1)
+    const other = new Store(pool)
+    expect((await other.reportRecords(day)).every((task) => task.evidence === undefined)).toBe(true)
+    expect(await other.dailyReport(day)).toEqual(first)
+    expect((await sync.snapshot()).dailyReports).toContainEqual(first)
+    const added = { ...original, id: randomUUID(), title: '补充测试计划导出' }
+    await store.importTasks([added])
+    const count = reportInputs.length
+    expect((await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day } })).json()).toEqual(first)
+    expect(reportInputs).toHaveLength(count)
+    const second = (await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day, mode: 'append' } })).json()
+    expect(second.revision).toBe(2); expect(second.recordCount).toBe(2)
+    expect(reportInputs.at(-1)).toEqual([added.id])
+    const logged = recordsForDate({ version: 1, tasks: await other.tasks() }, day)
+    expect(logged.every((task) => isRecordInReport(task, second))).toBe(true)
+    expect(await other.saveDailyReport({ ...first, revision: 2 }, 1)).toBeNull()
+    expect(await other.dailyReport(day)).toEqual(second)
+    expect((await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day, mode: 'append' } })).json()).toEqual(second)
+    expect(reportInputs).toHaveLength(count + 1)
   })
   it('自动记录按来源日期归档、重复同步不再抽取、仅新增消息更新', async () => {
     const id = randomUUID(), project = `/__workbench_test__/${id}`

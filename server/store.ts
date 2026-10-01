@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Pool, type PoolClient } from 'pg'
 import { requiresManualCompletion, type Task } from '../src/domain/workbench.js'
-import type { Evidence, SyncRun } from '../shared/contracts.js'
+import type { DailyReport, Evidence, SyncRun } from '../shared/contracts.js'
 import type { Cursor, SourceMessage } from './records.js'
 import { digest } from './records.js'
 
@@ -25,6 +25,32 @@ export class Store {
   async tasks() {
     const { rows } = await this.pool.query('SELECT * FROM workbench.tasks WHERE deleted_at IS NULL ORDER BY created_at DESC, id')
     return rows.map(taskFromRow)
+  }
+  async reportRecords(day: string): Promise<Task[]> {
+    // 日报只读取简介与归档信息，不查询会话证据内容。
+    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin
+      FROM workbench.tasks WHERE deleted_at IS NULL AND
+      ((CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END)
+        AT TIME ZONE 'Asia/Shanghai')::date=$1::date
+      ORDER BY coalesce(recorded_at,completed_at,created_at) DESC,id`, [day])
+    return rows.map(taskFromRow)
+  }
+  async dailyReport(day: string): Promise<DailyReport | null> {
+    const { rows } = await this.pool.query('SELECT data FROM workbench.daily_reports WHERE day=$1', [day])
+    return rows[0]?.data ?? null
+  }
+  async dailyReports(): Promise<DailyReport[]> {
+    const { rows } = await this.pool.query('SELECT data FROM workbench.daily_reports ORDER BY day DESC')
+    return rows.map((row) => row.data)
+  }
+  async saveDailyReport(report: DailyReport, expectedRevision: number): Promise<DailyReport | null> {
+    // 生成结果和已整理标记保存在同一个文档里，版本检查防止并发覆盖。
+    const result = expectedRevision === 0
+      ? await this.pool.query(`INSERT INTO workbench.daily_reports(day,data,revision) VALUES($1,$2,1)
+          ON CONFLICT(day) DO NOTHING RETURNING data`, [report.day, JSON.stringify(report)])
+      : await this.pool.query(`UPDATE workbench.daily_reports SET data=$2,revision=revision+1,updated_at=now()
+          WHERE day=$1 AND revision=$3 RETURNING data`, [report.day, JSON.stringify(report), expectedRevision])
+    return result.rows[0]?.data ?? null
   }
   async applySummaries(tasks: Task[], items: { taskId: string; title: string }[]) {
     const originals = new Map(tasks.map((task) => [task.id, task.title]))
