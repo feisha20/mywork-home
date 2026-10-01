@@ -19,6 +19,7 @@ export async function fetchWorkbench() {
 }
 export const createTask = (title: string) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify({ title }) })
 export const updateTask = (id: string, completed: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ completed }) })
+export const deleteTask = (id: string) => request<{ deleted: boolean }>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
 export const startSync = () => request<SyncRun>('/sync', { method: 'POST', body: '{}' })
 
 // 不调用旧 loadWorkbench，避免把损坏缓存回退产生的示例导入数据库。

@@ -1,5 +1,5 @@
 interface IconProps {
-  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close'
+  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash'
   className?: string
 }
 
@@ -13,6 +13,7 @@ const paths = {
   book: 'M12 5c-3-2-7-2-10-1v15c3-1 7-1 10 1 3-2 7-2 10-1V4c-3-1-7-1-10 1Zm0 0v15',
   calendar: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2ZM8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01',
   close: 'm6 6 12 12M6 18 18 6',
+  trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7',
 }
 
 export function Icon({ name, className }: IconProps) {

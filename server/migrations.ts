@@ -40,6 +40,8 @@ UPDATE workbench.tasks SET recorded_at=coalesce(
  completed_at,created_at
 ) WHERE source IN ('codex','claude','workbuddy');
 CREATE INDEX tasks_recorded_idx ON workbench.tasks(recorded_at);
+` }, { version: 3, sql: `
+ALTER TABLE workbench.tasks ADD COLUMN deleted_at timestamptz;
 ` }]
 
 export async function migrate(pool: Pool) {

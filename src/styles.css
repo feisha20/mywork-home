@@ -140,22 +140,6 @@ body {
   fill: none;
 }
 
-.idle-flow-beam {
-  display: none;
-  stroke: var(--activity-color);
-  stroke-width: 2.5;
-  fill: none;
-  stroke-dasharray: 60 480;
-  filter: drop-shadow(0 0 5px rgba(var(--activity-rgb), 0.7));
-  animation: none;
-}
-.stage-container.is-working .idle-flow-beam { display: block; animation: idleStream 3s steps(90, end) infinite; }
-
-@keyframes idleStream {
-  0% { stroke-dashoffset: 540; }
-  100% { stroke-dashoffset: 0; }
-}
-
 .dashboard-panel {
   background: rgba(255, 255, 255, 0.96);
   border-radius: 28px;
@@ -521,7 +505,7 @@ body {
   transition: all 0.2s ease;
 }
 
-.chip-pin-h.pin-active {
+.chip-pin-h.pin-active, .chip-pin.pin-active {
   background: var(--accent-orange);
   box-shadow: 0 0 12px var(--accent-orange);
 }
@@ -531,11 +515,13 @@ body {
   width: 144px;
   height: 144px;
   border-radius: 28px;
-  border: 1.5px dashed rgba(16, 185, 129, 0.55);
   pointer-events: none;
   transition: all 0.3s ease;
   z-index: 2;
 }
+.chip-ring-svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.chip-ring-track { stroke: rgba(16, 185, 129, .55); stroke-width: 1.5; stroke-dasharray: 8 12; stroke-linecap: round; transition: stroke .3s ease; }
+.chip-ring-flow { stroke: #ffba92; stroke-width: 2.5; stroke-dasharray: 44 556; stroke-linecap: round; opacity: 0; }
 
 .holo-scale-ring {
   position: absolute;
@@ -552,10 +538,13 @@ body {
 }
 
 .processor-chip.energized .chip-accelerator-ring {
-  border: 2px dashed var(--accent-orange);
   box-shadow: 0 0 25px rgba(255, 104, 56, 0.7), inset 0 0 15px rgba(255, 104, 56, 0.3);
   filter: brightness(1.25);
 }
+/* 沿圆角方框顺时针绕行，每秒更新 20 次，空闲不播放。 */
+.processor-chip.energized .chip-ring-track { stroke: var(--accent-orange); stroke-width: 2; animation: chipRingFlow 6s steps(120, end) infinite; }
+.processor-chip.energized .chip-ring-flow { opacity: 1; animation: chipRingFlow 6s steps(120, end) infinite; }
+@keyframes chipRingFlow { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -600; } }
 .processor-chip.energized .holo-scale-ring {
   border-color: rgba(255, 104, 56, 0.35);
   animation: holoRotate 12s linear infinite;
@@ -636,6 +625,7 @@ body {
 }
 
 .engine-node-pill {
+  position: relative;
   background: #FFFFFF;
   border-radius: 12px;
   padding: 6px 10px;
@@ -648,7 +638,6 @@ body {
 }
 .engine-node-pill:hover {
   border-color: rgba(255, 104, 56, 0.35);
-  transform: translateY(-1px);
 }
 
 .node-meta {
@@ -666,11 +655,17 @@ body {
   color: var(--text-muted);
 }
 .node-pulse {
+  position: absolute;
+  top: 50%;
+  right: -3px;
+  transform: translateY(-50%);
+  flex-shrink: 0;
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: #10B981;
 }
+.source-on-left .node-pulse { right: auto; left: -3px; }
 
 .center-stats-badge {
   width: 100%;
@@ -974,6 +969,11 @@ button:focus-visible, input:focus-visible {
 .daily-log-actions .task-evidence { flex: 1; min-width: 0; margin: 0; font-size: 10px; }
 .daily-log-actions .task-evidence summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .daily-log-actions .reopen-task { flex: 0 0 auto; margin: 0; padding: 5px 9px; font-size: 10px; line-height: 1.2; white-space: nowrap; }
+.task-action-buttons { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
+.delete-task { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 10px; line-height: 1.2; color: #7c899c; background: #fff; cursor: pointer; }
+.delete-task svg { width: 12px; height: 12px; }
+.delete-task:hover { color: #c24135; border-color: #f4b8b1; background: #fff5f3; }
+.delete-task:disabled { opacity: .5; cursor: wait; }
 .daily-log-card.just-arrived { background: #fff4ec; animation: logArrival .4s ease-out; }
 .page-bottom-mark { font-size: 8px; color: #acb5c3; letter-spacing: 0.5px; margin: 14px 0 0; padding-top: 10px; border-top: 1px solid #f1f4f8; }
 
@@ -989,11 +989,19 @@ button:focus-visible, input:focus-visible {
 .storage-notice { margin-bottom: 14px; padding: 10px 14px; font-size: 12px; line-height: 1.6; border-radius: 12px; background: #fff3e8; color: #a36332; }
 .transfer-layer { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; }
 .photon-orbit-guide { fill: none; stroke: transparent; }
+.capture-output-track { fill: none; stroke: rgba(255, 104, 56, .25); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.capture-output-beam { fill: none; stroke: var(--accent-orange); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 40 580; animation: captureOutputFlow 2s steps(40, end) 1 forwards; }
+@keyframes captureOutputFlow { from { stroke-dashoffset: 40; } to { stroke-dashoffset: -540; } }
 
-/* 抽取连线跟随当前来源，从来源卡片向芯片持续输送光束。 */
+/* 空闲缓流每秒更新 10 次，工作时加速；只给当前采集线路增加高亮。 */
 .source-transfer-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 5; }
-.source-transfer-track { fill: none; stroke: var(--circuit-idle); stroke-width: 2; stroke-dasharray: 4 4; }
-.source-transfer-beam { fill: none; stroke: var(--activity-color); stroke-width: 2.5; stroke-dasharray: 60 480; filter: drop-shadow(0 0 3px rgba(var(--activity-rgb), .7)); animation: sourcePhotonFlow 3s steps(90, end) infinite; }
+.source-transfer-track { fill: none; stroke: #b7c6d8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.circuit-terminal { fill: #f5f8fc; stroke: #aebfd3; stroke-width: 1.5; }
+.circuit-active .source-transfer-track { stroke: rgba(255, 104, 56, .45); }
+.circuit-active .circuit-terminal { stroke: var(--accent-orange); fill: #fff0e8; }
+.source-transfer-beam { fill: none; stroke: #10b981; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 40 500; opacity: .4; animation: sourcePhotonFlow 16s steps(160, end) infinite; }
+.source-transfer-layer.is-working .source-transfer-beam { opacity: .6; animation-duration: 4s; animation-timing-function: steps(80, end); }
+.source-transfer-layer .circuit-active .source-transfer-beam { stroke: var(--accent-orange); stroke-width: 2.5; stroke-dasharray: 60 480; opacity: 1; animation-duration: 2s; animation-timing-function: steps(40, end); }
 .engine-node-pill.is-extracting { border-color: rgba(255, 104, 56, .65); box-shadow: 0 0 15px rgba(255, 104, 56, .15); }
 .engine-node-pill.is-extracting .node-status { color: #ce5028; }
 .engine-node-pill.is-extracting .node-pulse { background: var(--accent-orange); box-shadow: 0 0 8px var(--accent-orange); }
@@ -1047,8 +1055,8 @@ button:focus-visible, input:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
-  .idle-flow-beam { display: none; }
   .source-transfer-beam { display: none; }
+  .capture-output-layer { display: none; }
 }
 
 /* 后端同步状态与来源证据。 */

@@ -28,7 +28,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService)
   })
   app.setErrorHandler((error, _request, reply) => {
     const status = error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 500
-    void reply.code(status).send({ error: status === 400 ? '请求数据无效，请检查输入内容' : status === 409 ? '自动工作记录直接进入日志，无需手动完成或恢复' : '请求失败，请检查服务或数据库连接后重试' })
+    void reply.code(status).send({ error: status === 400 ? '请求数据无效，请检查输入内容' : status === 409 && error instanceof Error ? error.message : '请求失败，请检查服务或数据库连接后重试' })
   })
   app.get('/api/health', async (_request, reply) => {
     try { await store.pool.query('SELECT 1'); return { status: 'ok' } }
@@ -44,6 +44,11 @@ export async function createApp(config: Config, store: Store, sync: SyncService)
     const { completed } = z.object({ completed: z.boolean() }).parse(request.body)
     const task = await store.setCompleted(id, completed)
     return task ?? reply.code(404).send({ error: '事项不存在' })
+  })
+  app.delete('/api/tasks/:id', async (request, reply) => {
+    const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
+    if (!await store.deleteTask(id)) return reply.code(404).send({ error: '待办不存在或已删除' })
+    return { deleted: true }
   })
   app.post('/api/tasks/import', async (request) => {
     const { tasks } = z.object({ tasks: z.array(legacyTask).max(2000) }).parse(request.body)

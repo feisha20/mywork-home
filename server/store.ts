@@ -23,7 +23,7 @@ export class Store {
     finally { client.release() }
   }
   async tasks() {
-    const { rows } = await this.pool.query('SELECT * FROM workbench.tasks ORDER BY created_at DESC, id')
+    const { rows } = await this.pool.query('SELECT * FROM workbench.tasks WHERE deleted_at IS NULL ORDER BY created_at DESC, id')
     return rows.map(taskFromRow)
   }
   async applySummaries(tasks: Task[], items: { taskId: string; title: string }[]) {
@@ -48,13 +48,22 @@ export class Store {
     return taskFromRow(rows[0])
   }
   async setCompleted(id: string, completed: boolean) {
-    const existing = await this.pool.query('SELECT source FROM workbench.tasks WHERE id=$1', [id])
+    const existing = await this.pool.query('SELECT source FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
     if (existing.rows[0] && !['manual', 'zentao'].includes(existing.rows[0].source)) {
       throw Object.assign(new Error('自动工作记录直接进入日志，无需手动完成或恢复'), { statusCode: 409 })
     }
     const { rows } = await this.pool.query(`UPDATE workbench.tasks SET completed_at=CASE WHEN $2 THEN coalesce(completed_at,now()) ELSE NULL END,
-      status_origin='manual',updated_at=now() WHERE id=$1 RETURNING *`, [id, completed])
+      status_origin='manual',updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *`, [id, completed])
     return rows[0] ? taskFromRow(rows[0]) : null
+  }
+  async deleteTask(id: string): Promise<boolean> {
+    // 保留删除标记，旧缓存再次导入时不会把已删除的待办复活。
+    const result = await this.pool.query(`UPDATE workbench.tasks SET deleted_at=now(),updated_at=now()
+      WHERE id=$1 AND source='manual' AND completed_at IS NULL AND deleted_at IS NULL RETURNING id`, [id])
+    if (result.rowCount) return true
+    const existing = await this.pool.query('SELECT id FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
+    if (existing.rowCount) throw Object.assign(new Error('仅可删除手动新增且尚未完成的待办'), { statusCode: 409 })
+    return false
   }
   async importTasks(tasks: Task[]) {
     return this.transaction(async (client) => {
@@ -124,7 +133,7 @@ export class Store {
       projectPath: row.project_path, role: row.role, timestamp: new Date(row.occurred_at).toISOString(), text: row.body.slice(0, 6000) }))
   }
   async projectTasks(path: string) {
-    const { rows } = await this.pool.query('SELECT * FROM workbench.tasks WHERE project_path=$1 ORDER BY updated_at DESC LIMIT 100', [path])
+    const { rows } = await this.pool.query('SELECT * FROM workbench.tasks WHERE project_path=$1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100', [path])
     return rows.map(taskFromRow)
   }
   batchId(messages: SourceMessage[]) { return digest(`v1:${messages.map((message) => message.id).join(':')}`) }

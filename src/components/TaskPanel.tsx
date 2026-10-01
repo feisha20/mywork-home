@@ -9,12 +9,14 @@ interface TaskPanelProps {
   tasks: Task[]
   panelRef: RefObject<HTMLElement | null>
   activeId: string | null
+  deletingId: string | null
   disabled?: boolean
   onAdd: (title: string) => Promise<void>
   onComplete: (task: Task, button: HTMLButtonElement) => void
+  onDelete: (task: Task) => void
 }
 
-export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, disabled, onAdd, onComplete }: TaskPanelProps) {
+export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, disabled, onAdd, onComplete, onDelete }: TaskPanelProps) {
   const [title, setTitle] = useState('')
   const [adding, setAdding] = useState(false)
   const busy = activeId !== null || !!disabled || adding
@@ -47,14 +49,17 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, di
             <p className="daily-log-text" title={task.title}>{task.title}</p>
             <div className="daily-log-actions">
               <TaskEvidence task={task} />
-              <button
-                className="reopen-task complete-task"
-                disabled={busy}
-                onClick={(event) => onComplete(task, event.currentTarget)}
-                aria-label={`完成任务：${task.title}`}
-              >
-                <span>{activeId === task.id ? '传输中' : '完成'}</span>
-              </button>
+              <div className="task-action-buttons">
+                {task.source === 'manual' && <button className="delete-task" disabled={busy} onClick={() => onDelete(task)} aria-label={`删除待办：${task.title}`}><Icon name="trash" /><span>{deletingId === task.id ? '删除中' : '删除'}</span></button>}
+                <button
+                  className="reopen-task complete-task"
+                  disabled={busy}
+                  onClick={(event) => onComplete(task, event.currentTarget)}
+                  aria-label={`完成任务：${task.title}`}
+                >
+                  <span>{activeId === task.id ? '传输中' : '完成'}</span>
+                </button>
+              </div>
             </div>
           </article>
         ))}

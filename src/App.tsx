@@ -2,8 +2,11 @@ import { createRef, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { dateKey, recordsForDate, requiresManualCompletion } from './domain/workbench'
 import type { Task, WorkbenchState } from './domain/workbench'
 import type { WorkbenchSnapshot } from '../shared/contracts'
-import { createTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask } from './data/apiRepository'
+import { createTask, deleteTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
+import { changedCaptureDestinations } from './domain/captureFlow'
+import { CaptureOutput } from './components/CaptureOutput'
+import type { CaptureOutputEvent } from './components/CaptureOutput'
 import { TaskPanel } from './components/TaskPanel'
 import { ProcessorHub } from './components/ProcessorHub'
 import type { TransferPhase } from './components/ProcessorHub'
@@ -29,8 +32,12 @@ export default function App() {
   const [phase, setPhase] = useState<TransferPhase>('idle')
   const [recentId, setRecentId] = useState<string | null>(null)
   const [changingId, setChangingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [syncRequested, setSyncRequested] = useState(false)
   const [pageVisible, setPageVisible] = useState(() => !document.hidden)
+  const [captureOutputs, setCaptureOutputs] = useState<CaptureOutputEvent[]>([])
+  const captureBaseline = useRef<Task[] | null>(null)
+  const captureSequence = useRef(0)
   const pollerRef = useRef<ReturnType<typeof createAdaptivePolling> | null>(null)
   const busy = useRef(false)
   const mutationVersion = useRef(0)
@@ -50,7 +57,16 @@ export default function App() {
       setSnapshot((current) => JSON.stringify(current) === JSON.stringify(result) ? current : result); setConnected(true)
       if (connectionError.current) { setError(null); connectionError.current = false }
       // 归档动效期间不让后台刷新提前移除正在传输的卡片。
-      if (!busy.current && version === mutationVersion.current) setState((current) => JSON.stringify(current.tasks) === JSON.stringify(result.tasks) ? current : { version: 1, tasks: result.tasks })
+      if (!busy.current && version === mutationVersion.current) {
+        const destinations = changedCaptureDestinations(captureBaseline.current, result.tasks)
+        captureBaseline.current = result.tasks
+        if (!document.hidden && destinations.length) {
+          const events = destinations.map((destination) => ({ id: ++captureSequence.current, destination }))
+          // 同批次只按目的地合并流光，避免大量记录逐条播放形成积压。
+          setCaptureOutputs((current) => [...current.filter((event) => !destinations.includes(event.destination)), ...events])
+        }
+        setState((current) => JSON.stringify(current.tasks) === JSON.stringify(result.tasks) ? current : { version: 1, tasks: result.tasks })
+      }
       return result
     } catch (cause) { connectionError.current = true; setConnected(false); setError(cause instanceof Error ? cause.message : '工作台加载失败'); return null }
     finally { refreshing.current = false }
@@ -71,6 +87,7 @@ export default function App() {
     const resume = () => { if (ready) void poller.refreshNow() }
     const visibilityChanged = () => {
       setPageVisible(!document.hidden)
+      if (document.hidden) setCaptureOutputs([])
       if (document.hidden) poller.pause()
       else resume()
     }
@@ -96,7 +113,10 @@ export default function App() {
   const completedCount = useMemo(() => recordsForDate(state, today).length, [state, today])
   const finishTransfer = useCallback((taskId: string) => {
     const saved = completedTask.current
-    if (saved && saved.id === taskId) setState((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? saved : task) }))
+    if (saved && saved.id === taskId) {
+      setState((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? saved : task) }))
+      captureBaseline.current = captureBaseline.current?.map((task) => task.id === taskId ? saved : task) ?? null
+    }
     const now = new Date(); setClock(now); setRecentId(taskId)
     setPhase('idle'); setJob(null); setChangingId(null); completedTask.current = null; busy.current = false
     mutationVersion.current++
@@ -122,9 +142,25 @@ export default function App() {
   const handleReopen = useCallback(async (task: Task) => {
     if (busy.current) return
     busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
-    try { const saved = await updateTask(task.id, false); setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === task.id ? saved : item) })) }
+    try {
+      const saved = await updateTask(task.id, false)
+      setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === task.id ? saved : item) }))
+      captureBaseline.current = captureBaseline.current?.map((item) => item.id === task.id ? saved : item) ?? null
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : '恢复操作失败') }
     finally { mutationVersion.current++; busy.current = false; setChangingId(null) }
+  }, [])
+  const finishCaptureOutput = useCallback((id: number) => {
+    setCaptureOutputs((current) => current.filter((event) => event.id !== id))
+  }, [])
+  const handleDelete = useCallback(async (task: Task) => {
+    if (busy.current || task.source !== 'manual' || task.completedAt) return
+    busy.current = true; mutationVersion.current++; setDeletingId(task.id); setError(null)
+    try {
+      await deleteTask(task.id)
+      setState((current) => ({ ...current, tasks: current.tasks.filter((item) => item.id !== task.id) }))
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '删除失败，请重试') }
+    finally { mutationVersion.current++; busy.current = false; setDeletingId(null) }
   }, [])
   const handleSync = useCallback(async () => {
     setSyncRequested(true); setError(null)
@@ -133,7 +169,8 @@ export default function App() {
     finally { setSyncRequested(false) }
   }, [])
   const status = job ? phaseLabels[phase] : recentId ? '✓ 已收进今天的日报' : loading ? '正在连接工作台服务' : phaseLabels.idle
-  const working = snapshot?.harness?.run?.status === 'running' || phase !== 'idle'
+  const routing = pageVisible && captureOutputs.length > 0
+  const working = snapshot?.harness?.run?.status === 'running' || phase !== 'idle' || routing
   return (
     <div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
       <header className="top-bar">
@@ -143,13 +180,14 @@ export default function App() {
       {notice && <p className="storage-notice" role="status">{notice}</p>}
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
       <main className={`stage-container${working ? ' is-working' : ''}`}>
-        <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path, index) => <g key={path}><path className="idle-track" d={path} /><path className="idle-flow-beam" d={path} style={{ animationDelay: `${index * .75}s` }} /></g>)}</svg>
-        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} disabled={loading || !connected || changingId !== null} onAdd={handleAdd} onComplete={handleComplete} />
-        <ProcessorHub refs={processorRefs} phase={phase} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook state={state} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null} />
+        <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
+        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null} onAdd={handleAdd} onComplete={handleComplete} onDelete={handleDelete} />
+        <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
+        <DailyLogBook state={state} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>Codex · Claude Code · 每 10 分钟同步</span></footer>
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
+      {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
     </div>
   )
 }
