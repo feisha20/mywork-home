@@ -1,5 +1,5 @@
 interface IconProps {
-  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock'
+  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevrons-left' | 'chevrons-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock'
   className?: string
 }
 
@@ -7,6 +7,8 @@ const paths = {
   arrow: 'M4 12h16m-6-6 6 6-6 6',
   'chevron-left': 'm15 18-6-6 6-6',
   'chevron-right': 'm9 18 6-6-6-6',
+  'chevrons-left': 'm11 17-5-5 5-5m7 10-5-5 5-5',
+  'chevrons-right': 'm13 7 5 5-5 5m-7-10 5 5-5 5',
   'chevron-down': 'm6 9 6 6 6-6',
   check: 'm5 12 4 4L19 6',
   plus: 'M12 5v14M5 12h14',

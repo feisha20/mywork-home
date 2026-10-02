@@ -16,10 +16,10 @@ import { createTransferJob, TransferLayer } from './components/TransferLayer'
 import type { TransferJob } from './components/TransferLayer'
 import { Icon } from './components/Icon'
 import { SettingsDialog } from './components/SettingsDialog'
+import { PerpetualCalendar } from './components/PerpetualCalendar'
 import type { WorkbenchSettings } from '../shared/settings'
 
 const busPaths = ['M 100 240 L 460 240 L 520 280 L 700 280', 'M 100 420 L 480 420 L 540 320 L 700 320', 'M 700 280 L 880 280 L 940 240 L 1300 240', 'M 700 320 L 860 320 L 920 420 L 1300 420']
-const dateFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })
 const phaseLabels = { inbound: '待办正在汇入核心', orbit: '核心正在处理 · 环轨加速', outbound: '正在收进今天的日报', idle: '工作流就绪，等待下一次推进' }
 
 export default function App() {
@@ -190,7 +190,7 @@ export default function App() {
     <div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
       <header className="top-bar">
         <div className="brand-section"><div className="brand-badge" aria-hidden="true">QA</div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className={`live-indicator${connected ? '' : ' is-disconnected'}`} role="status"><span className="live-dot" aria-hidden="true" />{connected ? '本机工作台' : '服务未连接'}</span></div>
-        <div className="top-meta"><time className="header-date" dateTime={today}>{dateFormatter.format(clock)}</time><button type="button" className="user-pill settings-entry" aria-label="我的：打开工作台设置" aria-haspopup="dialog" aria-expanded={settingsOpen} title="工作台设置" onClick={() => setSettingsOpen(true)}><span>个人工作空间</span><span className="user-avatar" aria-hidden="true">我</span></button></div>
+        <div className="top-meta"><PerpetualCalendar today={today} clock={clock} /><button type="button" className="user-pill settings-entry" aria-label="我的：打开工作台设置" aria-haspopup="dialog" aria-expanded={settingsOpen} title="工作台设置" onClick={() => setSettingsOpen(true)}><span>个人工作空间</span><span className="user-avatar" aria-hidden="true">我</span></button></div>
       </header>
       {notice && <p className="storage-notice" role="status">{notice}</p>}
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
