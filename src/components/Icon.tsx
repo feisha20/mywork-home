@@ -1,10 +1,11 @@
 interface IconProps {
-  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevrons-left' | 'chevrons-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock'
+  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevrons-left' | 'chevrons-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock' | 'user' | 'sparkles' | 'edit' | 'arrow-left'
   className?: string
 }
 
 const paths = {
   arrow: 'M4 12h16m-6-6 6 6-6 6',
+  'arrow-left': 'M20 12H4m6-6-6 6 6 6',
   'chevron-left': 'm15 18-6-6 6-6',
   'chevron-right': 'm9 18 6-6-6-6',
   'chevrons-left': 'm11 17-5-5 5-5m7 10-5-5 5-5',
@@ -29,6 +30,9 @@ const paths = {
   upload: 'M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5',
   grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
   clock: 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10ZM12 6v6l4 2',
+  user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
+  sparkles: 'm12 3 1.9 5.9L20 11l-5.1 2 2 6-5-3-5 3 2-6-5.1-2.1 6.1-2.1L12 3Z',
+  edit: 'M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z',
 }
 
 export function Icon({ name, className }: IconProps) {
