@@ -29,10 +29,21 @@ export interface ChannelConfig {
   mapping?: RecordMapping
 }
 export type ChannelSummary = Omit<ChannelConfig, 'paths' | 'pathMode' | 'mapping'>
+export const timePointRegex = /^([01]\d|2[0-3]):[0-5]\d$/
+export const timePointSchema = z.string().trim().regex(timePointRegex, '时间格式必须为 HH:mm，例如 12:00')
+export interface DailyReportScheduleSettings {
+  enabled: boolean
+  times: string[]
+}
+export const defaultDailyReportSchedule: DailyReportScheduleSettings = {
+  enabled: false,
+  times: ['12:00', '18:00', '21:00'],
+}
 export interface WorkbenchSettings {
   revision: number
   model: { baseUrl: string; name: string; hasApiKey: boolean }
   sync: { enabled: boolean; intervalMs: number }
+  dailyReportSchedule: DailyReportScheduleSettings
   channels: ChannelConfig[]
   pathEnvironment: 'local' | 'container'
   unresolvedPaths?: string[]
@@ -90,9 +101,16 @@ export const channelSettingsSchema = z.object({
   paths: z.array(sourcePathSchema).max(10, '每个渠道最多配置 10 个目录'),
   mapping: recordMappingSchema.optional(),
 }).refine((channel) => channel.collector === 'none' || !channel.enabled || channel.paths.length > 0, '启用采集前，请扫描或填写至少一个目录')
+export const dailyReportScheduleSchema = z.object({
+  enabled: z.boolean(),
+  times: z.array(timePointSchema)
+    .max(24, '最多配置 24 个时间点')
+    .transform((times) => [...new Set(times)].sort()),
+})
 export const settingsUpdateSchema = z.object({
   revision: z.number().int().min(1), model: modelSettingsSchema,
   sync: z.object({ enabled: z.boolean(), intervalMs: z.number().int().min(60_000).max(86_400_000) }),
+  dailyReportSchedule: dailyReportScheduleSchema.default(defaultDailyReportSchedule),
   channels: z.array(channelSettingsSchema).min(6).max(30),
 }).superRefine(({ channels }, context) => {
   if (new Set(channels.map((channel) => channel.id)).size !== channels.length) context.addIssue({ code: 'custom', message: '渠道标识不能重复' })

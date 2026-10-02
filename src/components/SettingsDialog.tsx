@@ -5,7 +5,7 @@ import { COLLECTORS, settingsUpdateSchema } from '../../shared/settings'
 import type { ChannelId, CollectorKind, SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
 import { fetchSettings, saveSettings, scanChannelPaths, testModelConnection } from '../data/apiRepository'
 import { channelSlots } from '../domain/channelDock'
-import { moveChannel, settingsDraft } from '../domain/settings'
+import { moveChannel, settingsDraft, type SettingsTab } from '../domain/settings'
 import { sourceInfo } from '../domain/workbench'
 import { ChannelLogo } from './ChannelLogo'
 import { Icon } from './Icon'
@@ -23,7 +23,8 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const uploadRef = useRef<HTMLInputElement>(null)
   const [saved, setSaved] = useState<WorkbenchSettings | null>(null)
   const [draft, setDraft] = useState<SettingsUpdate | null>(null)
-  const [tab, setTab] = useState<'model' | 'channels'>('model')
+  const [tab, setTab] = useState<SettingsTab>('model')
+  const [newTime, setNewTime] = useState('18:00')
   const [selectedId, setSelectedId] = useState<string>('codex')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -82,6 +83,28 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
     const id = `custom-${crypto.randomUUID()}`
     setDraft((current) => current && { ...current, channels: [...current.channels, { id, name: '新渠道', logo: '', collector: 'auto', enabled: true, pathMode: 'scan', paths: [] }] })
     setSelectedId(id); setFeedback(null)
+  }
+  function addTime(timeToAdd = newTime) {
+    if (!draft) return
+    const time = timeToAdd.trim()
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return
+    if (draft.dailyReportSchedule.times.includes(time)) return
+    if (draft.dailyReportSchedule.times.length >= 24) return
+    const nextTimes = [...new Set([...draft.dailyReportSchedule.times, time])].sort()
+    setDraft((current) => current && {
+      ...current,
+      dailyReportSchedule: { ...current.dailyReportSchedule, times: nextTimes },
+    })
+    setFeedback(null)
+  }
+  function removeTime(timeToRemove: string) {
+    if (!draft) return
+    const nextTimes = draft.dailyReportSchedule.times.filter((time) => time !== timeToRemove)
+    setDraft((current) => current && {
+      ...current,
+      dailyReportSchedule: { ...current.dailyReportSchedule, times: nextTimes },
+    })
+    setFeedback(null)
   }
   async function handleSave(event: FormEvent) {
     event.preventDefault()
@@ -151,8 +174,9 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
           <span className="settings-nav-label">个人工作空间</span>
-          <button type="button" className={tab === 'model' ? 'is-active' : ''} aria-current={tab === 'model' ? 'page' : undefined} onClick={() => setTab('model')}><Icon name="model" /><span>模型配置<small>连接与自动采集</small></span></button>
+          <button type="button" className={tab === 'model' ? 'is-active' : ''} aria-current={tab === 'model' ? 'page' : undefined} onClick={() => setTab('model')}><Icon name="model" /><span>模型配置<small>大模型连接与密钥</small></span></button>
           <button type="button" className={tab === 'channels' ? 'is-active' : ''} aria-current={tab === 'channels' ? 'page' : undefined} onClick={() => setTab('channels')}><Icon name="sources" /><span>采集源<small>渠道、顺序与路径</small></span>{draft && <b>{draft.channels.length}</b>}</button>
+          <button type="button" className={tab === 'automation' ? 'is-active' : ''} aria-current={tab === 'automation' ? 'page' : undefined} onClick={() => setTab('automation')}><Icon name="clock" /><span>自动化<small>自动采集与定时日报</small></span></button>
           <p className="settings-nav-note"><Icon name="check" />设置保存在本机<br />刷新、重启后依然保留</p>
         </nav>
         <div className="settings-content">
@@ -166,10 +190,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
               <label className="settings-field">模型名称<input required value={draft.model.name} maxLength={160} placeholder="glm-5.3-flash" onChange={(event) => changeModel({ name: event.target.value })} /></label>
               <div className="settings-field"><label htmlFor="settings-api-key">API Key</label><div className="settings-key-input"><input id="settings-api-key" type={showKey ? 'text' : 'password'} autoComplete="new-password" value={draft.model.apiKey ?? ''} disabled={busy || draft.model.clearApiKey} placeholder={saved?.model.hasApiKey ? '已配置 · 留空保留现有密钥' : '输入模型服务的 API Key'} maxLength={4096} onChange={(event) => changeModel({ apiKey: event.target.value })} /><button type="button" aria-label={showKey ? '隐藏 API Key' : '显示 API Key'} aria-pressed={showKey} onClick={() => setShowKey((current) => !current)}><Icon name="eye" /></button></div><small>密钥仅保存在服务端，不会回传明文，也不会存入浏览器缓存。</small></div>
               <div className="settings-model-actions"><button type="button" className="settings-secondary" onClick={() => void handleTest()}><Icon name="refresh" />{testing ? '连接测试中…' : '测试连接'}</button>{saved?.model.hasApiKey && <label className="settings-checkbox"><input type="checkbox" checked={!!draft.model.clearApiKey} onChange={(event) => changeModel({ clearApiKey: event.target.checked, apiKey: '' })} />清除已保存密钥</label>}</div>
-              <section className="settings-sync-section" aria-labelledby="settings-sync-heading"><div className="settings-section-heading"><div><h3 id="settings-sync-heading">自动采集</h3><p>定时检查各渠道的新会话与工作进展</p></div><button type="button" role="switch" aria-checked={draft.sync.enabled} aria-label="自动采集" className={`settings-switch${draft.sync.enabled ? ' is-on' : ''}`} onClick={() => setDraft((current) => current && { ...current, sync: { ...current.sync, enabled: !current.sync.enabled } })}><span /></button></div>
-                <label className="settings-interval">采集间隔<div><input type="number" min={1} max={1440} step={1} value={draft.sync.intervalMs / 60000} onChange={(event) => setDraft((current) => current && { ...current, sync: { ...current.sync, intervalMs: Number(event.target.value) * 60000 } })} /><span>分钟</span></div></label><p className="settings-help">{draft.sync.enabled ? '保存后重新计算下次采集时间，正在进行的同步会继续完成。' : '已暂停定时采集，仍可在首页点击“立即同步”。'}</p>
-              </section>
-            </div> : <div className="settings-channels-page">
+            </div> : tab === 'channels' ? <div className="settings-channels-page">
               <div className="settings-section-heading"><div><h3>采集源</h3><p>拖动调整顺序，也可使用上下箭头。首页与详情同步显示。</p></div><button type="button" className="settings-secondary" disabled={draft.channels.length >= 30} onClick={addChannel}><Icon name="plus" />添加渠道</button></div>
               <div className="settings-channel-columns">
                 <ol className="settings-channel-list" aria-label="采集源显示顺序">
@@ -205,6 +226,47 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                 const entry = draft.channels.find((item) => item.id === slot.sources[0])!
                 return <span className="settings-preview-channel" key={slot.id}>{slot.overflow ? <span className="settings-preview-more">+{slot.sources.length}</span> : <ChannelLogo logo={entry.logo} name={entry.name} size={32} />}<small>{slot.overflow ? '更多' : entry.name}</small></span>
               })}</div></section>
+            </div> : <div className="settings-automation-page">
+              <div className="settings-section-heading"><div><h3>自动化</h3><p>配置自动采集会话与定时生成日报</p></div></div>
+              <section className="settings-automation-card" aria-labelledby="settings-sync-heading">
+                <div className="settings-section-heading"><div><h4 id="settings-sync-heading">自动采集</h4><p>定时检查各渠道的新会话与工作进展</p></div><button type="button" role="switch" aria-checked={draft.sync.enabled} aria-label="自动采集" className={`settings-switch${draft.sync.enabled ? ' is-on' : ''}`} onClick={() => setDraft((current) => current && { ...current, sync: { ...current.sync, enabled: !current.sync.enabled } })}><span /></button></div>
+                <label className="settings-interval">采集间隔<div><input type="number" min={1} max={1440} step={1} value={draft.sync.intervalMs / 60000} onChange={(event) => setDraft((current) => current && { ...current, sync: { ...current.sync, intervalMs: Number(event.target.value) * 60000 } })} /><span>分钟</span></div></label>
+                <p className="settings-help">{draft.sync.enabled ? '保存后重新计算下次采集时间，正在进行的同步会继续完成。' : '已暂停定时采集，仍可在首页点击“立即同步”。'}</p>
+              </section>
+              <section className="settings-automation-card" aria-labelledby="settings-report-schedule-heading">
+                <div className="settings-section-heading"><div><h4 id="settings-report-schedule-heading">自动生成日报</h4><p>到达指定时间点时，自动将今日日志整理并入日报</p></div><button type="button" role="switch" aria-checked={draft.dailyReportSchedule.enabled} aria-label="自动生成日报" className={`settings-switch${draft.dailyReportSchedule.enabled ? ' is-on' : ''}`} onClick={() => setDraft((current) => current && { ...current, dailyReportSchedule: { ...current.dailyReportSchedule, enabled: !current.dailyReportSchedule.enabled } })}><span /></button></div>
+                <p className="settings-help">{draft.dailyReportSchedule.enabled ? '到达设定时间后，将自动对今日日志进行增量整理，不会覆盖已手动编辑的修改。若当天暂无工作日志则静默跳过。' : '已关闭定时生成日报。你仍可随时在日报页面点击“生成日报”或“补充整理”。'}</p>
+                {draft.dailyReportSchedule.enabled && <div className="settings-schedule-body">
+                  <div className="settings-field">
+                    <span>生成时间点列表 ({draft.dailyReportSchedule.times.length}/24)</span>
+                    {draft.dailyReportSchedule.times.length === 0 ? <p className="settings-schedule-empty">尚未添加时间点，请在下方添加自动生成的执行时间。</p> : <div className="settings-schedule-tags" role="list" aria-label="已配置的时间点">
+                      {draft.dailyReportSchedule.times.map((time) => <span key={time} className="settings-schedule-tag" role="listitem">
+                        <Icon name="clock" />
+                        <strong>{time}</strong>
+                        <button type="button" aria-label={`删除 ${time}`} title={`删除 ${time}`} onClick={() => removeTime(time)}><Icon name="close" /></button>
+                      </span>)}
+                    </div>}
+                  </div>
+                  <div className="settings-field">
+                    <span>添加时间点</span>
+                    <div className="settings-schedule-input-row">
+                      <input type="time" value={newTime} aria-label="选择时间" onChange={(event) => setNewTime(event.target.value)} />
+                      <button type="button" className="settings-secondary" disabled={!newTime || draft.dailyReportSchedule.times.includes(newTime) || draft.dailyReportSchedule.times.length >= 24} onClick={() => addTime(newTime)}><Icon name="plus" />添加时间点</button>
+                    </div>
+                  </div>
+                  <div className="settings-schedule-presets">
+                    <span className="settings-presets-label">常用预设：</span>
+                    {[
+                      { label: '中午 12:00', time: '12:00' },
+                      { label: '傍晚 18:00', time: '18:00' },
+                      { label: '晚间 21:00', time: '21:00' },
+                    ].map((preset) => {
+                      const exists = draft.dailyReportSchedule.times.includes(preset.time)
+                      return <button key={preset.time} type="button" className="settings-preset-button" disabled={exists || draft.dailyReportSchedule.times.length >= 24} onClick={() => addTime(preset.time)}>{exists ? `✓ ${preset.label}` : `+ ${preset.label}`}</button>
+                    })}
+                  </div>
+                </div>}
+              </section>
             </div>}
           </fieldset>}
         </div>

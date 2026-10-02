@@ -1241,6 +1241,27 @@ button:focus-visible, input:focus-visible {
 .settings-checkbox input { accent-color: var(--accent-orange); }
 .settings-sync-section { margin-top: 30px; padding-top: 25px; border-top: 1px solid #e9edf3; }
 .settings-sync-section .settings-section-heading { margin-bottom: 18px; }
+.settings-automation-page { max-width: 660px; margin: auto; display: flex; flex-direction: column; gap: 20px; }
+.settings-automation-card { padding: 20px 22px; border: 1px solid #e7ecf3; border-radius: 14px; background: #fff; box-shadow: 0 1px 4px rgba(40, 56, 80, .03); }
+.settings-automation-card .settings-section-heading { margin-bottom: 14px; }
+.settings-automation-card .settings-section-heading h4 { font-size: 15px; font-weight: 650; line-height: 22px; margin: 0; }
+.settings-schedule-body { margin-top: 18px; padding-top: 18px; border-top: 1px solid #f0f3f8; display: flex; flex-direction: column; gap: 18px; }
+.settings-schedule-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.settings-schedule-tag { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid #ffe1d3; border-radius: 8px; background: #fff5ef; color: #c5572e; font-size: 12px; }
+.settings-schedule-tag svg { width: 14px; height: 14px; }
+.settings-schedule-tag strong { font-size: 13px; font-family: "SF Mono", Menlo, monospace; }
+.settings-schedule-tag button { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; background: transparent; color: #d07452; cursor: pointer; border-radius: 4px; }
+.settings-schedule-tag button:hover { background: #ffdacf; color: #a43a15; }
+.settings-schedule-tag button svg { width: 11px; height: 11px; }
+.settings-schedule-empty { font-size: 11px; color: #9aa6b7; padding: 6px 0; }
+.settings-schedule-input-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.settings-schedule-input-row input[type="time"] { width: 130px; padding: 8px 10px; border: 1px solid #dfe5ee; border-radius: 8px; outline: none; background: #fff; font-size: 12px; color: #37445a; font-family: "SF Mono", Menlo, monospace; }
+.settings-schedule-input-row input[type="time"]:focus { border-color: #f4aa8e; box-shadow: 0 0 0 3px rgba(255, 104, 56, .08); }
+.settings-schedule-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; color: #8794a6; }
+.settings-presets-label { font-size: 11px; color: #8794a6; }
+.settings-preset-button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #e1e7f0; border-radius: 7px; background: #f8fafc; color: #5a697e; font-size: 11px; cursor: pointer; transition: all .15s; }
+.settings-preset-button:hover:not(:disabled) { border-color: #f4aa8e; color: #c5572e; background: #fff8f5; }
+.settings-preset-button:disabled { opacity: .45; cursor: default; }
 .settings-switch { position: relative; flex: 0 0 auto; width: 36px; height: 21px; border: 0; padding: 3px; border-radius: 20px; background: #d7dfe9; transition: background .2s; }
 .settings-switch span { display: block; width: 15px; height: 15px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); transition: transform .2s; }
 .settings-switch.is-on { background: var(--accent-orange); }

@@ -1,8 +1,12 @@
 import type { SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
 
+export type SettingsTab = 'model' | 'channels' | 'automation'
+
 export function settingsDraft(settings: WorkbenchSettings): SettingsUpdate {
   return { revision: settings.revision, model: { baseUrl: settings.model.baseUrl, name: settings.model.name, apiKey: '', clearApiKey: false },
-    sync: { ...settings.sync }, channels: structuredClone(settings.channels) }
+    sync: { ...settings.sync },
+    dailyReportSchedule: { enabled: settings.dailyReportSchedule.enabled, times: [...settings.dailyReportSchedule.times] },
+    channels: structuredClone(settings.channels) }
 }
 
 export function moveChannel<T extends { id: string }>(channels: readonly T[], id: string, targetIndex: number): T[] {

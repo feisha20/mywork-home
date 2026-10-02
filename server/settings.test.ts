@@ -50,6 +50,25 @@ describe('设置持久化与密钥边界', () => {
     await reloaded.save(clear)
     expect((await SettingsService.open(config)).view().model.hasApiKey).toBe(false)
   })
+  it('定时生成日报配置重启后保留，旧版缺少字段时自动补充默认配置', async () => {
+    expect(settings.view().dailyReportSchedule).toEqual({ enabled: false, times: ['12:00', '18:00', '21:00'] })
+    const draft = settingsDraft(settings.view())
+    draft.dailyReportSchedule = { enabled: true, times: ['17:30', '11:00'] }
+    const saved = await settings.save(draft)
+    // times 自动升序排列
+    expect(saved.dailyReportSchedule).toEqual({ enabled: true, times: ['11:00', '17:30'] })
+    const reloaded = await SettingsService.open(config)
+    expect(reloaded.view().dailyReportSchedule).toEqual({ enabled: true, times: ['11:00', '17:30'] })
+    expect(reloaded.dailyReportSchedule()).toEqual({ enabled: true, times: ['11:00', '17:30'] })
+
+    // 测试旧版配置文件缺失 dailyReportSchedule 字段时能够平滑升级
+    const file = join(directory, 'settings/workbench.json')
+    const raw = JSON.parse(await readFile(file, 'utf8'))
+    delete raw.dailyReportSchedule
+    await writeFile(file, JSON.stringify(raw))
+    const upgraded = await SettingsService.open(config)
+    expect(upgraded.view().dailyReportSchedule).toEqual({ enabled: false, times: ['12:00', '18:00', '21:00'] })
+  })
   it('并发保存只接受一个版本，失败请求不会清除成功保存的配置', async () => {
     const left = settingsDraft(settings.view()), right = settingsDraft(settings.view())
     left.model.name = '先保存的模型'; right.model.name = '过期的模型'

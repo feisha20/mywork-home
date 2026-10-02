@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { moveChannel } from './settings'
+import { moveChannel, settingsDraft } from './settings'
 import { channelSlots, channelStatus } from './channelDock'
 import { decodeSnapshot, recordTimestamp, sourceInfo } from './workbench'
+import type { WorkbenchSettings } from '../../shared/settings'
 
 describe('可配置渠道显示', () => {
   it('拖动与上下移动统一保留来源顺序，更多入口保留完整列表', () => {
@@ -18,5 +19,20 @@ describe('可配置渠道显示', () => {
     expect(recordTimestamp(task)).toBe(task.createdAt)
     expect(sourceInfo('custom-editor', [{ id: 'custom-editor', name: '新编辑器', logo: '', collector: 'codex', enabled: true }]).label).toBe('新编辑器')
     expect(channelStatus('codex', { codex: { available: true, sessionCount: 2, error: null, enabled: false } } as never, 'codex')).toMatchObject({ kind: 'pending', label: '已停用' })
+  })
+  it('settingsDraft 完整拷贝自动采集与定时日报配置', () => {
+    const settings: WorkbenchSettings = {
+      revision: 2,
+      model: { baseUrl: 'https://example.com', name: 'test-model', hasApiKey: true },
+      sync: { enabled: true, intervalMs: 300_000 },
+      dailyReportSchedule: { enabled: true, times: ['12:00', '18:00', '21:00'] },
+      channels: [],
+      pathEnvironment: 'local',
+    }
+    const draft = settingsDraft(settings)
+    expect(draft.dailyReportSchedule).toEqual({ enabled: true, times: ['12:00', '18:00', '21:00'] })
+    // 修改 draft 不影响原始配置
+    draft.dailyReportSchedule.times.push('23:00')
+    expect(settings.dailyReportSchedule.times).toHaveLength(3)
   })
 })

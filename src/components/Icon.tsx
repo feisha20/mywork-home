@@ -1,5 +1,5 @@
 interface IconProps {
-  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip'
+  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock'
   className?: string
 }
 
@@ -26,6 +26,7 @@ const paths = {
   search: 'M21 21l-5-5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0',
   upload: 'M12 16V3m-5 5 5-5 5 5M4 16v5h16v-5',
   grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
+  clock: 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10ZM12 6v6l4 2',
 }
 
 export function Icon({ name, className }: IconProps) {
