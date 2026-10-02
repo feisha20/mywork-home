@@ -50,3 +50,5 @@ coverage/
 .env.*
 .env.tmp.*
 !.env.example
+.gemini/
+GEMINI.md
