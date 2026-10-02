@@ -8,6 +8,7 @@ import { SyncService } from './sync.js'
 import { HarnessExtractor } from './harness.js'
 import { DailyReportError, DailyReportService } from './dailyReport.js'
 import { SettingsError } from './settings.js'
+import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
   title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable() })
@@ -62,10 +63,11 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
       return reply.header('Cache-Control', 'private, max-age=86400, immutable').type(logo.contentType).send(logo.body)
     })
     app.post('/api/settings/scan', async (request) => {
-      const { collector } = z.object({ collector: z.enum(['codex', 'claude', 'workbuddy', 'zcode', 'gemini', 'none']) }).parse(request.body)
-      return settings.scan(collector)
+      const { collector, paths } = z.object({ collector: collectorSchema, paths: pathCheckSchema.shape.paths.optional() }).parse(request.body)
+      return settings.scan(collector, paths)
     })
     app.post('/api/settings/check-paths', (request) => settings.checkPaths(request.body))
+    app.post('/api/settings/preview-records', (request) => settings.previewRecords(request.body))
     app.post('/api/settings/test-model', (request) => settings.testModel(request.body))
   }
   app.get('/api/daily-reports/:day', async (request) => {

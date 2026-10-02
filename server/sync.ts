@@ -10,6 +10,8 @@ import { ZcodeReader } from './zcode.js'
 import { listGeminiRecordFiles, readGeminiDelta, type GeminiRecordFile } from './gemini.js'
 import { redact } from './redact.js'
 import { initialChannels, type SettingsService } from './settings.js'
+import { classifyCompatibleFile, isCompatibleDatabase, listCompatibleCandidates, readCompatibleDelta } from './compatibleRecords.js'
+import type { CompatibleRecordFile } from './compatibleRecords.js'
 
 export function messageBatches(messages: SourceMessage[], maxCharacters = 30000): SourceMessage[][] {
   const result: SourceMessage[][] = []
@@ -130,7 +132,10 @@ export class SyncService {
       for (const channel of channels) this.sources[channel.id as Source] = { available: false, sessionCount: 0, error: null }
       for (const channel of channels) for (const root of channel.paths) {
         if (this.stopping) break
-        const source = channel.id as Source, collector = channel.collector
+        const source = channel.id as Source
+        let collector = channel.collector
+        const universal = collector === 'auto' || collector === 'generic'
+        if (collector === 'auto' && isCompatibleDatabase(root)) collector = 'zcode'
         const cursorKey = (path: string) => source.startsWith('custom-') ? `channel:${source}:${path}` : path
         const mapped = (delta: { messages: SourceMessage[]; cursor: import('./records.js').Cursor }, path: string) => ({
           messages: delta.messages.map((message) => ({ ...message, source, id: source.startsWith('custom-') ? digest(`${source}:${message.id}`) : message.id })),
@@ -162,9 +167,22 @@ export class SyncService {
           continue
         }
         if (collector === 'none') continue
-        let files: GeminiRecordFile[]
+        let files: (GeminiRecordFile | CompatibleRecordFile)[]
         try {
-          files = collector === 'gemini' ? await listGeminiRecordFiles(root)
+          if (universal) {
+            files = []
+            let unsupported = 0
+            for (const path of await listCompatibleCandidates(root)) {
+              try {
+                const file = await classifyCompatibleFile(path, collector as 'auto' | 'generic', channel.mapping)
+                if (file) files.push(file); else unsupported++
+              } catch { unsupported++ }
+            }
+            if (unsupported) {
+              this.sources[source].error = `${unsupported} 个文件未识别或无法读取，请在设置中检测记录或配置字段对应关系`
+              this.error(run, `${channel.name}：${this.sources[source].error}`)
+            }
+          } else files = collector === 'gemini' ? await listGeminiRecordFiles(root)
             : (await listRecordFiles(root)).map((path) => ({ path, projectPath: '', parentSessionId: null }))
           this.sources[source].available = true
         }
@@ -178,13 +196,16 @@ export class SyncService {
           const key = cursorKey(file)
           let cursor = await this.store.cursor(key)
           if (!cursor && info.mtimeMs < Date.parse(cutoff)) continue
-          const fingerprint = digest(`${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`)
+          const signature = 'signature' in record ? record.signature : ''
+          const fingerprint = digest(`${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}${signature ? `:${signature}` : ''}`)
           if (await this.store.recordIgnored(key, fingerprint)) { run.ignoredFiles = (run.ignoredFiles ?? 0) + 1; continue }
-          if (cursor && cursor.inode === String(info.ino) && cursor.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)) continue
+          if (cursor && cursor.inode === String(info.ino) && cursor.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)
+            && (!signature || cursor.context.readerSignature === signature)) continue
           let more = true, failed = false
           while (more && !this.stopping) {
             let delta
-            try { delta = collector === 'gemini' ? await readGeminiDelta(record, cursor, cutoff, secrets) : await readDelta(file, collector, cursor, cutoff, secrets) }
+            try { delta = 'format' in record ? await readCompatibleDelta(record, source, cursor, cutoff, secrets, channel.mapping)
+              : collector === 'gemini' ? await readGeminiDelta(record, cursor, cutoff, secrets) : await readDelta(file, collector as 'codex' | 'claude' | 'workbuddy', cursor, cutoff, secrets) }
             catch { await this.failRecord(run, source, key, fingerprint); failed = true; break }
             const data = mapped(delta, file)
             try { run.newMessages += await this.store.ingest(data.messages, data.cursor) }

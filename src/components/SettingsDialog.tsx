@@ -11,10 +11,12 @@ import { ChannelLogo } from './ChannelLogo'
 import { Icon } from './Icon'
 import { SourcePathDetails } from './SourcePathDetails'
 import { SettingsSelect } from './SettingsSelect'
+import { RecordCompatibility } from './RecordCompatibility'
 
 type DraftChannel = SettingsUpdate['channels'][number]
 const messageOf = (error: unknown) => error instanceof Error ? error.message : '操作失败，请稍后重试'
 const collectorOptions = Object.entries(COLLECTORS).map(([value, label]) => ({ value: value as CollectorKind, label }))
+const compatibleOptions = collectorOptions.filter((option) => ['auto', 'generic', 'none'].includes(option.value))
 
 export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (settings: WorkbenchSettings) => void }) {
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -32,6 +34,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
   const [scanFeedback, setScanFeedback] = useState<{ id: string; message: string } | null>(null)
+  const [scanChoices, setScanChoices] = useState<{ id: string; paths: string[] } | null>(null)
   const [unresolvedPaths, setUnresolvedPaths] = useState<string[]>([])
   const [pathCheckVersion, setPathCheckVersion] = useState(0)
   const [discarding, setDiscarding] = useState(false)
@@ -40,7 +43,8 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const dirty = !!saved && !!draft && JSON.stringify(settingsDraft(saved)) !== JSON.stringify(draft)
   const channel = draft?.channels.find((entry) => entry.id === selectedId)
   const channelSaved = saved?.channels.find((entry) => entry.id === selectedId)
-  const collectorLocked = !!channelSaved && (!channelSaved.id.startsWith('custom-') || channelSaved.collector !== 'none')
+  const collectorLocked = !!channelSaved && (!channelSaved.id.startsWith('custom-') || !['none', 'auto', 'generic'].includes(channelSaved.collector))
+  const compatibleCollector = channel?.collector === 'auto' || channel?.collector === 'generic'
   const pathNamesUnavailable = channel?.paths.some((path) => unresolvedPaths.includes(path)) ?? false
 
   useEffect(() => {
@@ -76,7 +80,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
   }
   function addChannel() {
     const id = `custom-${crypto.randomUUID()}`
-    setDraft((current) => current && { ...current, channels: [...current.channels, { id, name: '新渠道', logo: '', collector: 'none', enabled: true, pathMode: 'scan', paths: [] }] })
+    setDraft((current) => current && { ...current, channels: [...current.channels, { id, name: '新渠道', logo: '', collector: 'auto', enabled: true, pathMode: 'scan', paths: [] }] })
     setSelectedId(id); setFeedback(null)
   }
   async function handleSave(event: FormEvent) {
@@ -97,8 +101,10 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
     if (busy) return
     setScanning(channel.id); setError(null); setScanFeedback(null)
     try {
-      const result = await scanChannelPaths(channel.collector)
-      if (result.paths.length) changeChannel(channel.id, { paths: result.paths, pathMode: 'scan' })
+      const universal = channel.collector === 'auto' || channel.collector === 'generic'
+      const result = await scanChannelPaths(channel.collector, universal ? channel.paths.map((path) => path.trim()).filter(Boolean) : [])
+      if (universal) setScanChoices({ id: channel.id, paths: result.paths.filter((path) => !result.unresolvedPaths?.includes(path)) })
+      else if (result.paths.length) changeChannel(channel.id, { paths: result.paths, pathMode: 'scan' })
       setUnresolvedPaths((current) => [...new Set([...current, ...(result.unresolvedPaths ?? [])])])
       setPathCheckVersion((current) => current + 1)
       setScanFeedback({ id: channel.id, message: result.message })
@@ -180,14 +186,17 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                   <div className="settings-channel-editor-heading"><span className="settings-editor-logo"><ChannelLogo logo={channel.logo} name={channel.name} size={42} /></span><div><strong>{channel.name || '未命名渠道'}</strong><small>第 {draft.channels.indexOf(channel) + 1} 个渠道</small></div><button type="button" role="switch" aria-checked={channel.enabled} aria-label={`启用 ${channel.name}`} className={`settings-switch${channel.enabled ? ' is-on' : ''}`} onClick={() => changeChannel(channel.id, { enabled: !channel.enabled })}><span /></button></div>
                   <label className="settings-field">渠道名称<input required value={channel.name} maxLength={40} onChange={(event) => changeChannel(channel.id, { name: event.target.value })} /></label>
                   <div className="settings-field"><span>渠道 Logo</span><div className="settings-logo-actions"><button type="button" className="settings-secondary" onClick={() => uploadRef.current?.click()}><Icon name="upload" />上传图片</button><button type="button" className="settings-text-button" onClick={() => changeChannel(channel.id, { logo: sourceInfo(channel.id as ChannelId).logo })}>恢复默认</button></div><small>PNG、JPEG 或 WebP，最大 256 KB；未上传时使用名称图标。</small><input ref={uploadRef} className="settings-file-input" type="file" accept="image/png,image/jpeg,image/webp" aria-label="上传渠道 Logo" onChange={(event) => { void uploadLogo(event.target.files?.[0]); event.target.value = '' }} /></div>
-                  <SettingsSelect key={channel.id} label="记录格式" value={channel.collector} options={collectorOptions} disabled={busy || collectorLocked}
-                    onChange={(collector) => { changeChannel(channel.id, { collector, paths: [], pathMode: 'scan' }); setScanFeedback(null) }}
-                    help={collectorLocked ? '已接入的渠道保留原记录格式。' : '选择与该渠道会话文件相符的格式，复用对应采集器。'} />
-                  {channel.collector === 'none' ? <p className="settings-channel-placeholder">此渠道会显示在首页。接入新的记录格式需要增加对应采集器；名称、Logo 和顺序可以先配置。</p> : <>
+                  <SettingsSelect key={channel.id} label="记录读取方式" value={channel.collector} options={collectorLocked ? collectorOptions : compatibleOptions} disabled={busy || collectorLocked}
+                    onChange={(collector) => { changeChannel(channel.id, { collector }); setScanFeedback(null); setScanChoices(null) }}
+                    help={collectorLocked ? '使用该渠道的专用读取器。' : channel.collector === 'auto' ? '识别已支持的工具记录，也会尝试通用 JSON / JSONL，不受渠道名称限制。' : channel.collector === 'generic' ? '读取其他工具导出的 JSON / JSONL，可配置字段对应关系。' : '只展示渠道，暂不读取会话。'} />
+                  {channel.collector === 'none' ? <p className="settings-channel-placeholder">选择“自动识别”并配置本机会话目录，即可检测和采集记录。</p> : <>
                     <div className="settings-field"><span>路径获取方式</span><div className="settings-segmented" role="group" aria-label="路径获取方式"><button type="button" aria-pressed={channel.pathMode === 'scan'} className={channel.pathMode === 'scan' ? 'is-active' : ''} onClick={() => { changeChannel(channel.id, { pathMode: 'scan' }); setScanFeedback(null) }}><Icon name="search" />扫描</button><button type="button" disabled={pathNamesUnavailable} title={pathNamesUnavailable ? '请先重新扫描并识别本机目录' : undefined} aria-pressed={channel.pathMode === 'manual'} className={channel.pathMode === 'manual' ? 'is-active' : ''} onClick={() => changeChannel(channel.id, { pathMode: 'manual' })}>手动输入</button></div></div>
-                    {channel.pathMode === 'scan' ? <div className="settings-scan-area"><p>查找你的会话目录，并检查读取状态。</p><button type="button" className="settings-secondary" onClick={() => void handleScan(channel)}><Icon name="search" />{scanning === channel.id ? '扫描中…' : '扫描路径'}</button></div> : pathNamesUnavailable ? <p className="settings-path-error">暂时无法识别本机目录，请切换到扫描，或请管理员检查目录配置。</p> : <label className="settings-field">本机采集目录<textarea rows={4} value={channel.paths.join('\n')} placeholder="/Users/你的用户名/.codex/sessions" onChange={(event) => changeChannel(channel.id, { paths: event.target.value.split('\n') })} /><small>每行填写一个本机目录，支持 ~/；Codex 可分别填写会话和归档目录。</small></label>}
+                    {channel.pathMode === 'scan' ? <div className="settings-scan-area"><p>{compatibleCollector ? '查找可读取的会话目录，请勾选属于这个渠道的目录。新工具的目录也可手动填写。' : '查找你的会话目录，并检查读取状态。'}</p><button type="button" className="settings-secondary" onClick={() => void handleScan(channel)}><Icon name="search" />{scanning === channel.id ? '扫描中…' : '扫描路径'}</button>
+                      {compatibleCollector && scanChoices?.id === channel.id && scanChoices.paths.length > 0 && <div className="settings-scan-choices" role="group" aria-label="选择采集目录">{scanChoices.paths.map((path) => <label key={path}><input type="checkbox" checked={channel.paths.includes(path)} disabled={!channel.paths.includes(path) && channel.paths.length >= 10} onChange={(event) => changeChannel(channel.id, { paths: event.target.checked ? [...channel.paths, path] : channel.paths.filter((entry) => entry !== path) })} /><code>{path}</code></label>)}</div>}
+                    </div> : pathNamesUnavailable ? <p className="settings-path-error">暂时无法识别本机目录，请切换到扫描，或请管理员检查目录配置。</p> : <label className="settings-field">本机采集目录<textarea rows={4} value={channel.paths.join('\n')} placeholder="/Users/你的用户名/会话目录" onChange={(event) => changeChannel(channel.id, { paths: event.target.value.split('\n') })} /><small>每行填写一个本机目录，支持 ~/；不同渠道可以使用各自的会话目录。</small></label>}
                     <SourcePathDetails key={channel.id} collector={channel.collector} paths={channel.paths} refreshVersion={pathCheckVersion} />
                     {scanFeedback?.id === channel.id && <p className="settings-scan-feedback" role="status">{scanFeedback.message}</p>}
+                    {compatibleCollector && <RecordCompatibility key={channel.id} collector={channel.collector as 'auto' | 'generic'} paths={channel.paths} mapping={channel.mapping} disabled={busy || pathNamesUnavailable} onMappingChange={(mapping) => changeChannel(channel.id, { mapping })} />}
                   </>}
                   {!channel.enabled && <p className="settings-help">保存后暂停该渠道采集，已有工作记录继续保留。</p>}
                 </section>}

@@ -49,8 +49,9 @@ export async function listGeminiRecordFiles(root: string): Promise<GeminiRecordF
 }
 
 // 文件变化时重建可见历史，避免把 $set 快照、回退记录或补丁直接当成新消息。
-export async function readGeminiDelta(file: GeminiRecordFile, previous: Cursor | null, cutoff: string, secrets: string[]) {
+export async function readGeminiDelta(file: GeminiRecordFile, previous: Cursor | null, cutoff: string, secrets: string[], maxBytes?: number) {
   const info = await stat(file.path)
+  const readSize = Math.min(info.size, maxBytes ?? info.size)
   if (previous?.inode === String(info.ino) && previous.offset === info.size && previous.modifiedAt === Math.trunc(info.mtimeMs)) {
     return { messages: [] as SourceMessage[], cursor: previous, invalid: 0, blocked: false, more: false }
   }
@@ -91,12 +92,13 @@ export async function readGeminiDelta(file: GeminiRecordFile, previous: Cursor |
   }
   if (file.path.endsWith('.json')) {
     // 兼容旧版完整 JSON；尚未写完或读取失败时不提交游标。
+    if (info.size > readSize) throw new Error('会话快照超过预览范围，请选择较小的样本文件')
     const row: unknown = JSON.parse(await readFile(file.path, 'utf8'))
     if (!isObject(row)) throw new Error('Gemini 会话格式无效')
     applyRecord(row); offset = info.size
   } else {
     let pending: Buffer = Buffer.alloc(0), droppedBytes = 0, dropping = false
-    const stream = createReadStream(file.path, { highWaterMark: 64 * 1024, end: Math.max(0, info.size - 1) })
+    const stream = createReadStream(file.path, { highWaterMark: 64 * 1024, end: Math.max(0, readSize - 1) })
     try {
       for await (const chunk of stream) {
         pending = Buffer.concat([pending, chunk as Buffer])
@@ -147,5 +149,5 @@ export async function readGeminiDelta(file: GeminiRecordFile, previous: Cursor |
     path: file.path, source: 'gemini', inode: String(info.ino), offset, modifiedAt: Math.trunc(info.mtimeMs),
     context: { sessionId, projectPath, parentSessionId: file.parentSessionId, turnId: '' },
   }
-  return { messages, cursor, invalid, blocked, more: false }
+  return { messages, cursor, invalid, blocked, more: info.size > readSize }
 }

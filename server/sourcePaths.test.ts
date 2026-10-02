@@ -73,6 +73,12 @@ describe('目录读取与文件检查', () => {
     for (const path of ['project/chats/session-one.json', 'project/chats/parent/message.jsonl', 'project/chats/config.json', 'project/checkpoints/session-checkpoint.json', 'session-at-root.json']) await writeFile(join(directory, path), '')
     expect((await paths.check('gemini', [directory])).paths[0]).toMatchObject({ status: 'ready', recordFiles: 2 })
   })
+  it('通用读取同时核对 JSON 和 JSONL，忽略认证、配置与缓存目录', async () => {
+    await mkdir(join(directory, 'cache'))
+    for (const path of ['snapshot.json', 'session.jsonl', 'settings.json', 'auth.json', 'cache/chat.json']) await writeFile(join(directory, path), '只检查目录项')
+    const paths = new SourcePaths('local', [])
+    for (const collector of ['auto', 'generic'] as const) expect((await paths.check(collector, [directory])).paths[0]).toMatchObject({ status: 'ready', recordFiles: 2 })
+  })
   it('超出检查耗时时明确标记为局部检查，避免将未找到当作完整结果', async () => {
     await writeFile(join(directory, 'session.jsonl'), '')
     vi.spyOn(Date, 'now').mockReturnValueOnce(0).mockReturnValue(2000)

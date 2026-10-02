@@ -4,10 +4,11 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import { CAPTURE_SOURCES, SOURCES } from '../src/domain/workbench.js'
-import { builtinCollectors, modelSettingsSchema, pathCheckSchema, settingsUpdateSchema } from '../shared/settings.js'
+import { builtinCollectors, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema } from '../shared/settings.js'
 import type { ChannelConfig, ChannelSummary, CollectorKind, PathScanResult, SettingsUpdate, WorkbenchSettings } from '../shared/settings.js'
 import type { Config } from './config.js'
 import { SourcePaths } from './sourcePaths.js'
+import { previewCompatibleRecords } from './compatibleRecords.js'
 
 interface SavedSettings extends Omit<SettingsUpdate, 'channels'> { channels: ChannelConfig[]; apiKey: string }
 export class SettingsError extends Error {
@@ -16,6 +17,7 @@ export class SettingsError extends Error {
 
 export function initialChannels(config: Config): ChannelConfig[] {
   const roots: Record<CollectorKind, string[]> = {
+    auto: [], generic: [],
     codex: [config.CODEX_SESSIONS_DIR, config.CODEX_ARCHIVE_DIR], claude: [config.CLAUDE_PROJECTS_DIR],
     workbuddy: [config.WORKBUDDY_PROJECTS_DIR], zcode: [config.ZCODE_DB_DIR], gemini: [config.GEMINI_SESSIONS_DIR], none: [],
   }
@@ -68,7 +70,7 @@ export class SettingsService {
   channels() { return structuredClone(this.data.channels) }
   // 首页轮询只传图片地址，避免每次刷新重复传输所有上传的图片。
   summaries(): ChannelSummary[] {
-    return this.data.channels.map(({ paths: _paths, pathMode: _mode, ...channel }) => ({ ...channel,
+    return this.data.channels.map(({ paths: _paths, pathMode: _mode, mapping: _mapping, ...channel }) => ({ ...channel,
       logo: this.logos.has(channel.id) ? `/api/channel-logos/${channel.id}?v=${this.logos.get(channel.id)!.version}` : channel.logo }))
   }
   logo(id: string, version?: string) {
@@ -92,7 +94,8 @@ export class SettingsService {
       for (const current of this.data.channels) {
         const next = input.channels.find((entry) => entry.id === current.id)
         if (!next) throw new SettingsError('已有渠道请使用开关停用，以保留历史记录')
-        if (next.collector !== current.collector && current.collector !== 'none') throw new SettingsError('已接入渠道的记录格式不可更改，请新增渠道')
+        const compatible = ['auto', 'generic'].includes(current.collector) && ['auto', 'generic', 'none'].includes(next.collector)
+        if (next.collector !== current.collector && current.collector !== 'none' && !compatible) throw new SettingsError('已接入渠道的记录格式不可更改，请新增渠道')
       }
       const next: SavedSettings = { revision: this.data.revision + 1,
         model: { baseUrl: input.model.baseUrl.replace(/\/+$/, ''), name: input.model.name },
@@ -122,15 +125,17 @@ export class SettingsService {
       await rename(temporary, join(directory, 'workbench.json'))
     } finally { await rm(temporary, { force: true }).catch(() => {}) }
   }
-  async scan(collector: CollectorKind): Promise<PathScanResult> {
+  async scan(collector: CollectorKind, draftPaths: string[] = []): Promise<PathScanResult> {
     if (collector === 'none') return { paths: [], checked: 0, message: '该渠道尚未接入采集器，可先设置名称与 Logo' }
-    const defaults = initialChannels(this.config).filter((channel) => channel.collector === collector).flatMap((channel) => channel.paths)
+    const universal = collector === 'auto' || collector === 'generic'
+    const defaults = initialChannels(this.config).filter((channel) => universal || channel.collector === collector).flatMap((channel) => channel.paths)
     const native: Record<Exclude<CollectorKind, 'none'>, string[]> = {
+      auto: [], generic: [],
       codex: [join(homedir(), '.codex/sessions'), join(homedir(), '.codex/archived_sessions')],
       claude: [join(homedir(), '.claude/projects')], workbuddy: [join(homedir(), '.workbuddy/projects')],
       zcode: [join(homedir(), '.zcode/cli/db')], gemini: [join(homedir(), '.gemini/tmp')],
     }
-    const candidates = [...new Set([...defaults, ...this.data.channels.filter((channel) => channel.collector === collector).flatMap((channel) => channel.paths), ...native[collector]]
+    const candidates = [...new Set([...draftPaths, ...defaults, ...this.data.channels.filter((channel) => channel.collector === collector).flatMap((channel) => channel.paths), ...native[collector]]
       .map((path) => this.sourcePaths.resolve(path)).filter((location) => !location.unmounted).map((location) => location.path))]
     const paths: string[] = []
     for (const path of candidates) {
@@ -143,11 +148,21 @@ export class SettingsService {
     }
     const locations = paths.map((path) => this.sourcePaths.resolve(path))
     return { paths: locations.map((location) => location.hostPath ?? location.path), unresolvedPaths: locations.filter((location) => !location.hostPath).map((location) => location.path),
-      checked: candidates.length, message: paths.length ? `找到 ${paths.length} 个可读取目录，保存后开始使用` : '未找到可读取目录，请手动填写本机目录并检查是否已授权访问' }
+      checked: candidates.length, message: paths.length ? `找到 ${paths.length} 个可读取目录，${universal ? '勾选并保存后开始使用' : '保存后开始使用'}` : '未找到可读取目录，请手动填写本机目录并检查是否已授权访问' }
   }
   checkPaths(raw: unknown) {
     const { collector, paths } = pathCheckSchema.parse(raw)
     return this.sourcePaths.check(collector, paths)
+  }
+  async previewRecords(raw: unknown) {
+    const input = recordPreviewSchema.parse(raw)
+    if (!['auto', 'generic'].includes(input.collector)) throw new SettingsError('此读取方式无需自动识别，请使用已有采集器')
+    if (!input.paths.length) throw new SettingsError('请先填写或扫描本机会话目录')
+    const locations = input.paths.map((path) => this.sourcePaths.resolve(path))
+    if (locations.some((location) => location.unmounted)) throw new SettingsError('工作台尚未获准访问该本机目录，请在部署配置中添加目录后重试')
+    const config = this.runtimeConfig()
+    return previewCompatibleRecords(locations.map((location) => location.path), input.collector as 'auto' | 'generic', input.mapping,
+      [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password)])
   }
   async testModel(raw: unknown): Promise<{ message: string }> {
     const model = modelSettingsSchema.parse(raw)

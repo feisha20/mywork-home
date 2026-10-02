@@ -10,6 +10,7 @@ import { createApp } from './app.js'
 import { SyncService } from './sync.js'
 import { DailyReportService } from './dailyReport.js'
 import type { Store } from './store.js'
+import { EMPTY_RECORD_MAPPING } from '../shared/settings.js'
 
 vi.mock('node:os', async (original) => ({ ...await original<typeof import('node:os')>(), homedir: () => '/__workbench_settings_test_home__' }))
 let directory: string
@@ -86,6 +87,28 @@ describe('设置持久化与密钥边界', () => {
     const removed = settingsDraft(settings.view()); removed.channels.pop()
     await expect(settings.save(removed)).rejects.toThrow('开关停用')
   })
+  it('通用字段随设置持久保存，允许在自动识别与通用读取之间切换，首页不携带字段配置', async () => {
+    const input = settingsDraft(settings.view())
+    input.channels.push({ id: 'custom-compatible', name: '其他工具', logo: '', collector: 'auto', enabled: true, pathMode: 'manual', paths: [config.CODEX_SESSIONS_DIR] })
+    await settings.save(input)
+    const next = settingsDraft(settings.view())
+    next.channels.at(-1)!.collector = 'generic'; next.channels.at(-1)!.mapping = { ...EMPTY_RECORD_MAPPING, text: 'body.text', role: 'speaker', timestamp: 'created' }
+    await settings.save(next)
+    expect((await SettingsService.open(config)).view()).toEqual(settings.view())
+    expect(settings.summaries().at(-1)).not.toHaveProperty('mapping')
+    const restored = settingsDraft(settings.view()); restored.channels.at(-1)!.collector = 'auto'
+    await settings.save(restored)
+    expect(settings.view().channels.at(-1)!.mapping?.text).toBe('body.text')
+    const unsafe = settingsDraft(settings.view()); unsafe.channels.at(-1)!.mapping!.text = '__proto__.polluted'
+    expect(() => settings.save(unsafe)).toThrow()
+  })
+  it('自动识别扫描包含草稿目录和常用目录，不改变已保存的渠道路径', async () => {
+    await mkdir(config.CODEX_SESSIONS_DIR)
+    const extra = join(directory, 'extra-tool'); await mkdir(extra)
+    const before = settings.view()
+    expect((await settings.scan('auto', [extra])).paths).toEqual([extra, config.CODEX_SESSIONS_DIR])
+    expect(settings.view()).toEqual(before)
+  })
   it('扫描只返回可读取目录，保留 Codex 会话和归档两个目录', async () => {
     await mkdir(config.CODEX_SESSIONS_DIR); await mkdir(config.CODEX_ARCHIVE_DIR)
     expect(await settings.scan('codex')).toMatchObject({ paths: [config.CODEX_SESSIONS_DIR, config.CODEX_ARCHIVE_DIR] })
@@ -152,6 +175,25 @@ describe('设置接口', () => {
     const reports = new DailyReportService(store, { generateDailyReport: async () => [], close: async () => {} })
     return { app: await createApp(config, store, sync, reports), sync }
   }
+  it('兼容检测预览脱敏的可见正文，不调用模型或保存草稿，非法字段和目录返回 400', async () => {
+    await mkdir(config.CODEX_SESSIONS_DIR)
+    const row = { sessionId: 'preview', role: 'user', timestamp: new Date().toISOString(), text: `整理记录 ${config.WORKBENCH_LLM_API_KEY} postgresql://user:test@localhost/db` }
+    await writeFile(join(config.CODEX_SESSIONS_DIR, 'preview.jsonl'), JSON.stringify(row) + '\n')
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch)
+    const { app, sync } = await appForTest()
+    try {
+      const before = settings.view()
+      const response = await app.inject({ method: 'POST', url: '/api/settings/preview-records', payload: { collector: 'auto', paths: [config.CODEX_SESSIONS_DIR] } })
+      expect(response.statusCode).toBe(200); expect(response.headers['cache-control']).toBe('no-store')
+      expect(response.json()).toMatchObject({ compatibleFiles: 1, formats: ['通用 JSON / JSONL'], messages: [{ role: 'user', text: expect.stringContaining('整理记录') }] })
+      expect(response.body).not.toContain(config.WORKBENCH_LLM_API_KEY); expect(response.body).not.toContain('user:test@')
+      expect(settings.view()).toEqual(before); expect(fetch).not.toHaveBeenCalled()
+      for (const payload of [
+        { collector: 'generic', paths: [] }, { collector: 'auto', paths: ['relative'] }, { collector: 'codex', paths: [config.CODEX_SESSIONS_DIR] },
+        { collector: 'generic', paths: [config.CODEX_SESSIONS_DIR], mapping: { ...EMPTY_RECORD_MAPPING, text: 'constructor.name' } },
+      ]) expect((await app.inject({ method: 'POST', url: '/api/settings/preview-records', payload })).statusCode).toBe(400)
+    } finally { await app.close(); await sync.close() }
+  })
   it('目录核对返回文件数量与可读状态，不读取正文，不保存草稿，并拒绝非法路径', async () => {
     await mkdir(config.CODEX_SESSIONS_DIR)
     await writeFile(join(config.CODEX_SESSIONS_DIR, 'session.jsonl'), '不应回传的私密会话内容')

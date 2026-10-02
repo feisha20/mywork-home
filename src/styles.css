@@ -1282,6 +1282,40 @@ button:focus-visible, input:focus-visible {
 .settings-segmented svg { width: 13px; height: 13px; }
 .settings-scan-area { padding: 13px; border: 1px dashed #d9e1ec; border-radius: 10px; background: #fff; }
 .settings-scan-area p { font-size: 10px; line-height: 18px; color: #8c99ab; margin-bottom: 11px; }
+.settings-scan-choices { display: flex; flex-direction: column; gap: 9px; margin-top: 14px; }
+.settings-scan-choices label { display: flex; align-items: flex-start; gap: 8px; color: #596b82; cursor: pointer; }
+.settings-scan-choices input { flex: 0 0 auto; margin-top: 3px; accent-color: var(--accent-orange); }
+.settings-scan-choices code { min-width: 0; font: 10px/18px "SF Mono", Menlo, monospace; overflow-wrap: anywhere; }
+.settings-records { margin-top: 20px; padding-top: 18px; border-top: 1px solid #e7ecf3; }
+.settings-record-check-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-record-check-heading strong { color: #59677c; font-size: 12px; font-weight: 600; }
+.settings-record-check-heading p { margin-top: 5px; color: #8c99ab; font-size: 10px; line-height: 18px; }
+.settings-record-check-heading button { flex-shrink: 0; }
+.settings-records summary { display: flex; align-items: center; gap: 8px; color: #59677c; cursor: pointer; list-style: none; font-size: 11px; font-weight: 550; }
+.settings-records summary::-webkit-details-marker { display: none; }
+.settings-records summary span { margin-left: auto; color: #9aa5b5; font-size: 10px; font-weight: 400; }
+.settings-records summary svg { width: 13px; height: 13px; color: #99a5b5; }
+.settings-records details[open] > summary svg { transform: rotate(180deg); }
+.settings-record-mapping { margin-bottom: 20px; padding: 13px; border: 1px solid #e3e9f1; border-radius: 10px; background: #fff; }
+.settings-record-mapping > p { margin-top: 12px; }
+.settings-mapping-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 12px; margin-top: 14px; }
+.settings-mapping-grid .settings-field { margin-bottom: 0; font-size: 11px; gap: 7px; }
+.settings-mapping-grid input { font-size: 11px; padding: 9px 10px; }
+.settings-record-result { margin-top: 12px; padding: 13px; border: 1px solid #e3e9f1; border-radius: 10px; background: #fff; }
+.settings-record-result > p { display: flex; align-items: center; gap: 6px; color: #aa734e; font-size: 11px; line-height: 18px; }
+.settings-record-result > p.is-ready { color: #34856b; }
+.settings-record-result > p svg { width: 13px; height: 13px; }
+.settings-record-formats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.settings-record-formats span { padding: 4px 7px; border-radius: 5px; background: #f1f6fa; color: #6b7c90; font-size: 10px; }
+.settings-record-issues { margin: 10px 0 0; padding-left: 16px; color: #aa734e; font-size: 10px; line-height: 18px; }
+.settings-record-samples { margin-top: 12px; padding-top: 12px; border-top: 1px solid #edf0f5; }
+.settings-record-samples ol { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.settings-record-samples li { padding: 11px; border-radius: 8px; background: #f8fafc; }
+.settings-record-samples li > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.settings-record-samples strong { font-size: 10px; color: #66748a; font-weight: 550; }
+.settings-record-samples time { color: #9aa5b5; font-size: 9px; }
+.settings-record-samples p { margin-top: 6px; color: #59677c; font-size: 11px; line-height: 19px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.settings-record-result > .settings-help { margin-top: 10px; font-size: 10px; color: #8d99ab; }
 .settings-path-details { margin-top: 16px; min-width: 0; }
 .settings-path-details > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .settings-path-details > header strong { font-size: 11px; font-weight: 600; color: #66748a; }

@@ -140,8 +140,10 @@ export class Store {
       [sessionKey, cursor.source, cursor.context.sessionId, cursor.context.projectPath, cursor.context.parentSessionId])
       for (const message of messages) {
         const key = `${message.source}:${message.sessionId}`
-        if (key !== sessionKey) await client.query(`INSERT INTO workbench.source_sessions(id,source,session_id,project_path,updated_at)
-          VALUES($1,$2,$3,$4,now()) ON CONFLICT(id) DO NOTHING`, [key, message.source, message.sessionId, message.projectPath])
+        if (key !== sessionKey) await client.query(`INSERT INTO workbench.source_sessions(id,source,session_id,project_path,parent_session_id,updated_at)
+          VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(id) DO UPDATE SET
+          project_path=excluded.project_path,parent_session_id=excluded.parent_session_id,updated_at=now()`,
+        [key, message.source, message.sessionId, message.projectPath, message.rootSessionId === message.sessionId ? null : message.rootSessionId])
         const result = await client.query(`INSERT INTO workbench.source_messages(id,session_key,source,session_id,root_session_id,project_path,role,occurred_at,body)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING`,
         [message.id, key, message.source, message.sessionId, message.rootSessionId, message.projectPath, message.role, message.timestamp, message.text])

@@ -7,7 +7,7 @@ import type { SessionSource } from '../shared/contracts.js'
 
 export type Source = SessionSource
 export type JsonlSource = 'codex' | 'claude' | 'workbuddy'
-export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string }
+export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string; readerSignature?: string }
 export interface Cursor { path: string; source: Source; inode: string; offset: number; context: RecordContext; modifiedAt: number }
 export interface SourceMessage {
   id: string; source: Source; sessionId: string; rootSessionId: string;
@@ -118,11 +118,19 @@ export async function listRecordFiles(root: string): Promise<string[]> {
 
 // 字节游标只越过完整行；末尾半行留到下次，不会截断 UTF-8 字符。
 export async function readDelta(path: string, source: JsonlSource, previous: Cursor | null, cutoff: string, secrets: string[]) {
+  return readJsonlDelta(path, source, previous, cutoff, () => initialContext(path, source), (row, context) => {
+    const message = normalizeRecord(row as Json, source, context, secrets)
+    return { messages: message ? [message] : [], invalid: 0 }
+  }, (line) => isSkippableRecordLine(line, source))
+}
+
+export async function readJsonlDelta(path: string, source: Source, previous: Cursor | null, cutoff: string,
+  createContext: () => RecordContext, normalize: (row: unknown, context: RecordContext) => { messages: SourceMessage[]; invalid: number }, skip?: (line: Buffer) => boolean) {
   const info = await stat(path)
   const inode = String(info.ino)
   const reset = !previous || previous.inode !== inode || info.size < previous.offset || (previous.modifiedAt !== Math.trunc(info.mtimeMs) && info.size === previous.offset)
   let offset = reset ? 0 : previous.offset
-  const context = reset ? initialContext(path, source) : { ...previous.context }
+  const context = reset ? createContext() : { ...previous.context }
   const messages: SourceMessage[] = []
   let pending: Buffer = Buffer.alloc(0), consumed = 0, lines = 0, invalid = 0, dropping = false, droppedBytes = 0
   const stream = createReadStream(path, { start: offset, highWaterMark: 64 * 1024 })
@@ -137,10 +145,10 @@ export async function readDelta(path: string, source: JsonlSource, previous: Cur
         droppedBytes = 0
         if (dropping) { dropping = false; continue }
         if (!line.length) continue
-        if (isSkippableRecordLine(line, source)) continue
+        if (skip?.(line)) continue
         try {
-          const message = normalizeRecord(JSON.parse(line.toString('utf8')), source, context, secrets)
-          if (message && message.timestamp >= cutoff) messages.push(message)
+          const result = normalize(JSON.parse(line.toString('utf8')), context)
+          messages.push(...result.messages.filter((message) => message.timestamp >= cutoff)); invalid += result.invalid
         } catch { invalid++ }
       }
       if (pending.length > 4 * 1024 * 1024) {

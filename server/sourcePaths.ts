@@ -3,6 +3,7 @@ import { access, opendir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { posix } from 'node:path'
 import type { CollectorKind, PathCheckResult, SourcePathCheck, WorkbenchSettings } from '../shared/settings.js'
+import { compatibleDirectoryName, compatibleFileName, isCompatibleDatabase } from './compatibleRecords.js'
 
 export interface SourceMount { hostPath: string; containerPath: string; readOnly: boolean }
 const under = (path: string, root: string) => path === root || path.startsWith(`${root}/`)
@@ -56,7 +57,7 @@ export class SourcePaths {
       if (!(await stat(location.path)).isDirectory()) return { ...base, status: 'missing', message: '此路径不是目录，请选择会话所在的文件夹' }
       await access(location.path, constants.R_OK | constants.X_OK)
       if (collector === 'none') return { ...base, status: 'empty', message: '目录可读取，该渠道尚未接入记录格式' }
-      if (collector === 'zcode') {
+      if (collector === 'zcode' || collector === 'auto' && isCompatibleDatabase(location.path)) {
         const database = posix.join(location.path, 'db.sqlite')
         const info = await stat(database).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error })
         if (!info?.isFile()) return { ...base, status: 'empty', message: '目录可读取，但未找到 db.sqlite' }
@@ -64,7 +65,7 @@ export class SourcePaths {
         return { ...base, status: 'ready', recordFiles: 1, message: '目录可读取，已找到 db.sqlite' }
       }
       const counted = await countRecordFiles(location.path, collector)
-      const unit = collector === 'gemini' ? '会话文件' : ' JSONL 文件'
+      const unit = ['gemini', 'auto', 'generic'].includes(collector) ? '会话文件' : ' JSONL 文件'
       return { ...base, ...counted, status: counted.recordFiles ? 'ready' : 'empty', message: counted.recordFiles
         ? `目录可读取，已找到${counted.limited ? '至少' : ''} ${counted.recordFiles} 个${unit}`
         : counted.limited ? '目录可读取，本次检查范围内未找到会话文件，请核对目录' : '目录可读取，尚未找到会话文件，请核对目录或先创建会话' }
@@ -87,10 +88,10 @@ async function countRecordFiles(root: string, collector: Exclude<CollectorKind, 
     for await (const entry of handle) {
       if (++entries > 20_000 || recordFiles >= 3000 || Date.now() > deadline) return { recordFiles, limited: true }
       const path = posix.join(directory.path, entry.name)
-      if (entry.isDirectory()) stack.push({ path, depth: directory.depth + 1 })
+      if (entry.isDirectory() && (!['auto', 'generic'].includes(collector) || compatibleDirectoryName(entry.name))) stack.push({ path, depth: directory.depth + 1 })
       else if (entry.isFile() && (collector === 'gemini'
         ? directory.depth >= 2 && /\.(?:json|jsonl)$/.test(entry.name) && (directory.depth > 2 || entry.name.startsWith('session-'))
-        : entry.name.endsWith('.jsonl'))) {
+        : ['auto', 'generic'].includes(collector) ? compatibleFileName(entry.name) : entry.name.endsWith('.jsonl'))) {
         await access(path, constants.R_OK)
         recordFiles++
       }

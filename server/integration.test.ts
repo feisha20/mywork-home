@@ -309,4 +309,27 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect(await store.applySummaries([changed], [{ taskId: changed.id, title: '不应覆盖用户改动' }])).toBe(0)
     expect((await pool.query('SELECT count(*) FROM workbench.source_messages WHERE extracted')).rows[0].count).toBe(rowsBefore)
   })
+  it('一份通用导出内的多个会话分别入库，父会话关联和解析器版本重启后保留', async () => {
+    const source = 'custom-compatible-db' as const, path = `channel:${source}:${randomUUID()}`, timestamp = new Date().toISOString()
+    const messages: SourceMessage[] = [
+      { id: randomUUID(), source, sessionId: 'root', rootSessionId: 'root', projectPath: '/one', role: 'user', text: '父会话', timestamp },
+      { id: randomUUID(), source, sessionId: 'child', rootSessionId: 'root', projectPath: '/one', role: 'assistant', text: '子会话', timestamp },
+      { id: randomUUID(), source, sessionId: 'separate', rootSessionId: 'separate', projectPath: '/two', role: 'user', text: '另一项目', timestamp },
+    ]
+    const cursor: Cursor = { path, source, inode: 'fixture', offset: 100, modifiedAt: 1,
+      context: { sessionId: 'separate', projectPath: '/two', parentSessionId: null, turnId: '', readerSignature: 'generic-fields-v1' } }
+    try {
+      expect(await store.ingest(messages, cursor)).toBe(3)
+      const reloaded = new Store(pool)
+      expect(await reloaded.resolveRoot(source, 'child')).toBe('root')
+      expect(await reloaded.resolveRoot(source, 'separate')).toBe('separate')
+      expect((await reloaded.cursor(path))?.context.readerSignature).toBe('generic-fields-v1')
+      expect(await reloaded.ingest(messages, cursor)).toBe(0)
+      expect((await reloaded.pendingMessages()).filter((message) => message.source === source)).toHaveLength(3)
+    } finally {
+      await pool.query('DELETE FROM workbench.source_messages WHERE source=$1', [source])
+      await pool.query('DELETE FROM workbench.source_cursors WHERE path=$1', [path])
+      await pool.query('DELETE FROM workbench.source_sessions WHERE source=$1', [source])
+    }
+  })
 })

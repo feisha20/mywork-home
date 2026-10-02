@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadConfig } from './config.js'
@@ -9,6 +9,7 @@ import { settingsDraft } from '../src/domain/settings.js'
 import type { Cursor, SourceMessage } from './records.js'
 import type { Store } from './store.js'
 import type { SyncRun } from '../shared/contracts.js'
+import { EMPTY_RECORD_MAPPING } from '../shared/settings.js'
 
 let directory: string
 beforeEach(async () => {
@@ -57,6 +58,66 @@ async function finish(sync: SyncService) {
 }
 
 describe('设置驱动采集', () => {
+  it('新增渠道自动读取不同格式，重复同步和复制文件不重复抽取，后续追加正常采集', async () => {
+    const { config, settings } = await prepare()
+    const timestamp = new Date().toISOString(), path = join(directory, 'records/other.jsonl')
+    const row = { sessionId: 'other-session', id: 'other-user', role: 'user', content: '其他工具的用户要求', timestamp }
+    await writeFile(path, JSON.stringify(row) + '\n')
+    const input = settingsDraft(settings.view())
+    input.channels.push({ id: 'custom-auto', name: '其他工具', logo: '', collector: 'auto', pathMode: 'manual', paths: [join(directory, 'records')], enabled: true })
+    await settings.save(input)
+    const { store, messages, cursors } = memoryStore(), extract = vi.fn(async () => [])
+    const sync = new SyncService(store, config, { extract, close: async () => {} }, settings)
+    try {
+      await sync.start(); await sync.trigger(); await finish(sync)
+      expect(messages.size).toBe(2); expect(extract).toHaveBeenCalledTimes(2)
+      expect([...messages.values()].every((message) => message.source === 'custom-auto')).toBe(true)
+      expect([...cursors.values()].every((cursor) => !!cursor.context.readerSignature)).toBe(true)
+      await writeFile(join(directory, 'records/copied.jsonl'), JSON.stringify(row) + '\n')
+      await sync.trigger(); await finish(sync)
+      expect(messages.size).toBe(2); expect(extract).toHaveBeenCalledTimes(2)
+      await appendFile(path, JSON.stringify({ ...row, id: 'other-assistant', role: 'assistant', content: '其他工具已完成' }) + '\n')
+      await sync.trigger(); await finish(sync)
+      expect((await store.latestRun())?.newMessages).toBe(1); expect(extract).toHaveBeenCalledTimes(3)
+    } finally { await sync.close() }
+  })
+  it('修改字段后重新读取未变化的文件，配置继续保存到原渠道', async () => {
+    const { config, settings } = await prepare(), root = join(directory, 'other')
+    await mkdir(root)
+    await writeFile(join(root, 'messages.jsonl'), JSON.stringify({ id: 'one', sessionId: 'other', role: 'user', timestamp: new Date().toISOString(), content: '默认字段', detail: { text: '自定义字段' } }) + '\n')
+    const input = settingsDraft(settings.view())
+    input.channels.push({ id: 'custom-fields', name: '其他工具', logo: '', collector: 'auto', pathMode: 'manual', paths: [root], enabled: true })
+    await settings.save(input)
+    const { store, messages } = memoryStore(), extract = vi.fn(async () => [])
+    const sync = new SyncService(store, config, { extract, close: async () => {} }, settings)
+    try {
+      await sync.start(); await sync.trigger(); await finish(sync)
+      expect([...messages.values()].map((message) => message.text)).toEqual(['默认字段'])
+      const next = settingsDraft(settings.view()); next.channels.at(-1)!.collector = 'generic'
+      next.channels.at(-1)!.mapping = { ...EMPTY_RECORD_MAPPING, text: 'detail.text' }
+      await settings.save(next)
+      await sync.trigger(); await finish(sync)
+      expect((await store.latestRun())?.newMessages).toBe(1)
+      expect([...messages.values()].map((message) => message.text)).toEqual(['默认字段', '自定义字段'])
+      await sync.trigger(); await finish(sync)
+      expect(extract).toHaveBeenCalledTimes(2)
+    } finally { await sync.close() }
+  })
+  it('不认识的记录给出采集提示，可识别文件仍继续读取', async () => {
+    const { config, settings } = await prepare()
+    await writeFile(join(directory, 'records/unknown.json'), JSON.stringify({ unknown: '其他格式' }))
+    const input = settingsDraft(settings.view())
+    input.channels.push({ id: 'custom-unknown', name: '未知工具', logo: '', collector: 'auto', pathMode: 'manual', paths: [join(directory, 'records')], enabled: true })
+    await settings.save(input)
+    const { store, messages } = memoryStore(), sync = new SyncService(store, config, { extract: async () => [], close: async () => {} }, settings)
+    try {
+      await sync.start(); await sync.trigger()
+      await vi.waitFor(async () => expect((await store.latestRun())?.status).toBe('partial_failed'), { interval: 10 })
+      expect(messages.size).toBe(1)
+      expect((await sync.snapshot()).sources['custom-unknown'].error).toContain('1 个文件未识别')
+      expect((await store.latestRun())?.errors.join(' ')).toContain('检测记录')
+    } finally { await sync.close() }
+  })
   it('同一路径上的两个新渠道独立去重，扫描顺序遵循设置，停用来源不再抽取', async () => {
     const { config, settings } = await prepare()
     const input = settingsDraft(settings.view())
