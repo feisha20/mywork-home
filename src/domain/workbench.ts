@@ -4,11 +4,12 @@ export const SOURCES = {
   codex: { label: 'Codex', shortLabel: 'Codex', logo: '/channels/codex.png', className: 'src-codex' },
   workbuddy: { label: 'WorkBuddy', shortLabel: 'WorkBuddy', logo: '/channels/workbuddy.png', className: 'src-workbuddy' },
   zcode: { label: 'Zcode', shortLabel: 'Zcode', logo: '/channels/zcode.png', className: 'src-zcode' },
+  gemini: { label: 'Gemini CLI', shortLabel: 'Gemini', logo: '/channels/gemini.svg', className: 'src-gemini' },
   manual: { label: '手动添加', className: 'src-manual' },
 } as const
 
 export type SourceId = keyof typeof SOURCES
-export const CAPTURE_SOURCES = ['zentao', 'claude', 'codex', 'workbuddy', 'zcode'] as const
+export const CAPTURE_SOURCES = ['zentao', 'claude', 'codex', 'workbuddy', 'zcode', 'gemini'] as const
 
 export interface Task {
   id: string

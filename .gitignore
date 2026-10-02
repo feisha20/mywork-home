@@ -52,3 +52,5 @@ coverage/
 !.env.example
 .gemini/
 GEMINI.md
+# Gemini 会话历史及本机项目映射副本
+gemini-records/

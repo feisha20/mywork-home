@@ -60,8 +60,8 @@ describe('工作台记录', () => {
     expect(dateKey(new Date('2026-09-30T15:59:59Z'))).toBe('2026-09-30')
     expect(dateKey(new Date('2026-09-30T16:00:00Z'))).toBe('2026-10-01')
   })
-  it('四种自动来源无需完成，直接按来源日期进入日志', () => {
-    for (const source of ['codex', 'claude', 'workbuddy', 'zcode'] as const) {
+  it('五种自动来源无需完成，直接按来源日期进入日志', () => {
+    for (const source of ['codex', 'claude', 'workbuddy', 'zcode', 'gemini'] as const) {
       const task = { ...fixture().tasks[0], source, completedAt: null, createdAt: '2026-09-20T01:00:00Z', recordedAt: '2026-09-24T16:10:00Z' }
       expect(requiresManualCompletion(source)).toBe(false)
       expect(recordsForDate({ version: 1, tasks: [task] }, '2026-09-25')).toEqual([task])

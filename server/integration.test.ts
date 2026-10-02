@@ -44,13 +44,13 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     await migrate(pool); await migrate(pool)
     store = new Store(pool)
     directory = await mkdtemp(join(tmpdir(), 'workbench-db-'))
-    for (const name of ['codex', 'archive', 'claude', 'workbuddy', 'zcode']) await mkdir(join(directory, name))
+    for (const name of ['codex', 'archive', 'claude', 'workbuddy', 'zcode', 'gemini']) await mkdir(join(directory, name))
     const zcode = new DatabaseSync(join(directory, 'zcode', 'db.sqlite'))
     zcode.exec(`CREATE TABLE session(id TEXT PRIMARY KEY,directory TEXT,parent_id TEXT);
       CREATE TABLE message(id TEXT PRIMARY KEY,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);
       CREATE TABLE part(id TEXT PRIMARY KEY,message_id TEXT,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);`)
     zcode.close()
-    const config = loadConfig({ DATABASE_URL: process.env.TEST_DATABASE_URL, CODEX_SESSIONS_DIR: join(directory, 'codex'), CODEX_ARCHIVE_DIR: join(directory, 'archive'), CLAUDE_PROJECTS_DIR: join(directory, 'claude'), WORKBUDDY_PROJECTS_DIR: join(directory, 'workbuddy'), ZCODE_DB_DIR: join(directory, 'zcode'), SYNC_ENABLED: 'false', STATIC_DIR: join(directory, 'no-static') })
+    const config = loadConfig({ DATABASE_URL: process.env.TEST_DATABASE_URL, CODEX_SESSIONS_DIR: join(directory, 'codex'), CODEX_ARCHIVE_DIR: join(directory, 'archive'), CLAUDE_PROJECTS_DIR: join(directory, 'claude'), WORKBUDDY_PROJECTS_DIR: join(directory, 'workbuddy'), ZCODE_DB_DIR: join(directory, 'zcode'), GEMINI_SESSIONS_DIR: join(directory, 'gemini'), SYNC_ENABLED: 'false', STATIC_DIR: join(directory, 'no-static') })
     const reports = new DailyReportService(store, { async generateDailyReport(_day, records, previous) {
       reportInputs.push(records.map((task) => task.id))
       return [{ text: '完善测试计划，汇总相关工作进展。', topic: '测试计划', taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...records.map((task) => task.id)])] }]
@@ -146,6 +146,35 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     await waitRun(); expect((await store.projectTasks(project))[0].completedAt).not.toBeNull()
     expect((await store.projectTasks(project))[0].statusOrigin).toBe('ai')
     expect(await store.projectTasks(project)).toHaveLength(1)
+  })
+  it('Gemini会话与快照直接归档，重复同步不抽取，新回复更新记录和来源证据', async () => {
+    const id = randomUUID(), project = `/__workbench_gemini_test__/${id}`
+    const projectDirectory = join(directory, 'gemini', id), chats = join(projectDirectory, 'chats')
+    await mkdir(chats, { recursive: true }); await writeFile(join(projectDirectory, '.project_root'), project)
+    const file = join(chats, `session-${id}.jsonl`), at = new Date(Date.now() - 2 * 86400000).toISOString()
+    const user = { id: 'u1', type: 'user', timestamp: at, content: [{ text: '修复登录接口' }] }
+    await writeFile(file, [{ sessionId: id, projectHash: id, startTime: at }, user, { $set: { messages: [user] } }].map((row) => JSON.stringify(row)).join('\n') + '\n')
+    const first = await waitRun()
+    expect(first.newMessages).toBe(1); expect(first.newTasks).toBe(1)
+    const task = (await store.projectTasks(project))[0]
+    expect(task.source).toBe('gemini'); expect(task.reference).toMatch(/^GM-/)
+    expect(task.recordedAt).toBe(at); expect(task.completedAt).toBeNull()
+    expect(task.evidence?.[0]).toMatchObject({ source: 'gemini', sessionId: id, projectPath: project })
+    expect(recordsForDate({ version: 1, tasks: [task] }, dateKey(new Date(at)))).toEqual([task])
+    expect((await sync.snapshot()).sources.gemini).toMatchObject({ available: true, sessionCount: 1, error: null })
+    const previousCalls = calls
+    expect((await waitRun()).newMessages).toBe(0); expect(calls).toBe(previousCalls)
+    await appendFile(file, JSON.stringify({ $set: { messages: [user] } }) + '\n')
+    expect((await waitRun()).newMessages).toBe(0); expect(calls).toBe(previousCalls)
+    const assistant = { id: 'a1', type: 'gemini', timestamp: new Date().toISOString(), content: [{ text: '已完成登录接口修复与测试' }] }
+    await appendFile(file, JSON.stringify(assistant) + '\n')
+    const updated = await waitRun()
+    expect(updated.newMessages).toBe(1); expect(updated.updatedTasks).toBe(1)
+    const current = (await store.projectTasks(project))[0]
+    expect(current.completedAt).not.toBeNull(); expect(current.evidence).toHaveLength(2)
+    expect(current.recordedAt).toBe(assistant.timestamp)
+    expect((await app.inject({ method: 'PATCH', url: `/api/tasks/${task.id}`, payload: { completed: false } })).statusCode).toBe(409)
+    expect((await waitRun()).newMessages).toBe(0)
   })
   it('Zcode会话直接归档、重复同步去重、WAL中的新回复更新事项与来源证据', async () => {
     const id = randomUUID(), project = `/__workbench_zcode_test__/${id}`

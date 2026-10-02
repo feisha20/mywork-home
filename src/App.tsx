@@ -181,7 +181,7 @@ export default function App() {
   return (
     <div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
       <header className="top-bar">
-        <div className="brand-section"><div className="brand-badge" aria-hidden="true">QA</div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className="live-indicator"><span className="live-dot" />{connected ? '本机工作台' : '服务未连接'}</span></div>
+        <div className="brand-section"><div className="brand-badge" aria-hidden="true">QA</div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className={`live-indicator${connected ? '' : ' is-disconnected'}`} role="status"><span className="live-dot" aria-hidden="true" />{connected ? '本机工作台' : '服务未连接'}</span></div>
         <div className="top-meta"><time className="header-date" dateTime={today}>{dateFormatter.format(clock)}</time><div className="user-pill"><span>个人工作空间</span><span className="user-avatar" aria-hidden="true">我</span></div></div>
       </header>
       {notice && <p className="storage-notice" role="status">{notice}</p>}

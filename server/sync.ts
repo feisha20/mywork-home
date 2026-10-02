@@ -5,8 +5,9 @@ import type { SyncRun, WorkbenchSnapshot } from '../shared/contracts.js'
 import type { Config } from './config.js'
 import type { Extractor } from './harness.js'
 import { Store } from './store.js'
-import { digest, isRecordDataError, listRecordFiles, readDelta, type JsonlSource, type SourceMessage } from './records.js'
+import { digest, isRecordDataError, listRecordFiles, readDelta, type Source, type SourceMessage } from './records.js'
 import { ZcodeReader } from './zcode.js'
+import { listGeminiRecordFiles, readGeminiDelta, type GeminiRecordFile } from './gemini.js'
 import { redact } from './redact.js'
 
 export function messageBatches(messages: SourceMessage[], maxCharacters = 30000): SourceMessage[][] {
@@ -36,6 +37,7 @@ export class SyncService {
     claude: { available: false, sessionCount: 0, error: '尚未扫描' },
     workbuddy: { available: false, sessionCount: 0, error: '尚未扫描' },
     zcode: { available: false, sessionCount: 0, error: '尚未扫描' },
+    gemini: { available: false, sessionCount: 0, error: '尚未扫描' },
   }
   constructor(readonly store: Store, private config: Config, private extractor: Extractor) {}
   async start() {
@@ -92,7 +94,7 @@ export class SyncService {
     return run
   }
   private error(run: SyncRun, message: string) { if (run.errors.length < 20) run.errors.push(redact(message, [this.config.WORKBENCH_LLM_API_KEY])) }
-  private async failRecord(run: SyncRun, source: JsonlSource, file: string, fingerprint: string) {
+  private async failRecord(run: SyncRun, source: Source, file: string, fingerprint: string) {
     const attempts = await this.store.failRecord(file, source, fingerprint, run.id)
     if (attempts >= 2) run.ignoredFiles = (run.ignoredFiles ?? 0) + 1
     else this.error(run, `${source}：日志读取失败，将重试一次；再次失败后自动忽略`)
@@ -107,22 +109,28 @@ export class SyncService {
   private async execute(run: SyncRun, lock: PoolClient) {
     try {
       const cutoff = await this.store.cutoff()
-      const roots: [JsonlSource, string][] = [
+      const roots: [Exclude<Source, 'zcode'>, string][] = [
         ['codex', this.config.CODEX_SESSIONS_DIR],
         ['codex', this.config.CODEX_ARCHIVE_DIR],
         ['claude', this.config.CLAUDE_PROJECTS_DIR],
         ['workbuddy', this.config.WORKBUDDY_PROJECTS_DIR],
+        ['gemini', this.config.GEMINI_SESSIONS_DIR],
       ]
       const secrets = [this.config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(this.config.DATABASE_URL).password)]
-      for (const source of ['codex', 'claude', 'workbuddy', 'zcode'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
+      for (const source of ['codex', 'claude', 'workbuddy', 'zcode', 'gemini'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
       for (const [source, root] of roots) {
         if (this.stopping) break
         run.activeSource = source; await this.store.saveRun(run)
-        let files: string[]
-        try { files = await listRecordFiles(root); this.sources[source].available = true }
+        let files: GeminiRecordFile[]
+        try {
+          files = source === 'gemini' ? await listGeminiRecordFiles(root)
+            : (await listRecordFiles(root)).map((path) => ({ path, projectPath: '', parentSessionId: null }))
+          this.sources[source].available = true
+        }
         catch { this.sources[source].error = '记录目录不存在或无法读取'; this.error(run, `${source}：记录目录不存在或无法读取`); continue }
-        for (const file of files) {
+        for (const record of files) {
           if (this.stopping) break
+          const file = record.path
           let info
           try { info = await stat(file) }
           catch { await this.failRecord(run, source, file, 'unreadable'); continue }
@@ -134,7 +142,7 @@ export class SyncService {
           let more = true, failed = false
           while (more && !this.stopping) {
             let delta
-            try { delta = await readDelta(file, source, cursor, cutoff, secrets) }
+            try { delta = source === 'gemini' ? await readGeminiDelta(record, cursor, cutoff, secrets) : await readDelta(file, source, cursor, cutoff, secrets) }
             catch { await this.failRecord(run, source, file, fingerprint); failed = true; break }
             try { run.newMessages += await this.store.ingest(delta.messages, delta.cursor) }
             catch (error) {

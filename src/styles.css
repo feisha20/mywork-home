@@ -58,7 +58,7 @@ body {
   width: 40px;
   height: 40px;
   border-radius: 12px;
-  background: var(--text-main);
+  background: var(--accent-orange);
   color: #FFF;
   display: flex;
   align-items: center;
@@ -66,7 +66,7 @@ body {
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-weight: 800;
   font-size: 14px;
-  box-shadow: 0 4px 12px rgba(20, 23, 31, 0.25);
+  box-shadow: 0 4px 12px rgba(255, 104, 56, 0.25);
 }
 
 .brand-title h1 {
@@ -233,6 +233,7 @@ body {
 .src-codex { background: #F3E8FF; color: #7E22CE; }
 .src-workbuddy { background: #DCFCE7; color: #15803D; }
 .src-zcode { background: #E0F2FE; color: #0369A1; }
+.src-gemini { background: #E8EDFF; color: #425FC4; }
 
 .task-id {
   font-size: 11px;
@@ -954,8 +955,10 @@ button:focus-visible, input:focus-visible {
 }
 .top-bar { flex-shrink: 0; min-height: 72px; }
 .brand-title p { font-size: 11px; color: var(--text-muted); margin-top: 5px; letter-spacing: 0.4px; }
-.live-indicator { margin-left: 12px; padding: 5px 10px; background: var(--accent-orange-light); border-color: rgba(255, 104, 56, 0.18); color: #ce5028; }
-.live-dot { background: var(--accent-orange); animation: none; }
+.live-indicator { margin-left: 12px; padding: 5px 10px; background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.18); color: #05875e; }
+.live-dot { background: #10b981; animation: none; }
+.live-indicator.is-disconnected { background: var(--accent-orange-light); border-color: rgba(255, 104, 56, 0.18); color: #ce5028; }
+.live-indicator.is-disconnected .live-dot { background: var(--accent-orange); }
 .top-meta { display: flex; gap: 22px; align-items: center; }
 .header-date { font-size: 12px; font-weight: 500; color: var(--text-sub); }
 .user-pill { gap: 12px; font-weight: 500; }
