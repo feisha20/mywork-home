@@ -57,6 +57,10 @@ export function ChannelDetailsDialog({ sources, harness, activeSource, selected,
         {run ? <>
           <div className="sync-detail-result"><strong>{syncLabels[run.status]}</strong><time dateTime={run.finishedAt ?? run.startedAt}>{fullTime.format(new Date(run.finishedAt ?? run.startedAt))}</time></div>
           <dl className="sync-detail-numbers"><div><dt>读取消息</dt><dd>{run.newMessages}</dd></div><div><dt>新增记录</dt><dd>{run.newTasks}</dd></div><div><dt>更新记录</dt><dd>{run.updatedTasks}</dd></div></dl>
+          {!!((run.ignoredFiles ?? 0) + (run.skippedRecords ?? 0)) && <p className="sync-detail-empty">{[
+            run.ignoredFiles ? `已忽略 ${run.ignoredFiles} 份连续两次读取失败的日志，内容变化后重新采集` : '',
+            run.skippedRecords ? `已跳过 ${run.skippedRecords} 条损坏或超大记录` : '',
+          ].filter(Boolean).join('；')}。</p>}
           {warnings.size > 0 && <details className="sync-detail-warnings" open={selected === 'sync'}><summary>{run.errors.length} 条同步提示</summary><ul>{[...warnings].map(([error, count]) => <li key={error}><span>{error}</span>{count > 1 && <small>×{count}</small>}</li>)}</ul></details>}
         </> : <p className="sync-detail-empty">等待首次同步，采集完成后显示结果。</p>}
       </section>

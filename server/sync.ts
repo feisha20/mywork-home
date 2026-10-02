@@ -5,7 +5,7 @@ import type { SyncRun, WorkbenchSnapshot } from '../shared/contracts.js'
 import type { Config } from './config.js'
 import type { Extractor } from './harness.js'
 import { Store } from './store.js'
-import { listRecordFiles, readDelta, type JsonlSource, type SourceMessage } from './records.js'
+import { digest, isRecordDataError, listRecordFiles, readDelta, type JsonlSource, type SourceMessage } from './records.js'
 import { ZcodeReader } from './zcode.js'
 import { redact } from './redact.js'
 
@@ -77,7 +77,7 @@ export class SyncService {
       return run
     }
     this.run = { id: randomUUID(), status: 'running', phase: 'scanning', startedAt: new Date().toISOString(), finishedAt: null,
-      activeSource: null, scannedFiles: 0, newMessages: 0, newTasks: 0, updatedTasks: 0, failedBatches: 0, errors: [] }
+      activeSource: null, scannedFiles: 0, newMessages: 0, newTasks: 0, updatedTasks: 0, failedBatches: 0, ignoredFiles: 0, skippedRecords: 0, errors: [] }
     this.runSavePromise = Promise.resolve()
     try { await this.store.saveRun(this.run) }
     catch (error) {
@@ -92,6 +92,11 @@ export class SyncService {
     return run
   }
   private error(run: SyncRun, message: string) { if (run.errors.length < 20) run.errors.push(redact(message, [this.config.WORKBENCH_LLM_API_KEY])) }
+  private async failRecord(run: SyncRun, source: JsonlSource, file: string, fingerprint: string) {
+    const attempts = await this.store.failRecord(file, source, fingerprint, run.id)
+    if (attempts >= 2) run.ignoredFiles = (run.ignoredFiles ?? 0) + 1
+    else this.error(run, `${source}：日志读取失败，将重试一次；再次失败后自动忽略`)
+  }
   private saveRunProgress(run: SyncRun): Promise<void> {
     this.runSavePromise = this.runSavePromise
       .catch(() => {})
@@ -118,21 +123,31 @@ export class SyncService {
         catch { this.sources[source].error = '记录目录不存在或无法读取'; this.error(run, `${source}：记录目录不存在或无法读取`); continue }
         for (const file of files) {
           if (this.stopping) break
-          try {
-            const info = await stat(file)
-            let cursor = await this.store.cursor(file)
-            if (!cursor && info.mtimeMs < Date.parse(cutoff)) continue
-            if (cursor && cursor.inode === String(info.ino) && cursor.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)) continue
-            let more = true
-            while (more && !this.stopping) {
-              const delta = await readDelta(file, source, cursor, cutoff, secrets)
-              run.newMessages += await this.store.ingest(delta.messages, delta.cursor)
-              cursor = delta.cursor; more = delta.more
-              if (delta.invalid) this.error(run, `${source}：跳过 ${delta.invalid} 条损坏或超大日志记录`)
+          let info
+          try { info = await stat(file) }
+          catch { await this.failRecord(run, source, file, 'unreadable'); continue }
+          let cursor = await this.store.cursor(file)
+          if (!cursor && info.mtimeMs < Date.parse(cutoff)) continue
+          const fingerprint = digest(`${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`)
+          if (await this.store.recordIgnored(file, fingerprint)) { run.ignoredFiles = (run.ignoredFiles ?? 0) + 1; continue }
+          if (cursor && cursor.inode === String(info.ino) && cursor.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)) continue
+          let more = true, failed = false
+          while (more && !this.stopping) {
+            let delta
+            try { delta = await readDelta(file, source, cursor, cutoff, secrets) }
+            catch { await this.failRecord(run, source, file, fingerprint); failed = true; break }
+            try { run.newMessages += await this.store.ingest(delta.messages, delta.cursor) }
+            catch (error) {
+              if (!isRecordDataError(error)) throw error
+              await this.failRecord(run, source, file, fingerprint); failed = true; break
             }
-            run.scannedFiles++
-            if (run.scannedFiles % 20 === 0) await this.store.saveRun(run)
-          } catch { this.error(run, `${source}：部分记录读取失败，下次同步重试`) }
+            cursor = delta.cursor; more = delta.more
+            if (delta.blocked) { await this.failRecord(run, source, file, fingerprint); failed = true; break }
+            run.skippedRecords = (run.skippedRecords ?? 0) + delta.invalid
+          }
+          if (!failed && !this.stopping) await this.store.clearRecordFailure(file)
+          run.scannedFiles++
+          if (run.scannedFiles % 20 === 0) await this.store.saveRun(run)
         }
       }
       if (!this.stopping) {
@@ -148,7 +163,7 @@ export class SyncService {
               const cursor = await this.store.cursor(reader.cursorPath(session))
               const delta = reader.readDelta(session, cursor, cutoff, secrets)
               run.newMessages += await this.store.ingest(delta.messages, delta.cursor)
-              if (delta.invalid) this.error(run, `Zcode：跳过 ${delta.invalid} 条损坏会话记录`)
+              run.skippedRecords = (run.skippedRecords ?? 0) + delta.invalid
             } catch { this.error(run, 'Zcode：部分会话读取失败，下次同步重试') }
           }
           run.scannedFiles++

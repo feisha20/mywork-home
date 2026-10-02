@@ -154,5 +154,11 @@ export async function readDelta(path: string, source: JsonlSource, previous: Cur
     }
   } finally { stream.destroy() }
   const cursor: Cursor = { path, source, inode, offset, context, modifiedAt: Math.trunc(info.mtimeMs) }
-  return { messages, cursor, invalid, more: !dropping && offset < info.size && lines > 0 && (consumed >= 2 * 1024 * 1024 || lines >= 2000) }
+  return { messages, cursor, invalid, blocked: dropping, more: !dropping && offset < info.size && lines > 0 && (consumed >= 2 * 1024 * 1024 || lines >= 2000) }
+}
+
+// 内容无法入库可按坏日志限次重试；连接、事务及数据库故障仍保留原进度。
+export function isRecordDataError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error) || typeof error.code !== 'string') return false
+  return /^22[A-Z0-9]{3}$/.test(error.code) || error.code === '23502'
 }

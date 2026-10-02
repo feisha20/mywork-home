@@ -113,6 +113,24 @@ export class Store {
     const row = rows[0]
     return row ? { path, source: row.source, inode: row.inode, offset: Number(row.byte_offset), context: row.context, modifiedAt: Number(row.modified_at) } : null
   }
+  async recordIgnored(path: string, fingerprint: string): Promise<boolean> {
+    const { rows } = await this.pool.query('SELECT attempts FROM workbench.record_failures WHERE path=$1 AND fingerprint=$2', [path, fingerprint])
+    return rows[0]?.attempts >= 2
+  }
+  async failRecord(path: string, source: Source, fingerprint: string, runId: string): Promise<number> {
+    // 每份文件内容最多记两次失败；同轮多次读取只计一次，文件变化后重新计数。
+    const { rows } = await this.pool.query(`INSERT INTO workbench.record_failures(path,source,fingerprint,attempts,last_run_id)
+      VALUES($1,$2,$3,1,$4) ON CONFLICT(path) DO UPDATE SET
+      fingerprint=excluded.fingerprint,
+      attempts=CASE WHEN workbench.record_failures.fingerprint<>excluded.fingerprint THEN 1
+        WHEN workbench.record_failures.last_run_id=excluded.last_run_id THEN workbench.record_failures.attempts
+        ELSE least(workbench.record_failures.attempts+1,2) END,
+      last_run_id=excluded.last_run_id,updated_at=now() RETURNING attempts`, [path, source, fingerprint, runId])
+    return rows[0].attempts
+  }
+  async clearRecordFailure(path: string) {
+    await this.pool.query('DELETE FROM workbench.record_failures WHERE path=$1', [path])
+  }
   async ingest(messages: SourceMessage[], cursor: Cursor) {
     return this.transaction(async (client) => {
       let inserted = 0

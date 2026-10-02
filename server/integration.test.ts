@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { Pool } from 'pg'
 import { mkdtemp, mkdir, rm, writeFile, appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -207,6 +207,62 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     shouldFail = false
     const [one, two] = await Promise.all([sync.trigger(), sync.trigger()]); expect(one.id).toBe(two.id)
     const succeeded = await waitRun(); expect(succeeded.status).toBe('succeeded'); expect(await store.projectTasks(project)).toHaveLength(1)
+  })
+  it('超大半行两次失败后持久忽略，追加完成后恢复且不重复抽取有效记录', async () => {
+    const id = randomUUID(), project = `/__workbench_test__/${id}`, file = join(directory, 'claude', `${id}.jsonl`)
+    const row = (text: string) => JSON.stringify({ type: 'user', uuid: randomUUID(), sessionId: id, cwd: project, timestamp: new Date().toISOString(), message: { content: text } })
+    await writeFile(file, row('有效事项') + '\n' + 'x'.repeat(5 * 1024 * 1024))
+    const first = await waitRun()
+    expect(first.status).toBe('partial_failed'); expect(first.newMessages).toBe(1)
+    const second = await waitRun()
+    expect(second.status).toBe('succeeded'); expect(second.ignoredFiles).toBe(1); expect(second.errors).toEqual([])
+    const state = (await pool.query('SELECT fingerprint,attempts FROM workbench.record_failures WHERE path=$1', [file])).rows[0]
+    expect(state.attempts).toBe(2)
+    expect(await new Store(pool).recordIgnored(file, state.fingerprint)).toBe(true)
+    const repeat = await waitRun()
+    expect(repeat.status).toBe('succeeded'); expect(repeat.newMessages).toBe(0); expect(repeat.ignoredFiles).toBe(1)
+    await appendFile(file, '\n' + row('追加有效事项') + '\n')
+    const recovered = await waitRun()
+    expect(recovered.status).toBe('succeeded'); expect(recovered.newMessages).toBe(1)
+    expect(recovered.skippedRecords).toBe(1); expect(recovered.ignoredFiles).toBe(0)
+    expect((await pool.query('SELECT 1 FROM workbench.record_failures WHERE path=$1', [file])).rowCount).toBe(0)
+  })
+  it('无法入库的坏日志只失败两次，文件修复后重新采集，同行有效文件不受影响', async () => {
+    const id = randomUUID(), project = `/__workbench_test__/${id}`, file = join(directory, 'claude', `${id}.jsonl`)
+    const content = (text: string) => JSON.stringify({ type: 'user', uuid: randomUUID(), sessionId: id, cwd: project, timestamp: new Date().toISOString(), message: { content: text } }) + '\n'
+    await writeFile(file, content('损坏\u0000内容'))
+    expect((await waitRun()).status).toBe('partial_failed')
+    expect((await waitRun()).ignoredFiles).toBe(1)
+    expect((await store.cursor(file))).toBeNull()
+    expect((await waitRun()).errors).toEqual([])
+    await writeFile(file, content('已修复的有效内容'))
+    const recovered = await waitRun()
+    expect(recovered.status).toBe('succeeded'); expect(recovered.newMessages).toBe(1)
+    expect(await store.projectTasks(project)).toHaveLength(1)
+  })
+  it('已跳过的坏行只作统计，数据库断连不会进入日志忽略清单', async () => {
+    const id = randomUUID(), file = join(directory, 'claude', `${id}.jsonl`)
+    await writeFile(file, '{损坏}\n' + JSON.stringify({ type: 'user', uuid: randomUUID(), sessionId: id, cwd: `/__workbench_test__/${id}`, timestamp: new Date().toISOString(), message: { content: '有效事项' } }) + '\n')
+    const ingest = vi.spyOn(store, 'ingest').mockRejectedValueOnce(Object.assign(new Error('连接失败'), { code: '08006' }))
+    try {
+      expect((await waitRun()).status).toBe('failed')
+      expect((await pool.query('SELECT 1 FROM workbench.record_failures WHERE path=$1', [file])).rowCount).toBe(0)
+      expect(await store.cursor(file)).toBeNull()
+    } finally { ingest.mockRestore() }
+    const recovered = await waitRun()
+    expect(recovered.status).toBe('succeeded'); expect(recovered.skippedRecords).toBe(1); expect(recovered.newMessages).toBe(1)
+    expect(recovered.errors).toEqual([])
+  })
+  it('同轮失败不重复累计，文件版本变化与成功恢复会清理失败状态', async () => {
+    const path = `fixture:${randomUUID()}`, run = randomUUID()
+    expect(await store.failRecord(path, 'codex', 'v1', run)).toBe(1)
+    expect(await store.failRecord(path, 'codex', 'v1', run)).toBe(1)
+    expect(await store.failRecord(path, 'codex', 'v1', randomUUID())).toBe(2)
+    expect(await new Store(pool).recordIgnored(path, 'v1')).toBe(true)
+    expect(await store.recordIgnored(path, 'v2')).toBe(false)
+    expect(await store.failRecord(path, 'codex', 'v2', randomUUID())).toBe(1)
+    await store.clearRecordFailure(path)
+    expect(await store.recordIgnored(path, 'v1')).toBe(false)
   })
   it('整理简介只更新标题，保护手工事项、日期、证据和并发改动', async () => {
     const original = (await store.tasks()).find((task) => task.source !== 'manual' && task.statusOrigin === 'ai')!

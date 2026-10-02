@@ -47,6 +47,12 @@ CREATE TABLE workbench.daily_reports (
  day date PRIMARY KEY, data jsonb NOT NULL,
  revision integer NOT NULL CHECK (revision > 0), updated_at timestamptz NOT NULL DEFAULT now()
 );
+` }, { version: 5, sql: `
+CREATE TABLE workbench.record_failures (
+ path text PRIMARY KEY, source text NOT NULL, fingerprint text NOT NULL,
+ attempts integer NOT NULL CHECK (attempts BETWEEN 1 AND 2),
+ last_run_id text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
+);
 ` }]
 
 export async function migrate(pool: Pool) {

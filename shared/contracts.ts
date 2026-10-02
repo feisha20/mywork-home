@@ -40,6 +40,8 @@ export interface SyncRun {
   newTasks: number
   updatedTasks: number
   failedBatches: number
+  ignoredFiles?: number
+  skippedRecords?: number
   errors: string[]
 }
 
