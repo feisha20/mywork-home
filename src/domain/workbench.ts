@@ -1,9 +1,9 @@
 export const SOURCES = {
-  zentao: { label: '禅道 Zentao', className: 'src-zentao' },
-  claude: { label: 'Claude Code', className: 'src-claude' },
-  codex: { label: 'Codex', className: 'src-codex' },
-  workbuddy: { label: 'WorkBuddy', className: 'src-workbuddy' },
-  zcode: { label: 'Zcode', className: 'src-zcode' },
+  zentao: { label: '禅道 Zentao', shortLabel: '禅道', logo: '/channels/zentao.png', className: 'src-zentao' },
+  claude: { label: 'Claude Code', shortLabel: 'Claude', logo: '/channels/claude.png', className: 'src-claude' },
+  codex: { label: 'Codex', shortLabel: 'Codex', logo: '/channels/codex.png', className: 'src-codex' },
+  workbuddy: { label: 'WorkBuddy', shortLabel: 'WorkBuddy', logo: '/channels/workbuddy.png', className: 'src-workbuddy' },
+  zcode: { label: 'Zcode', shortLabel: 'Zcode', logo: '/channels/zcode.png', className: 'src-zcode' },
   manual: { label: '手动添加', className: 'src-manual' },
 } as const
 

@@ -1,23 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import type { SourceId } from '../domain/workbench'
-import { CAPTURE_SOURCES } from '../domain/workbench'
+import type { CaptureSource, ChannelSlot } from '../domain/channelDock'
 
-export type CaptureSource = Exclude<SourceId, 'manual'>
-export type CaptureRefs<T extends HTMLElement = HTMLDivElement> = Record<CaptureSource, RefObject<T | null>>
 interface SourceTransferProps {
+  slots: ChannelSlot[]
   frameRef: RefObject<HTMLElement | null>
-  sourceRefs: CaptureRefs
-  sourcePorts: CaptureRefs<HTMLSpanElement>
-  bottomPins: CaptureRefs<HTMLSpanElement>
+  sourceRefs: RefObject<HTMLDivElement | null>[]
+  sourcePorts: RefObject<HTMLSpanElement | null>[]
+  bottomPins: RefObject<HTMLSpanElement | null>[]
   targetRef: RefObject<HTMLDivElement | null>
   activeSource: CaptureSource | null
   working: boolean
   visible: boolean
 }
 interface Point { x: number; y: number }
-interface Circuit { source: CaptureSource; path: string; start: Point; end: Point }
-const channels = CAPTURE_SOURCES
+interface Circuit { slot: ChannelSlot; path: string; start: Point; end: Point }
 
 // 折角使用短斜线，与背景电路线保持一致。
 function circuitPath(points: Point[]): string {
@@ -36,17 +33,17 @@ function circuitPath(points: Point[]): string {
 }
 
 // 每个渠道常驻一条电路线；空闲缓流、采集加速，后台停止测量和流光。
-export function SourceTransfer({ frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, working, visible }: SourceTransferProps) {
+export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, working, visible }: SourceTransferProps) {
   const [geometry, setGeometry] = useState<{ circuits: Circuit[]; width: number; height: number } | null>(null)
   const layerRef = useRef<SVGSVGElement>(null)
   // 被动副作用执行时，父级和兄弟元素的引用已经就绪。
   useEffect(() => {
     if (!visible) return
     const frame = frameRef.current, target = targetRef.current, layer = layerRef.current
-    const elements = channels.map((source) => sourceRefs[source].current)
-    const ports = channels.map((source) => sourcePorts[source].current)
-    const pins = channels.map((source) => bottomPins[source].current)
-    if (!frame || !target || !layer || [...elements, ...ports, ...pins].some((element) => !element)) return
+    const elements = sourceRefs.map((ref) => ref.current)
+    const ports = sourcePorts.map((ref) => ref.current)
+    const pins = bottomPins.map((ref) => ref.current)
+    if (!slots.length || !frame || !target || !layer || [...elements, ...ports, ...pins].some((element) => !element)) return
     const matrix = frame.querySelector('.engine-matrix-wrap')
     if (!matrix) return
     const measure = () => {
@@ -54,25 +51,23 @@ export function SourceTransfer({ frameRef, sourceRefs, sourcePorts, bottomPins, 
       const bounds = layer.getBoundingClientRect(), chip = target.getBoundingClientRect()
       if (!bounds.width || !bounds.height) return
       const cards = elements.map((element) => element!.getBoundingClientRect())
-      const leftEdge = Math.min(...cards.map((card) => card.left)), rightEdge = Math.max(...cards.map((card) => card.right))
+      const leftEdge = Math.min(...cards.map((card) => card.left))
       const horizontal = leftEdge >= chip.right
-      const matrixBottom = matrix.getBoundingClientRect().bottom - bounds.top
-      const firstRowTop = Math.min(...cards.map((card) => card.top)) - bounds.top
-      const circuits = channels.map((source, index): Circuit => {
-        const columnLeft = index % 2 === 0, row = Math.floor(index / 2)
+      const matrixLeft = matrix.getBoundingClientRect().left - bounds.left
+      const circuits = slots.map((slot, index): Circuit => {
         const port = ports[index]!.getBoundingClientRect(), pin = pins[index]!.getBoundingClientRect()
         const start = { x: port.left + port.width / 2 - bounds.left, y: port.top + port.height / 2 - bounds.top }
         const end = { x: pin.left + pin.width / 2 - bounds.left, y: pin.bottom - bounds.top }
-        // 后续各排逐渐走外侧，上排走内侧。
-        const spacing = 12 + row * 8
-        const lane = (columnLeft ? leftEdge - spacing : rightEdge + spacing) - bounds.left
-        const gapBelowChip = firstRowTop - end.y
-        // 外侧线路在较高的位置收拢，内侧线路在较低的位置收拢，避免交叉。
-        const clearance = Math.max(12, Math.min(28, gapBelowChip - 8))
-        const bridge = horizontal ? Math.max(end.y, matrixBottom) + (Math.ceil(channels.length / 2) - row) * 8 : end.y + clearance * Math.pow(.6, row)
-        const points = [start, { x: lane, y: start.y }, { x: lane, y: bridge }, { x: end.x, y: bridge }, end]
+        // 单排入口与引脚保持同序；外侧线先收拢，避免交叉或穿过 Logo。
+        const clearance = Math.max(12, Math.min(30, (start.y - end.y) / 2))
+        const bridge = end.y + Math.max(8, clearance - Math.abs(index - (slots.length - 1) / 2) * 5)
+        const gutter = Math.max(chip.right - bounds.left + 6, matrixLeft - 8 - index * 4)
+        const topLane = start.y - 8 - index * 4, bottomLane = end.y + 8 + (slots.length - 1 - index) * 4
+        const points = horizontal
+          ? [start, { x: start.x, y: topLane }, { x: gutter, y: topLane }, { x: gutter, y: bottomLane }, { x: end.x, y: bottomLane }, end]
+          : [start, { x: start.x, y: bridge }, { x: end.x, y: bridge }, end]
         // 路径起点固定为采集渠道，终点固定为芯片；递减偏移沿起点向终点传输。
-        return { source, path: circuitPath(points), start: points[0], end: points.at(-1)! }
+        return { slot, path: circuitPath(points), start: points[0], end: points.at(-1)! }
       })
       const next = { circuits, width: bounds.width, height: bounds.height }
       setGeometry((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next)
@@ -85,10 +80,10 @@ export function SourceTransfer({ frameRef, sourceRefs, sourcePorts, bottomPins, 
     frame.querySelectorAll('.hub-top-hud, .chip-carrier-board, .engine-matrix-wrap').forEach((element) => observer.observe(element))
     window.addEventListener('resize', measure)
     return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
-  }, [frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, visible])
+  }, [slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, visible])
 
   return <svg ref={layerRef} className={`source-transfer-layer${working ? ' is-working' : ''}`} viewBox={geometry ? `0 0 ${geometry.width} ${geometry.height}` : undefined} preserveAspectRatio="none" aria-hidden="true">
-    {geometry?.circuits.map((circuit, index) => <g key={circuit.source} className={visible && circuit.source === activeSource ? 'circuit-active' : undefined}>
+    {geometry?.circuits.map((circuit, index) => <g key={circuit.slot.id} className={visible && activeSource && circuit.slot.sources.includes(activeSource) ? 'circuit-active' : undefined}>
       <path className="source-transfer-track" d={circuit.path} />
       <circle className="circuit-terminal" cx={circuit.end.x} cy={circuit.end.y} r="2.5" />
       {visible && <path className="source-transfer-beam" d={circuit.path} pathLength="540" style={{ animationDelay: `${-index * (working ? 1 : 4)}s` }} />}

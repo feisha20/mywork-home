@@ -192,7 +192,7 @@ export default function App() {
         <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
         <DailyLogBook state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
       </main>
-      <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>Codex · Claude Code · 每 10 分钟同步</span></footer>
+      <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>每 10 分钟自动采集</span></footer>
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
     </div>

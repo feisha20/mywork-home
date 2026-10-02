@@ -1,5 +1,5 @@
 interface IconProps {
-  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy'
+  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh'
   className?: string
 }
 
@@ -15,6 +15,7 @@ const paths = {
   close: 'm6 6 12 12M6 18 18 6',
   trash: 'M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7',
   copy: 'M9 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2ZM16 4V3a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2',
+  refresh: 'M20 7v5h-5M4 17v-5h5M6.1 7a7 7 0 0 1 11.55-1L20 9M4 15l2.35 3A7 7 0 0 0 17.9 17',
 }
 
 export function Icon({ name, className }: IconProps) {

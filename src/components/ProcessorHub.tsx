@@ -1,9 +1,11 @@
 import { createRef, useRef, useState } from 'react'
-import type { RefObject } from 'react'
+import type { CSSProperties, RefObject } from 'react'
 import { CAPTURE_SOURCES, SOURCES } from '../domain/workbench'
 import type { WorkbenchSnapshot } from '../../shared/contracts'
 import { SourceTransfer } from './SourceTransfer'
-import type { CaptureRefs } from './SourceTransfer'
+import { channelSlots, channelStatus, type CaptureSource } from '../domain/channelDock'
+import { ChannelDetailsDialog } from './ChannelDetailsDialog'
+import { Icon } from './Icon'
 
 export type TransferPhase = 'idle' | 'inbound' | 'orbit' | 'outbound'
 
@@ -29,26 +31,28 @@ interface ProcessorHubProps {
   visible: boolean
 }
 
-// 上排接内侧引脚，后续各排接外侧引脚，避免采集线路交叉。
-const bottomPinSources = ['zcode', 'codex', 'zentao', null, 'claude', 'workbuddy'] as const
-function createCaptureRefs<T extends HTMLElement>(): CaptureRefs<T> {
-  return Object.fromEntries(CAPTURE_SOURCES.map((source) => [source, createRef<T>()])) as CaptureRefs<T>
-}
+const slots = channelSlots(CAPTURE_SOURCES)
+const shortTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
 
 export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, completedCount, status, harness, sources, onSync, syncDisabled, visible }: ProcessorHubProps) {
   const hubRef = useRef<HTMLElement>(null)
-  const [sourceRefs] = useState(() => createCaptureRefs<HTMLDivElement>())
-  const [sourcePorts] = useState(() => createCaptureRefs<HTMLSpanElement>())
-  const [bottomPins] = useState(() => createCaptureRefs<HTMLSpanElement>())
+  const [sourceRefs] = useState(() => slots.map(() => createRef<HTMLDivElement>()))
+  const [sourcePorts] = useState(() => slots.map(() => createRef<HTMLSpanElement>()))
+  const [bottomPins] = useState(() => slots.map(() => createRef<HTMLSpanElement>()))
+  const [details, setDetails] = useState<CaptureSource | 'sync' | 'all' | null>(null)
   const running = harness?.run?.status === 'running'
   const energized = running || phase !== 'idle' || routing
   const labels = { scanning: '扫描记录', extracting: '抽取工作事项', saving: '保存事项', idle: '同步结束' }
   const run = harness?.run
   const activeSource = running && (run?.phase === 'scanning' || run?.phase === 'extracting') ? run.activeSource ?? null : null
-  const syncTime = run?.finishedAt ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' }).format(new Date(run.finishedAt)) : null
+  const syncTime = run?.finishedAt ? shortTime.format(new Date(run.finishedAt)) : null
+  const connectedCount = CAPTURE_SOURCES.filter((source) => source !== 'zentao' && sources?.[source]?.available).length
+  const hasWarnings = !!run && ['partial_failed', 'failed', 'interrupted'].includes(run.status)
+  const syncLabel = phase !== 'idle' ? status : running ? `${activeSource ? `${SOURCES[activeSource].shortLabel} · ` : ''}${labels[run!.phase]}`
+    : !run ? '等待首次同步' : `${syncTime ? `${syncTime} · ` : ''}${hasWarnings ? run.status === 'interrupted' ? '同步中断' : run.status === 'failed' ? '同步失败' : '部分待重试' : '已同步'}`
   return (
     <section className="center-processor-hub" ref={hubRef} aria-label="工作流处理核心">
-      <SourceTransfer frameRef={hubRef} sourceRefs={sourceRefs} sourcePorts={sourcePorts} bottomPins={bottomPins} targetRef={refs.chip} activeSource={activeSource} working={energized} visible={visible} />
+      <SourceTransfer slots={slots} frameRef={hubRef} sourceRefs={sourceRefs} sourcePorts={sourcePorts} bottomPins={bottomPins} targetRef={refs.chip} activeSource={activeSource} working={energized} visible={visible} />
       <div className="hub-top-hud">
         <div className="hud-stat-col">
           <span className="stat-num">{String(pendingCount).padStart(2, '0')}<small>项</small></span>
@@ -68,7 +72,7 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
         </div>
         <div className={`processor-chip${energized ? ' energized' : ''}`} ref={refs.chip}>
           <div className="chip-pins-top" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <span className="chip-pin" key={index} />)}</div>
-          <div className="chip-pins-bottom" aria-hidden="true">{bottomPinSources.map((source, index) => <span ref={source ? bottomPins[source] : undefined} className={`chip-pin${source && source === activeSource ? ' pin-active' : ''}`} key={index} />)}</div>
+          <div className="chip-pins-bottom" aria-hidden="true">{slots.map((slot, index) => <span ref={bottomPins[index]} className={`chip-pin${activeSource && slot.sources.includes(activeSource) ? ' pin-active' : ''}`} key={slot.id} />)}</div>
           <div className="chip-pins-left" aria-hidden="true">
             {refs.leftPins.map((ref, index) => <span ref={ref} className={`chip-pin-h${phase === 'orbit' && index === activePin ? ' pin-active' : ''}`} key={index} />)}
           </div>
@@ -94,30 +98,32 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
       </div>
 
       <div className="engine-matrix-wrap">
-        <div className="engine-status-strip">
-          {CAPTURE_SOURCES.map((source, index) => {
-            const state = source === 'zentao' ? undefined : sources?.[source]
-            return (
-              <div className={`engine-node-pill${index % 2 === 0 ? ' source-on-left' : ''}${source === activeSource ? ' is-extracting' : ''}`} ref={sourceRefs[source]} key={source}>
-                <div className="node-meta">
-                  <span className="node-name">{SOURCES[source].label}</span>
-                  <span className="node-status">{state ? state.available ? `${state.sessionCount} 个会话 · 已接入` : state.error ?? '等待扫描' : source === 'zentao' ? '待接入' : '等待扫描'}</span>
-                </div>
-                <span className="node-pulse" ref={sourcePorts[source]} aria-hidden="true" />
+        <div className="channel-dock" style={{ '--channel-slots': slots.length } as CSSProperties}>
+          <div className="channel-input-ports" aria-hidden="true">{slots.map((slot, index) => <span className={`channel-port${activeSource && slot.sources.includes(activeSource) ? ' is-active' : ''}`} ref={sourcePorts[index]} key={slot.id} />)}</div>
+          <header className="channel-dock-header"><span>采集渠道</span><button onClick={() => setDetails('all')} aria-haspopup="dialog">{connectedCount}/{CAPTURE_SOURCES.length} 已接入 <Icon name="arrow" /></button></header>
+          <div className="channel-dock-slots">
+            {slots.map((slot, index) => {
+              const source = slot.sources[0]
+              const states = slot.sources.map((entry) => channelStatus(entry, sources, activeSource, run?.errors))
+              const state = states.find((entry) => entry.kind === 'warning') ?? states.find((entry) => entry.kind === 'connected') ?? states[0]
+              const active = !!activeSource && slot.sources.includes(activeSource)
+              const label = slot.overflow ? `更多 +${slot.sources.length}` : SOURCES[source].shortLabel
+              const description = slot.overflow ? `查看另外 ${slot.sources.length} 个采集渠道` : `${SOURCES[source].label}，${state.detail}；查看详情`
+              return <div className="channel-slot" ref={sourceRefs[index]} key={slot.id}>
+                <button className={`channel-button is-${active ? 'active' : state.kind}${slot.overflow ? ' is-more' : ''}`} title={description} aria-label={description} aria-haspopup="dialog" onClick={() => setDetails(slot.overflow ? 'all' : source)}>
+                  <span className="channel-logo">{slot.overflow ? <span className="channel-more-count">+{slot.sources.length}</span> : <img src={SOURCES[source].logo} alt="" width="38" height="38" />}<i className="channel-status-dot" aria-hidden="true" /></span>
+                  <span className="channel-name">{label}</span>
+                </button>
               </div>
-            )
-          })}
+            })}
+          </div>
         </div>
-        <div className="center-stats-badge">
-          <span className={`count-box${energized ? ' is-active' : ''}`} role="status" aria-live="polite">{running && phase === 'idle' ? `${activeSource ? `${SOURCES[activeSource].label} · ` : ''}${labels[run!.phase]}` : status}</span>
-        </div>
-        <div className="sync-controls" aria-live="polite">
-          <button className="sync-button" onClick={onSync} disabled={syncDisabled || running}>{running ? labels[run!.phase] : '同步本机记录'}</button>
-          <span>{run ? running ? `已读取 ${run.newMessages} 条消息` : `${run.status === 'succeeded' ? '同步成功' : run.status === 'interrupted' ? '同步已中断' : '部分记录待重试'} · 新增 ${run.newTasks} 项 · 更新 ${run.updatedTasks} 项` : '启动后自动同步，每 10 分钟增量更新'}</span>
-          {syncTime && <small>最近同步：{syncTime}</small>}
-          {run?.errors.length ? <details><summary>{run.errors.length} 条同步提示</summary>{run.errors.map((message, index) => <p key={index}>{message}</p>)}</details> : null}
+        <div className={`sync-bar${hasWarnings ? ' has-warnings' : ''}${running ? ' is-running' : !run ? ' is-waiting' : ''}`}>
+          <button className="sync-summary" onClick={() => setDetails('sync')} aria-haspopup="dialog" title={`${syncLabel}；查看最近同步结果与提示`}><span className="sync-summary-title" role="status" aria-live="polite"><i aria-hidden="true" /><span className="sync-summary-text">{syncLabel}</span></span><span className="sync-summary-meta">{running ? `已读取 ${run!.newMessages} 条消息` : run?.errors.length ? `${run.errors.length} 条提示 · 查看详情` : run ? `新增 ${run.newTasks} · 更新 ${run.updatedTasks}` : '启动后自动同步'}</span></button>
+          <button className="sync-button" onClick={onSync} disabled={syncDisabled || running}><Icon name="refresh" />{running ? '同步中' : '立即同步'}</button>
         </div>
       </div>
+      {details && <ChannelDetailsDialog sources={sources} harness={harness} activeSource={activeSource} selected={details} onClose={() => setDetails(null)} />}
     </section>
   )
 }
