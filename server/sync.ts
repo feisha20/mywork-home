@@ -9,6 +9,7 @@ import { digest, isRecordDataError, listRecordFiles, readDelta, type Source, typ
 import { ZcodeReader } from './zcode.js'
 import { listGeminiRecordFiles, readGeminiDelta, type GeminiRecordFile } from './gemini.js'
 import { redact } from './redact.js'
+import { initialChannels, type SettingsService } from './settings.js'
 
 export function messageBatches(messages: SourceMessage[], maxCharacters = 30000): SourceMessage[][] {
   const result: SourceMessage[][] = []
@@ -39,7 +40,10 @@ export class SyncService {
     zcode: { available: false, sessionCount: 0, error: '尚未扫描' },
     gemini: { available: false, sessionCount: 0, error: '尚未扫描' },
   }
-  constructor(readonly store: Store, private config: Config, private extractor: Extractor) {}
+  private unsubscribe: (() => void) | undefined
+  constructor(readonly store: Store, private config: Config, private extractor: Extractor, readonly settings?: SettingsService) {
+    this.unsubscribe = settings?.subscribe(() => this.reschedule())
+  }
   async start() {
     // 只有取得全局锁的实例才可把上次未完成执行标为中断。
     const client = await this.store.pool.connect()
@@ -48,16 +52,25 @@ export class SyncService {
       if (rows[0].locked) { await this.store.interruptRuns(); await client.query('SELECT pg_advisory_unlock(73921002)') }
     } finally { client.release() }
     this.run = await this.store.latestRun()
-    if (this.config.SYNC_ENABLED === 'true') {
+    if (this.currentConfig().SYNC_ENABLED === 'true') {
       await this.trigger()
       this.schedule()
     }
   }
+  private currentConfig() { return this.settings?.runtimeConfig() ?? this.config }
+  private reschedule() {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = null; this.nextSyncAt = null
+    if (!this.stopping && this.currentConfig().SYNC_ENABLED === 'true') this.schedule()
+  }
   private schedule() {
-    this.nextSyncAt = new Date(Date.now() + this.config.SYNC_INTERVAL_MS).toISOString()
+    if (this.timer) clearTimeout(this.timer)
+    const interval = this.currentConfig().SYNC_INTERVAL_MS
+    this.nextSyncAt = new Date(Date.now() + interval).toISOString()
     this.timer = setTimeout(() => {
-      void this.trigger().catch(() => {}).finally(() => { if (!this.stopping) this.schedule() })
-    }, this.config.SYNC_INTERVAL_MS)
+      this.timer = null
+      void this.trigger().catch(() => {}).finally(() => { if (!this.stopping && this.currentConfig().SYNC_ENABLED === 'true' && !this.timer) this.schedule() })
+    }, interval)
     this.timer.unref()
   }
   trigger(): Promise<SyncRun> {
@@ -93,7 +106,7 @@ export class SyncService {
     void this.active.catch(() => {})
     return run
   }
-  private error(run: SyncRun, message: string) { if (run.errors.length < 20) run.errors.push(redact(message, [this.config.WORKBENCH_LLM_API_KEY])) }
+  private error(run: SyncRun, message: string) { if (run.errors.length < 20) run.errors.push(redact(message, [this.config.WORKBENCH_LLM_API_KEY, this.currentConfig().WORKBENCH_LLM_API_KEY])) }
   private async failRecord(run: SyncRun, source: Source, file: string, fingerprint: string) {
     const attempts = await this.store.failRecord(file, source, fingerprint, run.id)
     if (attempts >= 2) run.ignoredFiles = (run.ignoredFiles ?? 0) + 1
@@ -108,22 +121,50 @@ export class SyncService {
   }
   private async execute(run: SyncRun, lock: PoolClient) {
     try {
+      // 每轮固定配置快照，设置保存不会改变正在运行的采集或模型请求。
+      const config = this.currentConfig()
+      const channels = (this.settings?.channels() ?? initialChannels(config)).filter((channel) => channel.enabled && channel.collector !== 'none')
+      const enabledSources = new Set(channels.map((channel) => channel.id))
       const cutoff = await this.store.cutoff()
-      const roots: [Exclude<Source, 'zcode'>, string][] = [
-        ['codex', this.config.CODEX_SESSIONS_DIR],
-        ['codex', this.config.CODEX_ARCHIVE_DIR],
-        ['claude', this.config.CLAUDE_PROJECTS_DIR],
-        ['workbuddy', this.config.WORKBUDDY_PROJECTS_DIR],
-        ['gemini', this.config.GEMINI_SESSIONS_DIR],
-      ]
-      const secrets = [this.config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(this.config.DATABASE_URL).password)]
-      for (const source of ['codex', 'claude', 'workbuddy', 'zcode', 'gemini'] as const) this.sources[source] = { available: false, sessionCount: 0, error: null }
-      for (const [source, root] of roots) {
+      const secrets = [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password)]
+      for (const channel of channels) this.sources[channel.id as Source] = { available: false, sessionCount: 0, error: null }
+      for (const channel of channels) for (const root of channel.paths) {
         if (this.stopping) break
+        const source = channel.id as Source, collector = channel.collector
+        const cursorKey = (path: string) => source.startsWith('custom-') ? `channel:${source}:${path}` : path
+        const mapped = (delta: { messages: SourceMessage[]; cursor: import('./records.js').Cursor }, path: string) => ({
+          messages: delta.messages.map((message) => ({ ...message, source, id: source.startsWith('custom-') ? digest(`${source}:${message.id}`) : message.id })),
+          cursor: { ...delta.cursor, source, path: cursorKey(path) },
+        })
         run.activeSource = source; await this.store.saveRun(run)
+        if (collector === 'zcode') {
+          let reader: ZcodeReader | undefined
+          try {
+            reader = new ZcodeReader(root)
+            const sessions = reader.sessions(cutoff)
+            this.sources[source].available = true
+            for (const session of sessions) {
+              if (this.stopping) break
+              try {
+                const path = reader.cursorPath(session)
+                const cursor = await this.store.cursor(cursorKey(path))
+                const delta = reader.readDelta(session, cursor, cutoff, secrets)
+                const data = mapped(delta, path)
+                run.newMessages += await this.store.ingest(data.messages, data.cursor)
+                run.skippedRecords = (run.skippedRecords ?? 0) + delta.invalid
+              } catch { this.error(run, `${source}：部分会话读取失败，下次同步重试`) }
+            }
+            run.scannedFiles++
+          } catch {
+            this.sources[source].error = '会话数据库不存在、无法读取或格式不兼容'
+            this.error(run, `${source}：${this.sources[source].error}`)
+          } finally { reader?.close() }
+          continue
+        }
+        if (collector === 'none') continue
         let files: GeminiRecordFile[]
         try {
-          files = source === 'gemini' ? await listGeminiRecordFiles(root)
+          files = collector === 'gemini' ? await listGeminiRecordFiles(root)
             : (await listRecordFiles(root)).map((path) => ({ path, projectPath: '', parentSessionId: null }))
           this.sources[source].available = true
         }
@@ -133,52 +174,32 @@ export class SyncService {
           const file = record.path
           let info
           try { info = await stat(file) }
-          catch { await this.failRecord(run, source, file, 'unreadable'); continue }
-          let cursor = await this.store.cursor(file)
+          catch { await this.failRecord(run, source, cursorKey(file), 'unreadable'); continue }
+          const key = cursorKey(file)
+          let cursor = await this.store.cursor(key)
           if (!cursor && info.mtimeMs < Date.parse(cutoff)) continue
           const fingerprint = digest(`${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`)
-          if (await this.store.recordIgnored(file, fingerprint)) { run.ignoredFiles = (run.ignoredFiles ?? 0) + 1; continue }
+          if (await this.store.recordIgnored(key, fingerprint)) { run.ignoredFiles = (run.ignoredFiles ?? 0) + 1; continue }
           if (cursor && cursor.inode === String(info.ino) && cursor.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)) continue
           let more = true, failed = false
           while (more && !this.stopping) {
             let delta
-            try { delta = source === 'gemini' ? await readGeminiDelta(record, cursor, cutoff, secrets) : await readDelta(file, source, cursor, cutoff, secrets) }
-            catch { await this.failRecord(run, source, file, fingerprint); failed = true; break }
-            try { run.newMessages += await this.store.ingest(delta.messages, delta.cursor) }
+            try { delta = collector === 'gemini' ? await readGeminiDelta(record, cursor, cutoff, secrets) : await readDelta(file, collector, cursor, cutoff, secrets) }
+            catch { await this.failRecord(run, source, key, fingerprint); failed = true; break }
+            const data = mapped(delta, file)
+            try { run.newMessages += await this.store.ingest(data.messages, data.cursor) }
             catch (error) {
               if (!isRecordDataError(error)) throw error
-              await this.failRecord(run, source, file, fingerprint); failed = true; break
+              await this.failRecord(run, source, key, fingerprint); failed = true; break
             }
-            cursor = delta.cursor; more = delta.more
-            if (delta.blocked) { await this.failRecord(run, source, file, fingerprint); failed = true; break }
+            cursor = data.cursor; more = delta.more
+            if (delta.blocked) { await this.failRecord(run, source, key, fingerprint); failed = true; break }
             run.skippedRecords = (run.skippedRecords ?? 0) + delta.invalid
           }
-          if (!failed && !this.stopping) await this.store.clearRecordFailure(file)
+          if (!failed && !this.stopping) await this.store.clearRecordFailure(key)
           run.scannedFiles++
           if (run.scannedFiles % 20 === 0) await this.store.saveRun(run)
         }
-      }
-      if (!this.stopping) {
-        run.activeSource = 'zcode'; await this.store.saveRun(run)
-        let reader: ZcodeReader | undefined
-        try {
-          reader = new ZcodeReader(this.config.ZCODE_DB_DIR)
-          const sessions = reader.sessions(cutoff)
-          this.sources.zcode.available = true
-          for (const session of sessions) {
-            if (this.stopping) break
-            try {
-              const cursor = await this.store.cursor(reader.cursorPath(session))
-              const delta = reader.readDelta(session, cursor, cutoff, secrets)
-              run.newMessages += await this.store.ingest(delta.messages, delta.cursor)
-              run.skippedRecords = (run.skippedRecords ?? 0) + delta.invalid
-            } catch { this.error(run, 'Zcode：部分会话读取失败，下次同步重试') }
-          }
-          run.scannedFiles++
-        } catch {
-          this.sources.zcode.error = '会话数据库不存在、无法读取或格式不兼容'
-          this.error(run, `Zcode：${this.sources.zcode.error}`)
-        } finally { reader?.close() }
       }
       for (const entry of await this.store.sourceCounts()) {
         if (this.sources[entry.source]) this.sources[entry.source].sessionCount = entry.count
@@ -187,6 +208,7 @@ export class SyncService {
       const groups = new Map<string, SourceMessage[]>()
       const rootCache = new Map<string, string>()
       for (const message of await this.store.pendingMessages()) {
+        if (!enabledSources.has(message.source)) continue
         const cacheKey = `${message.source}:${message.sessionId}`
         let root = rootCache.get(cacheKey)
         if (!root) { root = await this.store.resolveRoot(message.source, message.sessionId); rootCache.set(cacheKey, root) }
@@ -197,7 +219,7 @@ export class SyncService {
       }
       let modelUnavailable = false
       const entries = [...groups.entries()]
-      const concurrency = Math.min(this.config.WORKBENCH_SYNC_CONCURRENCY, entries.length)
+      const concurrency = Math.min(config.WORKBENCH_SYNC_CONCURRENCY, entries.length)
       let nextIndex = 0
 
       const processGroup = async ([key, messages]: [string, SourceMessage[]]) => {
@@ -209,7 +231,7 @@ export class SyncService {
             const context = await this.store.contextMessages(batch[0].source, batch[0].rootSessionId, batch[0].timestamp, batch[0].projectPath)
             const tasks = await this.store.projectTasks(batch[0].projectPath)
             run.phase = 'extracting'; run.activeSource = batch[0].source; await this.saveRunProgress(run)
-            const items = await this.extractor.extract(batch, context, tasks)
+            const items = await this.extractor.extract(batch, context, tasks, config)
             run.phase = 'saving'; await this.saveRunProgress(run)
             const counts = await this.store.applyExtraction(id, batch, context, items)
             run.newTasks += counts.created; run.updatedTasks += counts.updated
@@ -247,9 +269,19 @@ export class SyncService {
   }
   async snapshot(): Promise<WorkbenchSnapshot> {
     const [tasks, dailyReports, run] = await Promise.all([this.store.tasks(), this.store.dailyReports(), this.store.latestRun()])
-    return { version: 1, tasks, dailyReports, harness: { run, nextSyncAt: this.nextSyncAt, model: this.config.WORKBENCH_LLM_MODEL }, sources: this.sources }
+    const config = this.currentConfig()
+    const channels = this.settings?.channels()
+    const sources = { ...this.sources }
+    for (const channel of channels ?? []) sources[channel.id] = {
+      ...(sources[channel.id] ?? { available: false, sessionCount: 0, error: '尚未扫描' }),
+      enabled: channel.enabled, collector: channel.collector,
+    }
+    return { version: 1, tasks: tasks.map((task) => ({ ...task, sourceLabel: channels?.find((channel) => channel.id === task.source)?.name })), dailyReports,
+      harness: { run, nextSyncAt: this.nextSyncAt, model: config.WORKBENCH_LLM_MODEL, intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' },
+      sources, channels: this.settings?.summaries() }
   }
   async close() {
+    this.unsubscribe?.()
     this.stopping = true; if (this.timer) clearTimeout(this.timer); this.nextSyncAt = null
     await this.starting; await this.extractor.close(); await this.active
   }

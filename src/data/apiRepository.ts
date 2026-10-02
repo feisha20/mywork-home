@@ -1,6 +1,7 @@
 import type { Task } from '../domain/workbench'
 import { decodeSnapshot } from '../domain/workbench'
 import type { DailyReport, SyncRun, WorkbenchSnapshot } from '../../shared/contracts'
+import type { CollectorKind, PathCheckResult, PathScanResult, SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
 
 const storageKey = 'mywork-home.workbench.v1'
 const migrationKey = `${storageKey}.migrated`
@@ -27,6 +28,11 @@ export const createTask = (title: string) => request<Task>('/tasks', { method: '
 export const updateTask = (id: string, completed: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ completed }) })
 export const deleteTask = (id: string) => request<{ deleted: boolean }>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
 export const startSync = () => request<SyncRun>('/sync', { method: 'POST', body: '{}' })
+export const fetchSettings = (signal?: AbortSignal) => request<WorkbenchSettings>('/settings', { signal, cache: 'no-store' })
+export const saveSettings = (settings: SettingsUpdate) => request<WorkbenchSettings>('/settings', { method: 'PUT', body: JSON.stringify(settings) })
+export const scanChannelPaths = (collector: CollectorKind) => request<PathScanResult>('/settings/scan', { method: 'POST', body: JSON.stringify({ collector }) })
+export const checkChannelPaths = (collector: CollectorKind, paths: string[], signal?: AbortSignal) => request<PathCheckResult>('/settings/check-paths', { method: 'POST', body: JSON.stringify({ collector, paths }), signal })
+export const testModelConnection = (model: SettingsUpdate['model']) => request<{ message: string }>('/settings/test-model', { method: 'POST', body: JSON.stringify(model) }, 20000)
 // 模型总结需要比普通数据请求更长的等待时间；关闭预览时可取消前端等待。
 export const generateDailyReport = (day: string, signal?: AbortSignal, mode: 'initial' | 'append' = 'initial') => request<DailyReport>('/daily-reports',
   { method: 'POST', body: JSON.stringify(mode === 'initial' ? { day } : { day, mode }), signal }, 240000)

@@ -1,12 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { WorkbenchSnapshot } from '../../shared/contracts'
-import { CAPTURE_SOURCES, SOURCES } from '../domain/workbench'
+import { CAPTURE_SOURCES, sourceInfo } from '../domain/workbench'
 import { channelStatus, type CaptureSource } from '../domain/channelDock'
 import { Icon } from './Icon'
+import { ChannelLogo } from './ChannelLogo'
 
 interface ChannelDetailsDialogProps {
   sources?: WorkbenchSnapshot['sources']
+  channels?: WorkbenchSnapshot['channels']
   harness?: WorkbenchSnapshot['harness']
   activeSource: CaptureSource | null
   selected: CaptureSource | 'sync' | 'all'
@@ -15,7 +17,7 @@ interface ChannelDetailsDialogProps {
 const fullTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' })
 const syncLabels = { running: '同步进行中', succeeded: '同步完成', partial_failed: '部分记录待重试', failed: '同步失败', interrupted: '同步已中断' }
 
-export function ChannelDetailsDialog({ sources, harness, activeSource, selected, onClose }: ChannelDetailsDialogProps) {
+export function ChannelDetailsDialog({ sources, channels, harness, activeSource, selected, onClose }: ChannelDetailsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const dialog = dialogRef.current
@@ -43,11 +45,12 @@ export function ChannelDetailsDialog({ sources, harness, activeSource, selected,
     </header>
     <div className="channel-details-body">
       <ul className="channel-detail-list" aria-label="全部采集渠道">
-        {CAPTURE_SOURCES.map((source) => {
+        {(channels?.map((channel) => channel.id) ?? CAPTURE_SOURCES).map((source) => {
           const state = channelStatus(source, sources, activeSource, run?.errors)
+          const info = sourceInfo(source, channels)
           return <li key={source} className={`channel-detail-row${selected === source ? ' is-selected' : ''}`}>
-            <img src={SOURCES[source].logo} alt="" width="36" height="36" />
-            <div className="channel-detail-copy"><strong>{SOURCES[source].label}</strong><span>{state.detail}</span></div>
+            <ChannelLogo logo={info.logo} name={info.label} />
+            <div className="channel-detail-copy"><strong>{info.label}</strong><span>{state.detail}</span></div>
             <span className={`channel-detail-state is-${state.kind}`}><i aria-hidden="true" />{state.label}</span>
           </li>
         })}

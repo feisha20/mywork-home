@@ -15,6 +15,8 @@ import { DailyLogBook } from './components/DailyLogBook'
 import { createTransferJob, TransferLayer } from './components/TransferLayer'
 import type { TransferJob } from './components/TransferLayer'
 import { Icon } from './components/Icon'
+import { SettingsDialog } from './components/SettingsDialog'
+import type { WorkbenchSettings } from '../shared/settings'
 
 const busPaths = ['M 100 240 L 460 240 L 520 280 L 700 280', 'M 100 420 L 480 420 L 540 320 L 700 320', 'M 700 280 L 880 280 L 940 240 L 1300 240', 'M 700 320 L 860 320 L 920 420 L 1300 420']
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })
@@ -35,6 +37,7 @@ export default function App() {
   const [changingId, setChangingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [syncRequested, setSyncRequested] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [pageVisible, setPageVisible] = useState(() => !document.hidden)
   const [captureOutputs, setCaptureOutputs] = useState<CaptureOutputEvent[]>([])
   const captureBaseline = useRef<Task[] | null>(null)
@@ -175,6 +178,11 @@ export default function App() {
     catch (cause) { setError(cause instanceof Error ? cause.message : '同步启动失败') }
     finally { setSyncRequested(false) }
   }, [])
+  const handleSettingsSaved = useCallback((settings: WorkbenchSettings) => {
+    setSnapshot((current) => current && { ...current, channels: settings.channels.map(({ paths: _paths, pathMode: _mode, ...channel }) => channel),
+      harness: { ...current.harness, model: settings.model.name, intervalMs: settings.sync.intervalMs, autoSyncEnabled: settings.sync.enabled } })
+    void pollerRef.current?.refreshNow()
+  }, [])
   const status = job ? phaseLabels[phase] : recentId ? '✓ 已收进今天的日报' : loading ? '正在连接工作台服务' : phaseLabels.idle
   const routing = pageVisible && captureOutputs.length > 0
   const working = snapshot?.harness?.run?.status === 'running' || phase !== 'idle' || routing
@@ -182,17 +190,18 @@ export default function App() {
     <div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
       <header className="top-bar">
         <div className="brand-section"><div className="brand-badge" aria-hidden="true">QA</div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className={`live-indicator${connected ? '' : ' is-disconnected'}`} role="status"><span className="live-dot" aria-hidden="true" />{connected ? '本机工作台' : '服务未连接'}</span></div>
-        <div className="top-meta"><time className="header-date" dateTime={today}>{dateFormatter.format(clock)}</time><div className="user-pill"><span>个人工作空间</span><span className="user-avatar" aria-hidden="true">我</span></div></div>
+        <div className="top-meta"><time className="header-date" dateTime={today}>{dateFormatter.format(clock)}</time><button type="button" className="user-pill settings-entry" aria-label="我的：打开工作台设置" aria-haspopup="dialog" aria-expanded={settingsOpen} title="工作台设置" onClick={() => setSettingsOpen(true)}><span>个人工作空间</span><span className="user-avatar" aria-hidden="true">我</span></button></div>
       </header>
       {notice && <p className="storage-notice" role="status">{notice}</p>}
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
       <main className={`stage-container${working ? ' is-working' : ''}`}>
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
         <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null} onAdd={handleAdd} onComplete={handleComplete} onDelete={handleDelete} />
-        <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
+        <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} channels={snapshot?.channels} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
         <DailyLogBook state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
       </main>
-      <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>每 10 分钟自动采集</span></footer>
+      <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
     </div>

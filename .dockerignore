@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .runtime
+workbench-settings*.json
 records
 gemini-records
 sessions

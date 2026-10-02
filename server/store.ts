@@ -219,7 +219,7 @@ export class Store {
           updated++
         } else {
           if (item.taskId) throw new Error('模型返回了未知事项 ID')
-          const prefix = { codex: 'CX', claude: 'CC', workbuddy: 'WB', zcode: 'ZC', gemini: 'GM' }[first.source]
+          const prefix = ({ codex: 'CX', claude: 'CC', workbuddy: 'WB', zcode: 'ZC', gemini: 'GM' } as Record<string, string>)[first.source] ?? 'CH'
           const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,project_path,status_origin,evidence,recorded_at)
             VALUES($1,$2,$3,$4,$5,$6,$7,'ai',$8,$9) ON CONFLICT(id) DO NOTHING`,
           [id, `${prefix}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence), last.timestamp])

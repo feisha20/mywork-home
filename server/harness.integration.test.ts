@@ -34,8 +34,9 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
     await listenFixtureServer(server)
     const address = server.address() as { port: number }
     runtime = await mkdtemp(join(tmpdir(), 'workbench-harness-'))
-    extractor = new HarnessExtractor(loadConfig({ DATABASE_URL: 'postgresql://app:database-secret@localhost/test', WORKBENCH_LLM_API_KEY: 'fixture-api-key', WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${address.port}/api/coding/v3`, WORKBENCH_RUNTIME_DIR: runtime, WORKBENCH_BATCH_TIMEOUT_MS: '30000' }))
-    const result = await extractor.extract([message], [], [])
+    const original = loadConfig({ DATABASE_URL: 'postgresql://app:database-secret@localhost/test', WORKBENCH_LLM_MODEL: '旧环境模型', WORKBENCH_LLM_API_KEY: '旧环境密钥', WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${address.port}/old`, WORKBENCH_RUNTIME_DIR: runtime, WORKBENCH_BATCH_TIMEOUT_MS: '30000' })
+    extractor = new HarnessExtractor(original)
+    const result = await extractor.extract([message], [], [], { ...original, WORKBENCH_LLM_MODEL: 'glm-5.3-flash', WORKBENCH_LLM_API_KEY: 'fixture-api-key', WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${address.port}/api/coding/v3` })
     expect(result[0].status).toBe('completed')
     const req = requests.find((entry) => entry.body.messages?.some((row: any) => row.content?.includes('newMessages')))!
     expect(req.url).toBe('/api/coding/v3/chat/completions')

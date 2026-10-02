@@ -4,9 +4,10 @@ import { Pool } from 'pg'
 import { loadConfig } from './config.js'
 import { HarnessExtractor } from './harness.js'
 import { Store } from './store.js'
+import { SettingsService } from './settings.js'
 
 // 旧事项只改写简介，不重置抽取批次；原文备份可用于人工复核。
-const config = loadConfig()
+const config = (await SettingsService.open(loadConfig())).runtimeConfig()
 const pool = new Pool({ connectionString: config.DATABASE_URL })
 const store = new Store(pool)
 const extractor = new HarnessExtractor(config)

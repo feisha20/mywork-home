@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import type { FormEvent, RefObject } from 'react'
-import { SOURCES } from '../domain/workbench'
+import { sourceInfo } from '../domain/workbench'
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
@@ -42,7 +42,7 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
           >
             <div className="daily-log-top">
               <div className="daily-log-source-group">
-                <span className="daily-log-source">{SOURCES[task.source].label}</span>
+                <span className="daily-log-source">{task.sourceLabel ?? sourceInfo(task.source).label}</span>
                 <span className="daily-log-reference">{task.reference}</span>
               </div>
             </div>

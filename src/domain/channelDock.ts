@@ -16,8 +16,9 @@ export function channelSlots<T extends string>(sources: readonly T[], capacity =
 
 export function channelStatus(source: CaptureSource, sources: WorkbenchSnapshot['sources'] | undefined,
   activeSource: CaptureSource | null, errors: readonly string[] = []): { kind: ChannelStatusKind; label: string; detail: string; sessionCount: number | null } {
-  if (source === 'zentao') return { kind: 'pending', label: '待接入', detail: '禅道任务采集尚未接入', sessionCount: null }
   const state = sources?.[source]
+  if (state?.enabled === false) return { kind: 'pending', label: '已停用', detail: '已暂停采集，历史工作记录保留', sessionCount: null }
+  if (source === 'zentao' || state?.collector === 'none') return { kind: 'pending', label: '待接入', detail: source === 'zentao' ? '禅道任务采集尚未接入' : '该渠道尚未接入采集器', sessionCount: null }
   const sessionCount = state?.sessionCount ?? 0
   if (source === activeSource) return { kind: 'active', label: '采集中', detail: `${sessionCount} 个会话 · 正在采集`, sessionCount }
   const sourceErrors = errors.filter((error) => error.toLowerCase().startsWith(`${source}：`) || error.toLowerCase().startsWith(`${source}:`))

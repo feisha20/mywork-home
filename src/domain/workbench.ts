@@ -8,13 +8,22 @@ export const SOURCES = {
   manual: { label: '手动添加', className: 'src-manual' },
 } as const
 
-export type SourceId = keyof typeof SOURCES
+export type SourceId = keyof typeof SOURCES | `custom-${string}`
 export const CAPTURE_SOURCES = ['zentao', 'claude', 'codex', 'workbuddy', 'zcode', 'gemini'] as const
+
+export function sourceInfo(source: SourceId, channels?: readonly import('../../shared/settings.js').ChannelSummary[]) {
+  const configured = channels?.find((channel) => channel.id === source)
+  const builtin = Object.hasOwn(SOURCES, source) ? SOURCES[source as keyof typeof SOURCES] : null
+  return { label: configured?.name ?? builtin?.label ?? '自定义渠道',
+    shortLabel: configured?.name ?? (builtin && 'shortLabel' in builtin ? builtin.shortLabel : '自定义'),
+    logo: configured?.logo ?? (builtin && 'logo' in builtin ? builtin.logo : '') }
+}
 
 export interface Task {
   id: string
   reference: string
   source: SourceId
+  sourceLabel?: string
   title: string
   createdAt: string
   completedAt: string | null
@@ -144,7 +153,7 @@ export function decodeSnapshot(raw: string): WorkbenchState | null {
       if (!isRecord(task)
         || typeof task.id !== 'string' || !task.id || ids.has(task.id)
         || typeof task.reference !== 'string'
-        || typeof task.source !== 'string' || !Object.hasOwn(SOURCES, task.source)
+        || typeof task.source !== 'string' || (!Object.hasOwn(SOURCES, task.source) && !/^custom-[a-z0-9-]{1,64}$/.test(task.source))
         || typeof task.title !== 'string' || !task.title.trim() || task.title.length > 300
         || !validTimestamp(task.createdAt)
         || (task.completedAt !== null && !validTimestamp(task.completedAt))

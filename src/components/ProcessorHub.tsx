@@ -1,11 +1,12 @@
-import { createRef, useRef, useState } from 'react'
+import { createRef, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, RefObject } from 'react'
-import { CAPTURE_SOURCES, SOURCES } from '../domain/workbench'
+import { CAPTURE_SOURCES, sourceInfo } from '../domain/workbench'
 import type { WorkbenchSnapshot } from '../../shared/contracts'
 import { SourceTransfer } from './SourceTransfer'
 import { channelSlots, channelStatus, type CaptureSource } from '../domain/channelDock'
 import { ChannelDetailsDialog } from './ChannelDetailsDialog'
 import { Icon } from './Icon'
+import { ChannelLogo } from './ChannelLogo'
 
 export type TransferPhase = 'idle' | 'inbound' | 'orbit' | 'outbound'
 
@@ -26,19 +27,21 @@ interface ProcessorHubProps {
   status: string
   harness?: WorkbenchSnapshot['harness']
   sources?: WorkbenchSnapshot['sources']
+  channels?: WorkbenchSnapshot['channels']
   onSync: () => void
   syncDisabled: boolean
   visible: boolean
 }
 
-const slots = channelSlots(CAPTURE_SOURCES)
 const shortTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
 
-export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, completedCount, status, harness, sources, onSync, syncDisabled, visible }: ProcessorHubProps) {
+export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, completedCount, status, harness, sources, channels, onSync, syncDisabled, visible }: ProcessorHubProps) {
+  const channelIds = useMemo(() => channels?.map((channel) => channel.id) ?? [...CAPTURE_SOURCES], [channels])
+  const slots = useMemo(() => channelSlots(channelIds), [channelIds])
   const hubRef = useRef<HTMLElement>(null)
-  const [sourceRefs] = useState(() => slots.map(() => createRef<HTMLDivElement>()))
-  const [sourcePorts] = useState(() => slots.map(() => createRef<HTMLSpanElement>()))
-  const [bottomPins] = useState(() => slots.map(() => createRef<HTMLSpanElement>()))
+  const [sourceRefs] = useState(() => Array.from({ length: 5 }, () => createRef<HTMLDivElement>()))
+  const [sourcePorts] = useState(() => Array.from({ length: 5 }, () => createRef<HTMLSpanElement>()))
+  const [bottomPins] = useState(() => Array.from({ length: 5 }, () => createRef<HTMLSpanElement>()))
   const [details, setDetails] = useState<CaptureSource | 'sync' | 'all' | null>(null)
   const running = harness?.run?.status === 'running'
   const energized = running || phase !== 'idle' || routing
@@ -46,9 +49,9 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
   const run = harness?.run
   const activeSource = running && (run?.phase === 'scanning' || run?.phase === 'extracting') ? run.activeSource ?? null : null
   const syncTime = run?.finishedAt ? shortTime.format(new Date(run.finishedAt)) : null
-  const connectedCount = CAPTURE_SOURCES.filter((source) => source !== 'zentao' && sources?.[source]?.available).length
+  const connectedCount = channelIds.filter((source) => source !== 'zentao' && sources?.[source]?.enabled !== false && sources?.[source]?.available).length
   const hasWarnings = !!run && ['partial_failed', 'failed', 'interrupted'].includes(run.status)
-  const syncLabel = phase !== 'idle' ? status : running ? `${activeSource ? `${SOURCES[activeSource].shortLabel} · ` : ''}${labels[run!.phase]}`
+  const syncLabel = phase !== 'idle' ? status : running ? `${activeSource ? `${sourceInfo(activeSource, channels).shortLabel} · ` : ''}${labels[run!.phase]}`
     : !run ? '等待首次同步' : `${syncTime ? `${syncTime} · ` : ''}${hasWarnings ? run.status === 'interrupted' ? '同步中断' : run.status === 'failed' ? '同步失败' : '部分待重试' : '已同步'}`
   return (
     <section className="center-processor-hub" ref={hubRef} aria-label="工作流处理核心">
@@ -125,18 +128,19 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
               )
             })}
           </div>
-          <header className="channel-dock-header"><span>采集渠道</span><button onClick={() => setDetails('all')} aria-haspopup="dialog">{connectedCount}/{CAPTURE_SOURCES.length} 已接入 <Icon name="arrow" /></button></header>
+          <header className="channel-dock-header"><span>采集渠道</span><button onClick={() => setDetails('all')} aria-haspopup="dialog">{connectedCount}/{channelIds.length} 已接入 <Icon name="arrow" /></button></header>
           <div className="channel-dock-slots">
             {slots.map((slot, index) => {
               const source = slot.sources[0]
+              const info = sourceInfo(source, channels)
               const states = slot.sources.map((entry) => channelStatus(entry, sources, activeSource, run?.errors))
               const state = states.find((entry) => entry.kind === 'warning') ?? states.find((entry) => entry.kind === 'connected') ?? states[0]
               const active = !!activeSource && slot.sources.includes(activeSource)
-              const label = slot.overflow ? `更多 +${slot.sources.length}` : SOURCES[source].shortLabel
-              const description = slot.overflow ? `查看另外 ${slot.sources.length} 个采集渠道` : `${SOURCES[source].label}，${state.detail}；查看详情`
+              const label = slot.overflow ? `更多 +${slot.sources.length}` : info.shortLabel
+              const description = slot.overflow ? `查看另外 ${slot.sources.length} 个采集渠道` : `${info.label}，${state.detail}；查看详情`
               return <div className="channel-slot" ref={sourceRefs[index]} key={slot.id}>
                 <button className={`channel-button is-${active ? 'active' : state.kind}${slot.overflow ? ' is-more' : ''}`} title={description} aria-label={description} aria-haspopup="dialog" onClick={() => setDetails(slot.overflow ? 'all' : source)}>
-                  <span className="channel-logo">{slot.overflow ? <span className="channel-more-count">+{slot.sources.length}</span> : <img src={SOURCES[source].logo} alt="" width="38" height="38" />}<i className="channel-status-dot" aria-hidden="true" /></span>
+                  <span className="channel-logo">{slot.overflow ? <span className="channel-more-count">+{slot.sources.length}</span> : <ChannelLogo logo={info.logo} name={info.label} size={38} />}<i className="channel-status-dot" aria-hidden="true" /></span>
                   <span className="channel-name">{label}</span>
                 </button>
               </div>
@@ -148,7 +152,7 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
           <button className="sync-button" onClick={onSync} disabled={syncDisabled || running}><Icon name="refresh" />{running ? '同步中' : '立即同步'}</button>
         </div>
       </div>
-      {details && <ChannelDetailsDialog sources={sources} harness={harness} activeSource={activeSource} selected={details} onClose={() => setDetails(null)} />}
+      {details && <ChannelDetailsDialog sources={sources} channels={channels} harness={harness} activeSource={activeSource} selected={details} onClose={() => setDetails(null)} />}
     </section>
   )
 }

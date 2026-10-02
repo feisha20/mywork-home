@@ -32,6 +32,8 @@ dist/
 dist-server/
 # 会话抽取和工作日报模型的本机运行数据
 .runtime/
+# 设置密钥与本机路径备份（运行目录之外的手工备份也不入库）
+workbench-settings*.json
 # 本机会话副本与抽取调试记录
 records/
 sessions/

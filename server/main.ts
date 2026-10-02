@@ -6,15 +6,17 @@ import { HarnessExtractor } from './harness.js'
 import { SyncService } from './sync.js'
 import { createApp } from './app.js'
 import { DailyReportService } from './dailyReport.js'
+import { SettingsService } from './settings.js'
 
 const config = loadConfig()
 const pool = new Pool({ connectionString: config.DATABASE_URL, max: 10, connectionTimeoutMillis: 5000 })
 pool.on('error', () => console.error('数据库连接异常，后续请求将重试'))
 await migrate(pool)
 const store = new Store(pool)
-const sync = new SyncService(store, config, new HarnessExtractor(config))
+const settings = await SettingsService.open(config)
+const sync = new SyncService(store, config, new HarnessExtractor(config), settings)
 // 日报与同步使用独立模型运行目录，避免同时生成时互相覆盖提示词配置。
-const reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness'))
+const reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => settings.runtimeConfig()))
 const app = await createApp(config, store, sync, reports)
 let closing = false
 async function shutdown() {

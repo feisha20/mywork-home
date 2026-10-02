@@ -6,7 +6,7 @@ import { redact } from './redact.js'
 import type { SessionSource } from '../shared/contracts.js'
 
 export type Source = SessionSource
-export type JsonlSource = Exclude<Source, 'zcode' | 'gemini'>
+export type JsonlSource = 'codex' | 'claude' | 'workbuddy'
 export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string }
 export interface Cursor { path: string; source: Source; inode: string; offset: number; context: RecordContext; modifiedAt: number }
 export interface SourceMessage {

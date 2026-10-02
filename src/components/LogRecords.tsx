@@ -1,4 +1,4 @@
-import { recordTimestamp, requiresManualCompletion, SOURCES } from '../domain/workbench'
+import { recordTimestamp, requiresManualCompletion, sourceInfo } from '../domain/workbench'
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
@@ -19,7 +19,7 @@ export function LogRecords({ records, dailyReport, recentId, onReopen, disabled 
     {records.map((task) => <article key={task.id} className={`daily-log-card${task.id === recentId ? ' just-arrived' : ''}`}>
       <div className="daily-log-top">
         <div className="daily-log-source-group">
-          <span className="daily-log-source">{SOURCES[task.source].label}</span>
+          <span className="daily-log-source">{task.sourceLabel ?? sourceInfo(task.source).label}</span>
           <span className="daily-log-reference">{task.reference}</span>
         </div>
         <time className="daily-log-time" dateTime={recordTimestamp(task)!}>{logTime.format(new Date(recordTimestamp(task)!))}</time>
