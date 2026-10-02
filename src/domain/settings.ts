@@ -1,4 +1,4 @@
-import type { SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
+import { defaultPeriodicReportSchedule, type SettingsUpdate, type WorkbenchSettings } from '../../shared/settings'
 
 export type SettingsTab = 'model' | 'channels' | 'automation'
 
@@ -6,6 +6,9 @@ export function settingsDraft(settings: WorkbenchSettings): SettingsUpdate {
   return { revision: settings.revision, model: { baseUrl: settings.model.baseUrl, name: settings.model.name, apiKey: '', clearApiKey: false },
     sync: { ...settings.sync },
     dailyReportSchedule: { enabled: settings.dailyReportSchedule.enabled, times: [...settings.dailyReportSchedule.times] },
+    periodicReportSchedule: settings.periodicReportSchedule
+      ? { ...settings.periodicReportSchedule }
+      : { ...defaultPeriodicReportSchedule },
     channels: structuredClone(settings.channels) }
 }
 

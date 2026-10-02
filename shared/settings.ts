@@ -39,11 +39,26 @@ export const defaultDailyReportSchedule: DailyReportScheduleSettings = {
   enabled: false,
   times: ['12:00', '18:00', '21:00'],
 }
+export interface PeriodicReportScheduleSettings {
+  weeklyEnabled: boolean
+  weeklyDay: number // 1-7, 1=周一, 5=周五, 7=周日
+  weeklyTime: string
+  monthlyEnabled: boolean
+  monthlyTime: string
+}
+export const defaultPeriodicReportSchedule: PeriodicReportScheduleSettings = {
+  weeklyEnabled: true,
+  weeklyDay: 5,
+  weeklyTime: '18:00',
+  monthlyEnabled: true,
+  monthlyTime: '18:00',
+}
 export interface WorkbenchSettings {
   revision: number
   model: { baseUrl: string; name: string; hasApiKey: boolean }
   sync: { enabled: boolean; intervalMs: number }
   dailyReportSchedule: DailyReportScheduleSettings
+  periodicReportSchedule: PeriodicReportScheduleSettings
   channels: ChannelConfig[]
   pathEnvironment: 'local' | 'container'
   unresolvedPaths?: string[]
@@ -107,10 +122,18 @@ export const dailyReportScheduleSchema = z.object({
     .max(24, '最多配置 24 个时间点')
     .transform((times) => [...new Set(times)].sort()),
 })
+export const periodicReportScheduleSchema = z.object({
+  weeklyEnabled: z.boolean(),
+  weeklyDay: z.number().int().min(1).max(7),
+  weeklyTime: timePointSchema,
+  monthlyEnabled: z.boolean(),
+  monthlyTime: timePointSchema,
+})
 export const settingsUpdateSchema = z.object({
   revision: z.number().int().min(1), model: modelSettingsSchema,
   sync: z.object({ enabled: z.boolean(), intervalMs: z.number().int().min(60_000).max(86_400_000) }),
   dailyReportSchedule: dailyReportScheduleSchema.default(defaultDailyReportSchedule),
+  periodicReportSchedule: periodicReportScheduleSchema.default(defaultPeriodicReportSchedule),
   channels: z.array(channelSettingsSchema).min(6).max(30),
 }).superRefine(({ channels }, context) => {
   if (new Set(channels.map((channel) => channel.id)).size !== channels.length) context.addIssue({ code: 'custom', message: '渠道标识不能重复' })

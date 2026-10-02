@@ -7,11 +7,22 @@ interface SettingsSelectProps<Value extends string> {
   value: Value
   options: readonly { value: Value; label: string }[]
   disabled?: boolean
-  help: string
+  help?: string
+  compact?: boolean
+  width?: string | number
   onChange: (value: Value) => void
 }
 
-export function SettingsSelect<Value extends string>({ label, value, options, disabled = false, help, onChange }: SettingsSelectProps<Value>) {
+export function SettingsSelect<Value extends string>({
+  label,
+  value,
+  options,
+  disabled = false,
+  help,
+  compact = false,
+  width,
+  onChange,
+}: SettingsSelectProps<Value>) {
   const id = useId()
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -106,26 +117,71 @@ export function SettingsSelect<Value extends string>({ label, value, options, di
     }
   }
 
-  return <div className="settings-field">
-    <label id={`${id}-label`} htmlFor={id}>{label}</label>
-    <div ref={rootRef} className={`settings-select${expanded ? ' is-open' : ''}`} onBlur={(event) => {
-      if (!event.currentTarget.contains(event.relatedTarget)) close()
-    }}>
-      <button ref={triggerRef} id={id} type="button" role="combobox" className="settings-select-trigger" disabled={disabled || !options.length}
-        aria-labelledby={`${id}-label ${id}-value`} aria-describedby={`${id}-help`} aria-haspopup="listbox" aria-expanded={expanded}
-        aria-controls={expanded ? `${id}-menu` : undefined} aria-activedescendant={expanded ? `${id}-option-${activeIndex}` : undefined}
-        onClick={() => { if (expanded) close(); else openAt(selectedIndex) }} onKeyDown={keyboard}>
-        <span id={`${id}-value`}>{options[selectedIndex]?.label ?? '请选择'}</span><Icon name="chevron-down" className="settings-select-chevron" />
+  const selectNode = (
+    <div
+      ref={rootRef}
+      className={`settings-select${compact ? ' is-compact' : ''}${expanded ? ' is-open' : ''}`}
+      style={width ? { width: typeof width === 'number' ? `${width}px` : width } : undefined}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) close()
+      }}
+    >
+      <button
+        ref={triggerRef}
+        id={id}
+        type="button"
+        role="combobox"
+        className="settings-select-trigger"
+        disabled={disabled || !options.length}
+        aria-label={compact ? label : undefined}
+        aria-labelledby={compact ? undefined : `${id}-label ${id}-value`}
+        aria-describedby={help ? `${id}-help` : undefined}
+        aria-haspopup="listbox"
+        aria-expanded={expanded}
+        aria-controls={expanded ? `${id}-menu` : undefined}
+        aria-activedescendant={expanded ? `${id}-option-${activeIndex}` : undefined}
+        onClick={() => { if (expanded) close(); else openAt(selectedIndex) }}
+        onKeyDown={keyboard}
+      >
+        <span id={`${id}-value`}>{options[selectedIndex]?.label ?? '请选择'}</span>
+        <Icon name="chevron-down" className="settings-select-chevron" />
       </button>
-      {expanded && <ul ref={menuRef} id={`${id}-menu`} role="listbox" aria-labelledby={`${id}-label`}
-        className={`settings-select-menu${placement.above ? ' opens-above' : ''}`} style={{ maxHeight: placement.maxHeight }}>
-        {options.map((option, index) => <li id={`${id}-option-${index}`} key={option.value} role="option" aria-selected={option.value === value}
-          className={`settings-select-option${activeIndex === index ? ' is-active' : ''}`} onPointerEnter={() => setActiveIndex(index)}
-          onMouseDown={(event) => event.preventDefault()} onClick={() => choose(index)}>
-          <span>{option.label}</span>{option.value === value && <Icon name="check" />}
-        </li>)}
-      </ul>}
+      {expanded && (
+        <ul
+          ref={menuRef}
+          id={`${id}-menu`}
+          role="listbox"
+          aria-labelledby={compact ? undefined : `${id}-label`}
+          className={`settings-select-menu${placement.above ? ' opens-above' : ''}`}
+          style={{ maxHeight: placement.maxHeight }}
+        >
+          {options.map((option, index) => (
+            <li
+              id={`${id}-option-${index}`}
+              key={option.value}
+              role="option"
+              aria-selected={option.value === value}
+              className={`settings-select-option${activeIndex === index ? ' is-active' : ''}`}
+              onPointerEnter={() => setActiveIndex(index)}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => choose(index)}
+            >
+              <span>{option.label}</span>
+              {option.value === value && <Icon name="check" />}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
-    <small id={`${id}-help`}>{help}</small>
-  </div>
+  )
+
+  if (compact) return selectNode
+
+  return (
+    <div className="settings-field">
+      <label id={`${id}-label`} htmlFor={id}>{label}</label>
+      {selectNode}
+      {help && <small id={`${id}-help`}>{help}</small>}
+    </div>
+  )
 }

@@ -1272,6 +1272,9 @@ button:focus-visible, input:focus-visible {
 .settings-field-caption { font-size: 10px; color: #9aa5b5; font-weight: 400; }
 .settings-field small, .settings-help { color: #8d99ab; font-size: 10px; font-weight: 400; line-height: 18px; }
 .settings-select { position: relative; min-width: 0; }
+.settings-select.is-compact { display: inline-block; vertical-align: middle; }
+.settings-select.is-compact .settings-select-trigger { min-height: 36px; height: 36px; padding: 6px 10px; border-radius: 8px; font-size: 12px; }
+.settings-select.is-compact .settings-select-menu { min-width: 140px; }
 .settings-select .settings-select-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 40px; padding: 11px 12px; border: 1px solid #dfe5ee; border-radius: 9px; background: #fff; color: #37445a; font-size: 12px; font-weight: 400; text-align: left; transition: border-color .2s, box-shadow .2s; }
 .settings-select-trigger > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .settings-select-trigger:hover:not(:disabled) { border-color: #f2bda7; }
@@ -1313,9 +1316,13 @@ button:focus-visible, input:focus-visible {
 .settings-schedule-tag button:hover { background: #ffdacf; color: #a43a15; }
 .settings-schedule-tag button svg { width: 11px; height: 11px; }
 .settings-schedule-empty { font-size: 11px; color: #9aa6b7; padding: 6px 0; }
-.settings-schedule-input-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.settings-schedule-input-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
 .settings-schedule-input-row input[type="time"] { width: 130px; padding: 8px 10px; border: 1px solid #dfe5ee; border-radius: 8px; outline: none; background: #fff; font-size: 12px; color: #37445a; font-family: "SF Mono", Menlo, monospace; }
 .settings-schedule-input-row input[type="time"]:focus { border-color: #f4aa8e; box-shadow: 0 0 0 3px rgba(255, 104, 56, .08); }
+.settings-label-inline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #475569; }
+.settings-label-inline select { padding: 8px 10px; border: 1px solid #dfe5ee; border-radius: 8px; outline: none; background: #fff; font-size: 12px; color: #37445a; font-family: inherit; }
+.settings-label-inline select:focus { border-color: #f4aa8e; box-shadow: 0 0 0 3px rgba(255, 104, 56, .08); }
+.settings-label-text { font-size: 12px; color: #475569; background: #f8fafc; padding: 7px 10px; border-radius: 8px; border: 1px solid #e2e8f0; }
 .settings-schedule-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 11px; color: #8794a6; }
 .settings-presets-label { font-size: 11px; color: #8794a6; }
 .settings-preset-button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid #e1e7f0; border-radius: 7px; background: #f8fafc; color: #5a697e; font-size: 11px; cursor: pointer; transition: all .15s; }

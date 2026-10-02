@@ -1,5 +1,5 @@
-import type { DailyReport } from '../../shared/contracts'
-import { dateFromKey, dateKey, recordTimestamp, type Task } from './workbench'
+import type { DailyReport } from '../../shared/contracts.js'
+import { dateFromKey, dateKey, recordTimestamp, type Task } from './workbench.js'
 
 export interface WeekBounds {
   weekKey: string

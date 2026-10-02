@@ -267,6 +267,129 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                   </div>
                 </div>}
               </section>
+
+              <section className="settings-automation-card" aria-labelledby="settings-weekly-schedule-heading">
+                <div className="settings-section-heading">
+                  <div>
+                    <h4 id="settings-weekly-schedule-heading">自动整理工作周报</h4>
+                    <p>到达每周指定时间后，自动汇总本周日报与完成事项并归档为周报</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={draft.periodicReportSchedule.weeklyEnabled}
+                    aria-label="自动整理工作周报"
+                    className={`settings-switch${draft.periodicReportSchedule.weeklyEnabled ? ' is-on' : ''}`}
+                    onClick={() => setDraft((current) => current && {
+                      ...current,
+                      periodicReportSchedule: {
+                        ...current.periodicReportSchedule,
+                        weeklyEnabled: !current.periodicReportSchedule.weeklyEnabled,
+                      },
+                    })}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <p className="settings-help">
+                  {draft.periodicReportSchedule.weeklyEnabled
+                    ? '到达设定时间后，后台将自动提炼本周核心进展、推进中事项与下周计划，生成本周周报存入个人空间。'
+                    : '已关闭自动周报整理。你仍可随时在个人空间点击“重新整理”。'}
+                </p>
+                {draft.periodicReportSchedule.weeklyEnabled && (
+                  <div className="settings-schedule-body">
+                    <div className="settings-schedule-input-row">
+                      <div className="settings-label-inline">
+                        <span>执行星期：</span>
+                        <SettingsSelect
+                          compact
+                          width={152}
+                          label="执行星期"
+                          value={String(draft.periodicReportSchedule.weeklyDay)}
+                          options={[
+                            { value: '5', label: '每周五（推荐）' },
+                            { value: '6', label: '每周六' },
+                            { value: '7', label: '每周日' },
+                            { value: '1', label: '每周一' },
+                          ]}
+                          onChange={(val) => setDraft((current) => current && {
+                            ...current,
+                            periodicReportSchedule: {
+                              ...current.periodicReportSchedule,
+                              weeklyDay: Number(val),
+                            },
+                          })}
+                        />
+                      </div>
+                      <div className="settings-label-inline">
+                        <span>执行时间：</span>
+                        <input
+                          type="time"
+                          value={draft.periodicReportSchedule.weeklyTime}
+                          onChange={(e) => setDraft((current) => current && {
+                            ...current,
+                            periodicReportSchedule: {
+                              ...current.periodicReportSchedule,
+                              weeklyTime: e.target.value,
+                            },
+                          })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              <section className="settings-automation-card" aria-labelledby="settings-monthly-schedule-heading">
+                <div className="settings-section-heading">
+                  <div>
+                    <h4 id="settings-monthly-schedule-heading">自动整理月度复盘</h4>
+                    <p>到达每月最后一天指定时间后，自动汇总整月工作里程碑与规划</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={draft.periodicReportSchedule.monthlyEnabled}
+                    aria-label="自动整理月度复盘"
+                    className={`settings-switch${draft.periodicReportSchedule.monthlyEnabled ? ' is-on' : ''}`}
+                    onClick={() => setDraft((current) => current && {
+                      ...current,
+                      periodicReportSchedule: {
+                        ...current.periodicReportSchedule,
+                        monthlyEnabled: !current.periodicReportSchedule.monthlyEnabled,
+                      },
+                    })}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <p className="settings-help">
+                  {draft.periodicReportSchedule.monthlyEnabled
+                    ? '到达月末设定时间后，后台将自动汇总整月交付成果与长期目标，生成月度复盘报告存入个人空间。'
+                    : '已关闭自动月报整理。你仍可随时在个人空间点击“重新整理”。'}
+                </p>
+                {draft.periodicReportSchedule.monthlyEnabled && (
+                  <div className="settings-schedule-body">
+                    <div className="settings-schedule-input-row">
+                      <span className="settings-label-text">执行日期：每月最后一天</span>
+                      <label className="settings-label-inline">
+                        <span>执行时间：</span>
+                        <input
+                          type="time"
+                          value={draft.periodicReportSchedule.monthlyTime}
+                          onChange={(e) => setDraft((current) => current && {
+                            ...current,
+                            periodicReportSchedule: {
+                              ...current.periodicReportSchedule,
+                              monthlyTime: e.target.value,
+                            },
+                          })}
+                        />
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </section>
             </div>}
           </fieldset>}
         </div>

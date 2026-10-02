@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { dailyReportScheduleSchema, defaultDailyReportSchedule, timePointSchema } from './settings.js'
+import {
+  dailyReportScheduleSchema,
+  defaultDailyReportSchedule,
+  defaultPeriodicReportSchedule,
+  periodicReportScheduleSchema,
+  timePointSchema,
+} from './settings.js'
 
 describe('自动生成日报设置校验', () => {
   it('正确校验 HH:mm 时间点格式', () => {
@@ -36,5 +42,33 @@ describe('自动生成日报设置校验', () => {
       enabled: false,
       times: ['12:00', '18:00', '21:00'],
     })
+  })
+
+  it('正确校验并提供默认的周报月报定时配置', () => {
+    expect(defaultPeriodicReportSchedule).toEqual({
+      weeklyEnabled: true,
+      weeklyDay: 5,
+      weeklyTime: '18:00',
+      monthlyEnabled: true,
+      monthlyTime: '18:00',
+    })
+
+    const parsed = periodicReportScheduleSchema.parse({
+      weeklyEnabled: true,
+      weeklyDay: 7,
+      weeklyTime: '20:00',
+      monthlyEnabled: false,
+      monthlyTime: '19:30',
+    })
+    expect(parsed.weeklyDay).toBe(7)
+    expect(parsed.weeklyTime).toBe('20:00')
+
+    expect(periodicReportScheduleSchema.safeParse({
+      weeklyEnabled: true,
+      weeklyDay: 0, // 应当 1-7
+      weeklyTime: '18:00',
+      monthlyEnabled: true,
+      monthlyTime: '18:00',
+    }).success).toBe(false)
   })
 })

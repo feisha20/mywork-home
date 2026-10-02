@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import { CAPTURE_SOURCES, SOURCES } from '../src/domain/workbench.js'
-import { builtinCollectors, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema } from '../shared/settings.js'
+import { builtinCollectors, defaultPeriodicReportSchedule, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema } from '../shared/settings.js'
 import type { ChannelConfig, ChannelSummary, CollectorKind, PathScanResult, SettingsUpdate, WorkbenchSettings } from '../shared/settings.js'
 import type { Config } from './config.js'
 import { SourcePaths } from './sourcePaths.js'
@@ -43,6 +43,7 @@ export class SettingsService {
         model: { baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL }, apiKey: config.WORKBENCH_LLM_API_KEY,
         sync: { enabled: config.SYNC_ENABLED === 'true', intervalMs: Math.min(86_400_000, Math.max(60_000, Math.ceil(config.SYNC_INTERVAL_MS / 60_000) * 60_000)) },
         dailyReportSchedule: { enabled: false, times: ['12:00', '18:00', '21:00'] },
+        periodicReportSchedule: defaultPeriodicReportSchedule,
         channels: initialChannels(config) }, sourcePaths)
       await service.persist(service.data)
       return service
@@ -63,7 +64,7 @@ export class SettingsService {
       return location.hostPath ?? location.path
     }) }))
     return { revision: this.data.revision, model: { baseUrl: this.data.model.baseUrl, name: this.data.model.name, hasApiKey: !!this.data.apiKey },
-      sync: { ...this.data.sync }, dailyReportSchedule: { ...this.data.dailyReportSchedule }, channels, pathEnvironment: this.sourcePaths.environment, unresolvedPaths: [...new Set(unresolvedPaths)] }
+      sync: { ...this.data.sync }, dailyReportSchedule: { ...this.data.dailyReportSchedule }, periodicReportSchedule: { ...this.data.periodicReportSchedule }, channels, pathEnvironment: this.sourcePaths.environment, unresolvedPaths: [...new Set(unresolvedPaths)] }
   }
   runtimeConfig(): Config {
     return { ...this.config, WORKBENCH_LLM_BASE_URL: this.data.model.baseUrl, WORKBENCH_LLM_MODEL: this.data.model.name,
@@ -71,6 +72,7 @@ export class SettingsService {
   }
   channels() { return structuredClone(this.data.channels) }
   dailyReportSchedule() { return structuredClone(this.data.dailyReportSchedule) }
+  periodicReportSchedule() { return structuredClone(this.data.periodicReportSchedule) }
   // 首页轮询只传图片地址，避免每次刷新重复传输所有上传的图片。
   summaries(): ChannelSummary[] {
     return this.data.channels.map(({ paths: _paths, pathMode: _mode, mapping: _mapping, ...channel }) => ({ ...channel,
@@ -103,7 +105,7 @@ export class SettingsService {
       const next: SavedSettings = { revision: this.data.revision + 1,
         model: { baseUrl: input.model.baseUrl.replace(/\/+$/, ''), name: input.model.name },
         apiKey: input.model.clearApiKey ? '' : input.model.apiKey || this.data.apiKey,
-        sync: input.sync, dailyReportSchedule: input.dailyReportSchedule, channels: input.channels.map((channel) => ({ ...channel, id: channel.id as ChannelConfig['id'], paths: [...new Set(channel.paths.map((path) => {
+        sync: input.sync, dailyReportSchedule: input.dailyReportSchedule, periodicReportSchedule: input.periodicReportSchedule, channels: input.channels.map((channel) => ({ ...channel, id: channel.id as ChannelConfig['id'], paths: [...new Set(channel.paths.map((path) => {
           const location = this.sourcePaths.resolve(path)
           const existing = this.data.channels.find((entry) => entry.id === channel.id)?.paths.includes(path)
           if (location.unmounted && !existing) throw new SettingsError(`“${channel.name}”的本机目录尚未授权访问，请在部署配置中添加该目录后再保存：${path}`)

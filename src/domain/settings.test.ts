@@ -26,11 +26,13 @@ describe('可配置渠道显示', () => {
       model: { baseUrl: 'https://example.com', name: 'test-model', hasApiKey: true },
       sync: { enabled: true, intervalMs: 300_000 },
       dailyReportSchedule: { enabled: true, times: ['12:00', '18:00', '21:00'] },
+      periodicReportSchedule: { weeklyEnabled: true, weeklyDay: 5, weeklyTime: '18:00', monthlyEnabled: true, monthlyTime: '18:00' },
       channels: [],
       pathEnvironment: 'local',
     }
     const draft = settingsDraft(settings)
     expect(draft.dailyReportSchedule).toEqual({ enabled: true, times: ['12:00', '18:00', '21:00'] })
+    expect(draft.periodicReportSchedule).toEqual({ weeklyEnabled: true, weeklyDay: 5, weeklyTime: '18:00', monthlyEnabled: true, monthlyTime: '18:00' })
     // 修改 draft 不影响原始配置
     draft.dailyReportSchedule.times.push('23:00')
     expect(settings.dailyReportSchedule.times).toHaveLength(3)
