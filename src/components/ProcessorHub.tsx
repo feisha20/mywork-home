@@ -52,7 +52,19 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
     : !run ? '等待首次同步' : `${syncTime ? `${syncTime} · ` : ''}${hasWarnings ? run.status === 'interrupted' ? '同步中断' : run.status === 'failed' ? '同步失败' : '部分待重试' : '已同步'}`
   return (
     <section className="center-processor-hub" ref={hubRef} aria-label="工作流处理核心">
-      <SourceTransfer slots={slots} frameRef={hubRef} sourceRefs={sourceRefs} sourcePorts={sourcePorts} bottomPins={bottomPins} targetRef={refs.chip} activeSource={activeSource} working={energized} visible={visible} />
+      <SourceTransfer
+        slots={slots}
+        frameRef={hubRef}
+        sourceRefs={sourceRefs}
+        sourcePorts={sourcePorts}
+        bottomPins={bottomPins}
+        targetRef={refs.chip}
+        activeSource={activeSource}
+        sources={sources}
+        runErrors={run?.errors}
+        working={energized}
+        visible={visible}
+      />
       <div className="hub-top-hud">
         <div className="hud-stat-col">
           <span className="stat-num">{String(pendingCount).padStart(2, '0')}<small>项</small></span>
@@ -99,7 +111,20 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
 
       <div className="engine-matrix-wrap">
         <div className="channel-dock" style={{ '--channel-slots': slots.length } as CSSProperties}>
-          <div className="channel-input-ports" aria-hidden="true">{slots.map((slot, index) => <span className={`channel-port${activeSource && slot.sources.includes(activeSource) ? ' is-active' : ''}`} ref={sourcePorts[index]} key={slot.id} />)}</div>
+          <div className="channel-input-ports" aria-hidden="true">
+            {slots.map((slot, index) => {
+              const states = slot.sources.map((entry) => channelStatus(entry, sources, activeSource, run?.errors))
+              const isConnected = states.some((entry) => entry.kind === 'connected' || entry.kind === 'warning' || entry.kind === 'active')
+              const isActive = !!activeSource && slot.sources.includes(activeSource)
+              return (
+                <span
+                  key={slot.id}
+                  ref={sourcePorts[index]}
+                  className={`channel-port${isActive ? ' is-active' : isConnected ? ' is-connected' : ' is-pending'}`}
+                />
+              )
+            })}
+          </div>
           <header className="channel-dock-header"><span>采集渠道</span><button onClick={() => setDetails('all')} aria-haspopup="dialog">{connectedCount}/{CAPTURE_SOURCES.length} 已接入 <Icon name="arrow" /></button></header>
           <div className="channel-dock-slots">
             {slots.map((slot, index) => {

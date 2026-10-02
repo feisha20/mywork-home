@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import type { CaptureSource, ChannelSlot } from '../domain/channelDock'
+import type { WorkbenchSnapshot } from '../../shared/contracts'
+import { channelStatus, type CaptureSource, type ChannelSlot } from '../domain/channelDock'
 
 interface SourceTransferProps {
   slots: ChannelSlot[]
@@ -10,11 +11,13 @@ interface SourceTransferProps {
   bottomPins: RefObject<HTMLSpanElement | null>[]
   targetRef: RefObject<HTMLDivElement | null>
   activeSource: CaptureSource | null
+  sources?: WorkbenchSnapshot['sources']
+  runErrors?: readonly string[]
   working: boolean
   visible: boolean
 }
 interface Point { x: number; y: number }
-interface Circuit { slot: ChannelSlot; path: string; start: Point; end: Point }
+interface Circuit { slot: ChannelSlot; path: string; start: Point; end: Point; connected: boolean; active: boolean }
 
 // 折角使用短斜线，与背景电路线保持一致。
 function circuitPath(points: Point[]): string {
@@ -32,8 +35,8 @@ function circuitPath(points: Point[]): string {
   return `${path} L ${end.x} ${end.y}`
 }
 
-// 每个渠道常驻一条电路线；空闲缓流、采集加速，后台停止测量和流光。
-export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, working, visible }: SourceTransferProps) {
+// 每个渠道常驻一条电路线；已接入渠道具有绿色脉冲动态传输，采集中加速并高亮，未接入保持静态待机。
+export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, sources, runErrors, working, visible }: SourceTransferProps) {
   const [geometry, setGeometry] = useState<{ circuits: Circuit[]; width: number; height: number } | null>(null)
   const layerRef = useRef<SVGSVGElement>(null)
   // 被动副作用执行时，父级和兄弟元素的引用已经就绪。
@@ -66,8 +69,12 @@ export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, botto
         const points = horizontal
           ? [start, { x: start.x, y: topLane }, { x: gutter, y: topLane }, { x: gutter, y: bottomLane }, { x: end.x, y: bottomLane }, end]
           : [start, { x: start.x, y: bridge }, { x: end.x, y: bridge }, end]
+        // 检查当前渠道是否已接入
+        const states = slot.sources.map((entry) => channelStatus(entry, sources, activeSource, runErrors))
+        const connected = states.some((entry) => entry.kind === 'connected' || entry.kind === 'warning' || entry.kind === 'active')
+        const active = !!activeSource && slot.sources.includes(activeSource)
         // 路径起点固定为采集渠道，终点固定为芯片；递减偏移沿起点向终点传输。
-        return { slot, path: circuitPath(points), start: points[0], end: points.at(-1)! }
+        return { slot, path: circuitPath(points), start: points[0], end: points.at(-1)!, connected, active }
       })
       const next = { circuits, width: bounds.width, height: bounds.height }
       setGeometry((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next)
@@ -80,13 +87,32 @@ export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, botto
     frame.querySelectorAll('.hub-top-hud, .chip-carrier-board, .engine-matrix-wrap').forEach((element) => observer.observe(element))
     window.addEventListener('resize', measure)
     return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
-  }, [slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, visible])
+  }, [slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, sources, runErrors, visible])
 
   return <svg ref={layerRef} className={`source-transfer-layer${working ? ' is-working' : ''}`} viewBox={geometry ? `0 0 ${geometry.width} ${geometry.height}` : undefined} preserveAspectRatio="none" aria-hidden="true">
-    {geometry?.circuits.map((circuit, index) => <g key={circuit.slot.id} className={visible && activeSource && circuit.slot.sources.includes(activeSource) ? 'circuit-active' : undefined}>
-      <path className="source-transfer-track" d={circuit.path} />
-      <circle className="circuit-terminal" cx={circuit.end.x} cy={circuit.end.y} r="2.5" />
-      {visible && <path className="source-transfer-beam" d={circuit.path} pathLength="540" style={{ animationDelay: `${-index * (working ? 1 : 4)}s` }} />}
-    </g>)}
+    {geometry?.circuits.map((circuit, index) => {
+      const isCircuitActive = visible && circuit.active
+      const isConnected = circuit.connected
+      const classNames = [
+        'source-circuit-group',
+        isConnected ? 'is-connected' : 'is-pending',
+        isCircuitActive ? 'circuit-active' : '',
+      ].filter(Boolean).join(' ')
+
+      return (
+        <g key={circuit.slot.id} className={classNames}>
+          <path className="source-transfer-track" d={circuit.path} />
+          <circle className="circuit-terminal" cx={circuit.end.x} cy={circuit.end.y} r="2.5" />
+          {visible && isConnected && (
+            <path
+              className="source-transfer-beam"
+              d={circuit.path}
+              pathLength="540"
+              style={{ animationDelay: `${-index * (working ? 0.8 : 2.5)}s` }}
+            />
+          )}
+        </g>
+      )
+    })}
   </svg>
 }

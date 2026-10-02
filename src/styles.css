@@ -627,7 +627,8 @@ body {
 .channel-dock-header button:hover { color: var(--accent-orange); }
 .channel-dock-header svg { width: 12px; height: 12px; }
 .channel-input-ports { position: absolute; inset: -3px 10px auto; display: grid; grid-template-columns: repeat(var(--channel-slots), minmax(0, 1fr)); gap: 3px; }
-.channel-port { justify-self: center; width: 5px; height: 5px; border-radius: 50%; background: #c2cedd; }
+.channel-port { justify-self: center; width: 5px; height: 5px; border-radius: 50%; background: #c2cedd; transition: background .3s; }
+.channel-port.is-connected { background: #37ad7c; }
 .channel-port.is-active { background: var(--accent-orange); }
 .channel-dock-slots { display: grid; grid-template-columns: repeat(var(--channel-slots), minmax(0, 1fr)); gap: 3px; }
 .channel-slot { min-width: 0; }
@@ -1035,15 +1036,51 @@ button:focus-visible, input:focus-visible {
 .capture-output-beam { fill: none; stroke: var(--accent-orange); stroke-width: 2.5; stroke-linecap: round; stroke-dasharray: 40 580; animation: captureOutputFlow 2s steps(40, end) 1 forwards; }
 @keyframes captureOutputFlow { from { stroke-dashoffset: 40; } to { stroke-dashoffset: -540; } }
 
-/* 空闲缓流每秒更新 10 次，工作时加速；只给当前采集线路增加高亮。 */
+/* 渠道传输线路：已接入渠道绿色脉冲动态传输，未接入渠道静态待机；工作时加速。 */
 .source-transfer-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 5; }
-.source-transfer-track { fill: none; stroke: #b7c6d8; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.circuit-terminal { fill: #f5f8fc; stroke: #aebfd3; stroke-width: 1.5; }
-.circuit-active .source-transfer-track { stroke: rgba(255, 104, 56, .45); }
-.circuit-active .circuit-terminal { stroke: var(--accent-orange); fill: #fff0e8; }
-.source-transfer-beam { fill: none; stroke: #10b981; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 40 500; opacity: .4; animation: sourcePhotonFlow 16s steps(160, end) infinite; }
-.source-transfer-layer.is-working .source-transfer-beam { opacity: .6; animation-duration: 4s; animation-timing-function: steps(80, end); }
-.source-transfer-layer .circuit-active .source-transfer-beam { stroke: var(--accent-orange); stroke-width: 2.5; stroke-dasharray: 60 480; opacity: 1; animation-duration: 2s; animation-timing-function: steps(40, end); }
+.source-transfer-track { fill: none; stroke: #c8d5e4; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: stroke .3s ease; }
+.circuit-terminal { fill: #f5f8fc; stroke: #b2c2d4; stroke-width: 1.5; transition: stroke .3s, fill .3s; }
+
+/* 未接入渠道（如禅道）：轨道呈现低对比静止，端子灰色 */
+.source-circuit-group.is-pending .source-transfer-track { stroke: #dce5ef; stroke-dasharray: 3 3; opacity: .7; }
+.source-circuit-group.is-pending .circuit-terminal { stroke: #cbd5e1; fill: #f8fafc; }
+
+/* 已接入渠道：轨道清晰，端子带微润绿色光感 */
+.source-circuit-group.is-connected .source-transfer-track { stroke: #b4c6dc; stroke-width: 1.5; }
+.source-circuit-group.is-connected .circuit-terminal { stroke: #10b981; fill: #ecfdf5; }
+
+/* 已接入渠道的绿色能量脉冲动效：静态时节奏平稳平滑，工作时加速 */
+.source-transfer-beam {
+  fill: none;
+  stroke: #10b981;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 48 492;
+  opacity: .85;
+  filter: drop-shadow(0 0 3px rgba(16, 185, 129, .45));
+  animation: sourcePhotonFlow 7s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+
+/* 工作中状态：脉冲加速流动 */
+.source-transfer-layer.is-working .source-transfer-beam {
+  opacity: .95;
+  stroke-width: 2.8;
+  animation-duration: 2.2s;
+  animation-timing-function: linear;
+}
+
+/* 当前处于采集中/活动状态的线路：高亮橙色脉冲加粗 */
+.source-circuit-group.circuit-active .source-transfer-track { stroke: rgba(255, 104, 56, .45); }
+.source-circuit-group.circuit-active .circuit-terminal { stroke: var(--accent-orange); fill: #fff0e8; }
+.source-transfer-layer .source-circuit-group.circuit-active .source-transfer-beam {
+  stroke: var(--accent-orange);
+  stroke-width: 3;
+  stroke-dasharray: 60 480;
+  opacity: 1;
+  filter: drop-shadow(0 0 4px rgba(255, 104, 56, .6));
+  animation-duration: 1.6s;
+  animation-timing-function: linear;
+}
 @keyframes sourcePhotonFlow { from { stroke-dashoffset: 540; } to { stroke-dashoffset: 0; } }
 
 /* 后台标签页暂停装饰动效，不占用持续绘制资源。 */
