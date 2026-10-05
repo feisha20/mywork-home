@@ -13,6 +13,16 @@ function claude(text: string, id = 'message-1') { return { type: 'user', uuid: i
 async function file(content: string) { const dir = await mkdtemp(join(tmpdir(), 'workbench-records-')); directories.push(dir); const path = join(dir, 'session-1.jsonl'); await writeFile(path, content); return path }
 
 describe('会话记录适配与脱敏', () => {
+  it('清理 Codex 正文中的空字符，保留中文、换行和原消息 ID', async () => {
+    const row = { timestamp: time, type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '已完成\u0000日志修复\n继续验证' }] } }
+    const path = await file(`${JSON.stringify(row)}\n`)
+    const first = await readDelta(path, 'codex', null, cutoff, [])
+    expect(first.messages[0].text).toBe('已完成日志修复\n继续验证')
+    expect(first.messages[0].id).toBe(normalizeRecord(row, 'codex', initialContext(path, 'codex'))!.id)
+    expect(first.invalid).toBe(0)
+    expect(first.cursor.offset).toBe(Buffer.byteLength(`${JSON.stringify(row)}\n`))
+    expect(normalizeRecord({ ...row, payload: { ...row.payload, content: [{ type: 'output_text', text: '\u0000' }] } }, 'codex', initialContext(path, 'codex'))).toBeNull()
+  })
   it('从Codex元信息保留原项目路径并关联父会话', () => {
     const ctx = initialContext('rollout-test.jsonl', 'codex')
     normalizeRecord({ type: 'session_meta', payload: { id: 'child', cwd: '/Users/项目', source: { subagent: { thread_spawn: { parent_thread_id: 'root' } } } } }, 'codex', ctx)

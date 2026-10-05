@@ -26,7 +26,7 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
       const body = JSON.parse(raw)
       requests.push({ url: request.url!, body, authorization: request.headers.authorization })
       response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      const content = JSON.stringify({ items: [{ title: '完成接口测试', status: 'completed', evidenceIds: [message.id] }] })
+      const content = JSON.stringify({ items: [{ ...(requests.length === 1 ? { taskId: 'T999' } : {}), title: '完成接口测试', status: 'completed', evidenceIds: ['M1'] }] })
       response.write(`data: ${JSON.stringify({ id: 'chatcmpl-fixture', object: 'chat.completion.chunk', model: 'glm-5.3-flash', choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}\n\n`)
       response.write(`data: ${JSON.stringify({ id: 'chatcmpl-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 20, total_tokens: 40 } })}\n\n`)
       response.end('data: [DONE]\n\n')
@@ -38,6 +38,9 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
     extractor = new HarnessExtractor(original)
     const result = await extractor.extract([message], [], [], { ...original, WORKBENCH_LLM_MODEL: 'glm-5.3-flash', WORKBENCH_LLM_API_KEY: 'fixture-api-key', WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${address.port}/api/coding/v3` })
     expect(result[0].status).toBe('completed')
+    expect(result[0].evidenceIds).toEqual([message.id])
+    expect(requests).toHaveLength(2)
+    expect(JSON.stringify(requests[1].body)).toContain('新事项必须省略 taskId')
     const req = requests.find((entry) => entry.body.messages?.some((row: any) => row.content?.includes('newMessages')))!
     expect(req.url).toBe('/api/coding/v3/chat/completions')
     expect(req.body.model).toBe('glm-5.3-flash'); expect(req.body.reasoning_effort).toBe('low'); expect(req.body.max_tokens).toBe(8192)

@@ -85,6 +85,7 @@ export function normalizeRecord(row: Json, source: JsonlSource, context: RecordC
   text = text.trim()
   if (!text) return null
   const safe = redact(text, secrets)
+  if (!safe.trim()) return null
   return {
     id: digest(`${source}:${context.sessionId}:${eventId}`), source, sessionId: context.sessionId,
     rootSessionId: context.parentSessionId ?? context.sessionId, projectPath: context.projectPath,

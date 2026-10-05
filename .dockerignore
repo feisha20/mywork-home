@@ -23,3 +23,5 @@ coverage
 .codex
 .gemini
 GEMINI.md
+garden-gpt-image-2
+tmp/imagegen

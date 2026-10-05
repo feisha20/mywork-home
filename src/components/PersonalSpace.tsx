@@ -35,8 +35,9 @@ function loadSavedReports(): Record<string, PeriodicReportModel> {
 function persistSavedReports(reports: Record<string, PeriodicReportModel>) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(reports))
+    return true
   } catch {
-    // 忽略存储超限错误
+    return false
   }
 }
 
@@ -76,6 +77,15 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
   const [draftMarkdown, setDraftMarkdown] = useState(activeReport.markdown)
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
   const [showSources, setShowSources] = useState(false)
+  const [regenerateFeedback, setRegenerateFeedback] = useState<{
+    kind: 'success' | 'error'
+    message: string
+  } | null>(null)
+
+  // 整理结果只属于当前周期，切换报表后清除提示。
+  useEffect(() => {
+    setRegenerateFeedback(null)
+  }, [tab, currentKey])
 
   // 当切换周/月或 tab 时，同步更新编辑草稿
   useEffect(() => {
@@ -108,18 +118,33 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
   }, [activeReport, draftMarkdown, savedReports, currentKey])
 
   const handleRegenerate = useCallback(() => {
-    const fresh = synthesizePeriodicReport(tab, {
-      label: currentBounds.label,
-      startDate: currentBounds.startDate,
-      endDate: currentBounds.endDate,
-      key: currentKey,
-    }, dailyReports, tasks)
+    const typeName = tab === 'weekly' ? '周报' : '月报'
+    try {
+      const fresh = synthesizePeriodicReport(tab, {
+        label: currentBounds.label,
+        startDate: currentBounds.startDate,
+        endDate: currentBounds.endDate,
+        key: currentKey,
+      }, dailyReports, tasks)
 
-    const nextSaved = { ...savedReports, [currentKey]: fresh }
-    setSavedReports(nextSaved)
-    persistSavedReports(nextSaved)
-    setDraftMarkdown(fresh.markdown)
-    setIsEditing(false)
+      const nextSaved = { ...savedReports, [currentKey]: fresh }
+      const persisted = persistSavedReports(nextSaved)
+      setSavedReports(nextSaved)
+      setDraftMarkdown(fresh.markdown)
+      setIsEditing(false)
+      setRegenerateFeedback(persisted ? {
+        kind: 'success',
+        message: `${typeName}已重新整理并保存，汇总了 ${fresh.stats.reportedDays} 篇日报和 ${fresh.stats.completedTasks} 项完成事项。`,
+      } : {
+        kind: 'error',
+        message: `${typeName}已重新整理，但本机保存失败，请复制 Markdown 备份后重试。`,
+      })
+    } catch (cause) {
+      setRegenerateFeedback({
+        kind: 'error',
+        message: `${typeName}整理失败，原有内容已保留。${cause instanceof Error ? cause.message : '请稍后重试。'}`,
+      })
+    }
   }, [tab, currentBounds, currentKey, dailyReports, tasks, savedReports])
 
   const handleCopy = useCallback(async () => {
@@ -327,7 +352,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                       onClick={handleRegenerate}
                       title="基于本期日报和任务重新智能提炼"
                     >
-                      <Icon name="sparkles" />
+                      <Icon name={regenerateFeedback?.kind === 'success' ? 'check' : 'sparkles'} />
                       <span>重新整理</span>
                     </button>
                     <button
@@ -350,6 +375,23 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                 )}
               </div>
             </div>
+
+            {regenerateFeedback && (
+              <div
+                className={`space-report-feedback is-${regenerateFeedback.kind}`}
+                role={regenerateFeedback.kind === 'error' ? 'alert' : 'status'}
+              >
+                <Icon name={regenerateFeedback.kind === 'success' ? 'check' : 'close'} />
+                <span>{regenerateFeedback.message}</span>
+                <button
+                  type="button"
+                  onClick={() => setRegenerateFeedback(null)}
+                  aria-label="关闭整理结果提示"
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+            )}
 
             {/* 报表主体：编辑视图 vs 渲染视图 */}
             <div className="space-report-body">

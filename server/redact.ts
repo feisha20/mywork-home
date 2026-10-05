@@ -4,7 +4,8 @@ export function redact(text: string, secrets: string[] = []): string {
   for (const secret of secrets.filter((value) => value.length >= 8).sort((a, b) => b.length - a.length)) {
     output = output.split(secret).join('[已隐藏凭证]')
   }
-  return output
+  // PostgreSQL 的 text/jsonb 不接受空字符；保留正文与稳定消息 ID，避免整批有效记录入库失败。
+  return output.replace(/\u0000/g, '')
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g, '[已隐藏私钥]')
     .replace(/\b(?:sk-[\w-]{16,}|ark-[\w-]{20,})\b/g, '[已隐藏密钥]')
     // 旧会话可能把密码写入代码数组，保守隐藏独立短十六进制凭证；不修改64位来源ID。

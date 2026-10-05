@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import type { PoolClient } from 'pg'
 import type { SyncRun, WorkbenchSnapshot } from '../shared/contracts.js'
 import type { Config } from './config.js'
-import type { Extractor } from './harness.js'
+import { extractionFailureReason, type Extractor } from './harness.js'
 import { Store } from './store.js'
 import { digest, isRecordDataError, listRecordFiles, readDelta, type Source, type SourceMessage } from './records.js'
 import { ZcodeReader } from './zcode.js'
@@ -259,7 +259,7 @@ export class SyncService {
             await this.saveRunProgress(run)
           } catch (error) {
             // 不存储上游完整错误，避免 SDK 把提示词或请求头带入日志。
-            const reason = error instanceof Error && /超时|校验|密钥|正在关闭/.test(error.message) ? redact(error.message, secrets) : '模型接入或抽取失败，请检查配置及套餐额度'
+            const reason = extractionFailureReason(error) ?? (error instanceof Error && /超时|校验|密钥|正在关闭/.test(error.message) ? redact(error.message, secrets) : '模型接入或抽取失败，请检查配置及套餐额度')
             await this.store.failBatch(id, reason); run.failedBatches++; this.error(run, reason)
             if (/密钥|模型接入/.test(reason)) modelUnavailable = true
             // 当前会话依赖前文；本批失败后不继续处理该会话的后续消息。

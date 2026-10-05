@@ -1,10 +1,35 @@
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from './config.js'
-import { harnessPatch, parseExtraction, parseSummaries, summaryGuidance } from './harness.js'
+import { extractionFailureReason, extractionInput, harnessPatch, parseExtraction, parseSummaries, summaryGuidance } from './harness.js'
 import type { SourceMessage } from './records.js'
 
 const message: SourceMessage = { id: 'evidence-1', source: 'codex', sessionId: 'test', rootSessionId: 'test', projectPath: '/project', role: 'assistant', timestamp: '2026-10-01T01:00:00Z', text: '已修复接口并通过测试' }
 describe('模型输出边界', () => {
+  it('短别名还原真实证据与事项ID，不把旧事项证据混入可引用消息', () => {
+    const previous = { ...message, id: 'previous-evidence', timestamp: '2026-09-30T01:00:00Z' }
+    const task = { id: 'real-task', source: 'codex' as const, reference: 'CX-1', title: '修复接口', createdAt: previous.timestamp,
+      evidence: [{ messageId: 'unavailable-evidence', source: 'codex' as const, sessionId: 'test', projectPath: '/project', timestamp: previous.timestamp, quote: '旧证据' }] }
+    const input = extractionInput([message], [previous], [task])
+    expect(input.prompt).not.toContain('unavailable-evidence')
+    expect(JSON.parse(input.prompt).newMessages[0].id).toBe('M1')
+    expect(JSON.parse(input.prompt).existingTasks[0].taskId).toBe('T1')
+    const output = { items: [{ taskId: 'T1', title: '修复接口', status: 'completed', evidenceIds: ['M1', 'C1'] }] }
+    expect(parseExtraction(JSON.stringify(output), [message], [previous], [task], input.references)[0]).toEqual({
+      taskId: task.id, title: '修复接口', status: 'completed', evidenceIds: [message.id, previous.id],
+    })
+    output.items[0].evidenceIds = ['C1']
+    expect(() => parseExtraction(JSON.stringify(output), [message], [previous], [task], input.references)).toThrow('本批新增消息')
+    output.items[0].evidenceIds = ['M99']
+    expect(() => parseExtraction(JSON.stringify(output), [message], [previous], [task], input.references)).toThrow('未知来源证据')
+    output.items[0].evidenceIds = ['M1']; output.items[0].taskId = 'T99'
+    expect(() => parseExtraction(JSON.stringify(output), [message], [previous], [task], input.references)).toThrow('未知事项 ID')
+  })
+  it('校验错误保留可定位的类型，隐藏任意模型输出', () => {
+    expect(extractionFailureReason(Object.assign(new Error('校验失败'), { validationFeedback: '输出包含未知来源证据' }))).toContain('未知来源证据')
+    expect(extractionFailureReason(Object.assign(new Error('校验失败'), { validationFeedback: 'items.0.title: Too big' }))).toContain('1至60字')
+    expect(extractionFailureReason(Object.assign(new Error('校验失败'), { validationFeedback: '秘密正文和未知ID' }))).not.toContain('秘密正文')
+    expect(extractionFailureReason(new Error('模型请求超时'))).toBeUndefined()
+  })
   it('校验JSON、标题与真实证据，不信任模型任意ID', () => {
     expect(parseExtraction('```json\n{"items":[{"title":"修复接口","status":"completed","evidenceIds":["evidence-1"]}]}\n```', [message], [], [])).toHaveLength(1)
     expect(() => parseExtraction('{"items":[{"title":"修复","status":"completed","evidenceIds":["fake"]}]}', [message], [], [])).toThrow()
