@@ -10,6 +10,8 @@ import { DailyReportDialog } from './DailyReportDialog'
 import type { DailyReport } from '../../shared/contracts'
 
 interface DailyLogBookProps {
+  recordedDayKeys?: string[]
+  dataVersion?: string
   state: WorkbenchState
   reports: DailyReport[]
   onReportSaved: (report: DailyReport) => void
@@ -23,14 +25,14 @@ interface DailyLogBookProps {
 const fullDate = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 const headerDate = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'short' })
 
-export const DailyLogBook = memo(function DailyLogBook({ state, reports, onReportSaved, today, deckRef, recentId, onReopen, disabled }: DailyLogBookProps) {
+export const DailyLogBook = memo(function DailyLogBook({ recordedDayKeys, dataVersion, state, reports, onReportSaved, today, deckRef, recentId, onReopen, disabled }: DailyLogBookProps) {
   const [historyDay, setHistoryDay] = useState<string | null>(null)
   const [reportOpen, setReportOpen] = useState(false)
   const records = useMemo(() => recordsForDate(state, today), [state, today])
   const historyRecords = useMemo(() => historyDay ? recordsForDate(state, historyDay) : [], [state, historyDay])
   const todayReport = reports.find((report) => report.day === today) ?? null
   const historyReport = reports.find((report) => report.day === historyDay) ?? null
-  const recordedDays = useMemo(() => new Set(state.tasks.flatMap((task) => { const time = recordTimestamp(task); return time ? [dateKey(new Date(time))] : [] })), [state.tasks])
+  const recordedDays = useMemo(() => new Set([...(recordedDayKeys ?? []), ...state.tasks.flatMap((task) => { const time = recordTimestamp(task); return time ? [dateKey(new Date(time))] : [] })]), [state.tasks, recordedDayKeys])
   return (
     <section className="dashboard-panel daily-panel" aria-labelledby="daily-heading">
       <div className="panel-header">
@@ -48,7 +50,7 @@ export const DailyLogBook = memo(function DailyLogBook({ state, reports, onRepor
           </div>
         </div>
       </div>
-      {historyDay && <LogHistoryDialog day={historyDay} records={historyRecords} dailyReport={historyReport} onReportSaved={onReportSaved} onReopen={onReopen} disabled={disabled} onClose={() => setHistoryDay(null)} />}
+      {historyDay && <LogHistoryDialog key={historyDay} dataVersion={dataVersion} day={historyDay} records={historyRecords} dailyReport={historyReport} onReportSaved={onReportSaved} onReopen={onReopen} disabled={disabled} onClose={() => setHistoryDay(null)} />}
       {reportOpen && <DailyReportDialog key={today} day={today} records={records} savedReport={todayReport} onSaved={onReportSaved} onClose={() => setReportOpen(false)} />}
     </section>
   )

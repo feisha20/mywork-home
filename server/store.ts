@@ -1,15 +1,24 @@
 import { randomUUID } from 'node:crypto'
 import { Pool, type PoolClient } from 'pg'
 import { requiresManualCompletion, type Task } from '../src/domain/workbench.js'
-import type { DailyReport, Evidence, SyncRun } from '../shared/contracts.js'
+import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob } from '../shared/contracts.js'
 import type { Cursor, Source, SourceMessage } from './records.js'
+import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
 import { digest } from './records.js'
 
+const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
+const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale,jsonb_array_length(evidence) AS evidence_count'
+function jobFromRow(row: any): ReportJob {
+  return { id: row.id, kind: row.kind, day: new Date(row.day).toISOString().slice(0,10), periodKey: row.period_key,
+    scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
+    error: row.last_error, finishedAt: row.finished_at ? new Date(row.finished_at).toISOString() : null }
+}
 function taskFromRow(row: any): Task {
   return { id: row.id, reference: row.reference, source: row.source, title: row.title,
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
-    projectPath: row.project_path, statusOrigin: row.status_origin, evidence: row.evidence }
+    projectPath: row.project_path, statusOrigin: row.status_origin, evidence: row.evidence,
+    evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count), evidenceStale: Boolean(row.evidence_stale) }
 }
 
 export interface ExtractedItem { taskId?: string; title: string; status: 'todo' | 'completed'; evidenceIds: string[] }
@@ -28,7 +37,7 @@ export class Store {
   }
   async reportRecords(day: string): Promise<Task[]> {
     // 日报只读取简介与归档信息，不查询会话证据内容。
-    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin
+    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale
       FROM workbench.tasks WHERE deleted_at IS NULL AND
       ((CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END)
         AT TIME ZONE 'Asia/Shanghai')::date=$1::date
@@ -39,8 +48,8 @@ export class Store {
     const { rows } = await this.pool.query('SELECT data FROM workbench.daily_reports WHERE day=$1', [day])
     return rows[0]?.data ?? null
   }
-  async dailyReports(): Promise<DailyReport[]> {
-    const { rows } = await this.pool.query('SELECT data FROM workbench.daily_reports ORDER BY day DESC')
+  async dailyReports(startDate?: string, endDate?: string): Promise<DailyReport[]> {
+    const { rows } = await this.pool.query('SELECT data FROM workbench.daily_reports WHERE ($1::date IS NULL OR day>=$1) AND ($2::date IS NULL OR day<=$2) ORDER BY day DESC', [startDate ?? null, endDate ?? null])
     return rows.map((row) => row.data)
   }
   async saveDailyReport(report: DailyReport, expectedRevision: number): Promise<DailyReport | null> {
@@ -131,9 +140,10 @@ export class Store {
   async clearRecordFailure(path: string) {
     await this.pool.query('DELETE FROM workbench.record_failures WHERE path=$1', [path])
   }
-  async ingest(messages: SourceMessage[], cursor: Cursor) {
+  async ingest(messages: SourceMessage[], cursor: Cursor, reconcile = false) {
     return this.transaction(async (client) => {
       let inserted = 0
+      const editedIds = new Set<string>(), withdrawnIds = new Set<string>()
       const sessionKey = `${cursor.source}:${cursor.context.sessionId}`
       await client.query(`INSERT INTO workbench.source_sessions(id,source,session_id,project_path,parent_session_id,updated_at)
         VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(id) DO UPDATE SET project_path=excluded.project_path,parent_session_id=excluded.parent_session_id,updated_at=now()`,
@@ -144,21 +154,47 @@ export class Store {
           VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(id) DO UPDATE SET
           project_path=excluded.project_path,parent_session_id=excluded.parent_session_id,updated_at=now()`,
         [key, message.source, message.sessionId, message.projectPath, message.rootSessionId === message.sessionId ? null : message.rootSessionId])
-        const result = await client.query(`INSERT INTO workbench.source_messages(id,session_key,source,session_id,root_session_id,project_path,role,occurred_at,body)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(id) DO NOTHING`,
-        [message.id, key, message.source, message.sessionId, message.rootSessionId, message.projectPath, message.role, message.timestamp, message.text])
-        inserted += result.rowCount ?? 0
+        const existing = await client.query('SELECT body,body_revision,valid FROM workbench.source_messages WHERE id=$1 FOR UPDATE', [message.id])
+        if (existing.rows[0] && existing.rows[0].body !== message.text) editedIds.add(message.id)
+        if (message.originKey) {
+          const replaced = await client.query(`UPDATE workbench.source_messages SET valid=false,invalid_reason='edited'
+            WHERE source=$1 AND session_id=$2 AND origin_key=$3 AND id<>$4 AND valid RETURNING id`,
+          [message.source, message.sessionId, message.originKey, message.id])
+          for (const row of replaced.rows) editedIds.add(row.id)
+        }
+        const result = await client.query(`INSERT INTO workbench.source_messages(id,session_key,source,session_id,root_session_id,project_path,role,occurred_at,body,origin_key,source_path)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET
+          body=excluded.body,origin_key=excluded.origin_key,source_path=excluded.source_path,
+          body_revision=workbench.source_messages.body_revision+CASE WHEN workbench.source_messages.body<>excluded.body OR NOT workbench.source_messages.valid THEN 1 ELSE 0 END,
+          extracted=CASE WHEN workbench.source_messages.body<>excluded.body OR NOT workbench.source_messages.valid THEN false ELSE workbench.source_messages.extracted END,
+          valid=true,invalid_reason=NULL
+          RETURNING body_revision`,
+        [message.id, key, message.source, message.sessionId, message.rootSessionId, message.projectPath, message.role, message.timestamp, message.text, message.originKey ?? null, cursor.path])
+        if (!existing.rowCount || existing.rows[0].body !== message.text || !existing.rows[0].valid) inserted++
+        message.bodyRevision = Number(result.rows[0].body_revision)
       }
+      if (reconcile) {
+        // 只有完整且有效的可见快照才能撤回旧消息；半行和坏文件不改变已有证据。
+        const removed = await client.query(`UPDATE workbench.source_messages SET valid=false,invalid_reason='withdrawn'
+          WHERE source=$1 AND valid AND (source_path=$2 OR (source_path IS NULL AND session_id=$3))
+          AND NOT (id=ANY($4::text[])) RETURNING id`, [cursor.source, cursor.path, cursor.context.sessionId, messages.map((message) => message.id)])
+        for (const row of removed.rows) withdrawnIds.add(row.id)
+      }
+      // 与抽取保存保持同样的锁顺序：先消息、再事项，避免来源变更与保存相互等待。
+      await this.invalidateEvidence(client, [...editedIds], 'edited')
+      await this.invalidateEvidence(client, [...withdrawnIds], 'withdrawn')
       await client.query(`INSERT INTO workbench.source_cursors(path,source,inode,byte_offset,context,modified_at) VALUES($1,$2,$3,$4,$5,$6)
         ON CONFLICT(path) DO UPDATE SET inode=excluded.inode,byte_offset=excluded.byte_offset,context=excluded.context,modified_at=excluded.modified_at`,
       [cursor.path, cursor.source, cursor.inode, cursor.offset, cursor.context, cursor.modifiedAt])
       return inserted
     })
   }
-  async pendingMessages(): Promise<SourceMessage[]> {
-    const { rows } = await this.pool.query('SELECT * FROM workbench.source_messages WHERE NOT extracted ORDER BY occurred_at,id')
+  async pendingMessages(sources?: string[], after?: { timestamp: string; id: string }, limit = 500): Promise<SourceMessage[]> {
+    const { rows } = await this.pool.query(`SELECT * FROM workbench.source_messages WHERE valid AND NOT extracted
+      AND ($1::text[] IS NULL OR source=ANY($1)) AND ($2::timestamptz IS NULL OR (occurred_at,id)>($2::timestamptz,$3::text))
+      ORDER BY occurred_at,id LIMIT $4`, [sources ?? null, after?.timestamp ?? null, after?.id ?? '', limit])
     return rows.map((row) => ({ id: row.id, source: row.source, sessionId: row.session_id, rootSessionId: row.root_session_id,
-      projectPath: row.project_path, role: row.role, timestamp: new Date(row.occurred_at).toISOString(), text: row.body }))
+      projectPath: row.project_path, role: row.role, timestamp: new Date(row.occurred_at).toISOString(), text: row.body, bodyRevision: row.body_revision, originKey: row.origin_key ?? undefined }))
   }
   async resolveRoot(source: string, sessionId: string) {
     const seen = new Set<string>()
@@ -174,15 +210,15 @@ export class Store {
   }
   async contextMessages(source: string, root: string, before: string, projectPath: string): Promise<SourceMessage[]> {
     const { rows } = await this.pool.query(`SELECT * FROM (SELECT * FROM workbench.source_messages
-      WHERE source=$1 AND (root_session_id=$2 OR session_id=$2) AND occurred_at<$3 AND extracted AND project_path=$4 ORDER BY occurred_at DESC LIMIT 6) t ORDER BY occurred_at`, [source, root, before, projectPath])
+      WHERE source=$1 AND (root_session_id=$2 OR session_id=$2) AND occurred_at<$3 AND extracted AND valid AND project_path=$4 ORDER BY occurred_at DESC LIMIT 6) t ORDER BY occurred_at`, [source, root, before, projectPath])
     return rows.map((row) => ({ id: row.id, source: row.source, sessionId: row.session_id, rootSessionId: row.root_session_id,
-      projectPath: row.project_path, role: row.role, timestamp: new Date(row.occurred_at).toISOString(), text: row.body.slice(0, 6000) }))
+      projectPath: row.project_path, role: row.role, timestamp: new Date(row.occurred_at).toISOString(), bodyRevision: row.body_revision, text: row.body.slice(0, 6000) }))
   }
   async projectTasks(path: string) {
     const { rows } = await this.pool.query('SELECT * FROM workbench.tasks WHERE project_path=$1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100', [path])
     return rows.map(taskFromRow)
   }
-  batchId(messages: SourceMessage[]) { return digest(`v1:${messages.map((message) => message.id).join(':')}`) }
+  batchId(messages: SourceMessage[]) { return digest(`v2:${messages.map((message) => `${message.id}:${message.bodyRevision ?? 1}:${digest(message.text)}`).join(':')}`) }
   async startBatch(id: string, key: string, messages: SourceMessage[]) {
     const { rows } = await this.pool.query(`INSERT INTO workbench.extraction_batches(id,session_key,message_ids,status,attempts)
       VALUES($1,$2,$3,'running',1) ON CONFLICT(id) DO UPDATE SET status='running',attempts=workbench.extraction_batches.attempts+1,updated_at=now()
@@ -199,12 +235,18 @@ export class Store {
       const batch = await client.query('SELECT status FROM workbench.extraction_batches WHERE id=$1 FOR UPDATE', [batchId])
       if (batch.rows[0]?.status === 'succeeded') return { created: 0, updated: 0 }
       if (!batch.rowCount) throw new Error('抽取批次不存在')
+      const current = await client.query('SELECT id,body,valid,body_revision FROM workbench.source_messages WHERE id=ANY($1::text[]) FOR SHARE', [[...evidenceMessages.keys()]])
+      const versions = new Map(current.rows.map((row) => [row.id, row]))
+      for (const message of evidenceMessages.values()) {
+        const row = versions.get(message.id)
+        if (!row || !row.valid || (message.bodyRevision ? message.bodyRevision !== row.body_revision : row.body !== message.text)) throw new Error('来源正文已修改或撤回，下次同步将重新核对')
+      }
       let created = 0, updated = 0
       for (const item of items) {
         const evidence: Evidence[] = item.evidenceIds.map((id) => {
           const message = evidenceMessages.get(id)
           if (!message) throw new Error('模型返回了不存在的来源证据')
-          return { messageId: id, sessionId: message.sessionId, source: message.source, projectPath: message.projectPath, timestamp: message.timestamp, quote: message.text.slice(0, 700) }
+          return { messageId: id, sessionId: message.sessionId, source: message.source, projectPath: message.projectPath, timestamp: message.timestamp, quote: message.text.slice(0, 700), valid: true }
         })
         const first = evidence.reduce((a, b) => a.timestamp < b.timestamp ? a : b)
         const last = evidence.reduce((a, b) => a.timestamp > b.timestamp ? a : b)
@@ -214,9 +256,9 @@ export class Store {
         if (existing.rows[0]) {
           const task = existing.rows[0]
           if (task.project_path !== first.projectPath || requiresManualCompletion(task.source)) throw new Error('模型尝试修改其他项目、手工事项或禅道任务')
-          const merged = [...task.evidence as Evidence[], ...evidence].filter((entry, index, all) => all.findIndex((other) => other.messageId === entry.messageId) === index)
-          await client.query(`UPDATE workbench.tasks SET title=CASE WHEN status_origin='manual' THEN title ELSE $2 END,
-            completed_at=CASE WHEN status_origin='manual' THEN completed_at ELSE $3 END,evidence=$4,
+          const merged = [...task.evidence as Evidence[], ...evidence].filter((entry, index, all) => all.findIndex((other) => other.messageId === entry.messageId && other.quote === entry.quote && other.valid === entry.valid) === index)
+          await client.query(`UPDATE workbench.tasks SET title=CASE WHEN status_origin='manual' OR recorded_at>$5::timestamptz THEN title ELSE $2 END,
+            completed_at=CASE WHEN status_origin='manual' OR recorded_at>$5::timestamptz THEN completed_at ELSE $3 END,evidence=$4,evidence_stale=CASE WHEN recorded_at>$5::timestamptz THEN evidence_stale ELSE false END,
             recorded_at=greatest(recorded_at,$5::timestamptz),updated_at=now() WHERE id=$1`, [id, item.title, completed, JSON.stringify(merged), last.timestamp])
           updated++
         } else {
@@ -232,6 +274,91 @@ export class Store {
       await client.query("UPDATE workbench.extraction_batches SET status='succeeded',error=NULL,updated_at=now() WHERE id=$1", [batchId])
       return { created, updated }
     })
+  }
+  private async invalidateEvidence(client: PoolClient, ids: string[], reason: 'edited' | 'withdrawn') {
+    if (!ids.length) return
+    await client.query(`UPDATE workbench.tasks t SET evidence=(SELECT jsonb_agg(CASE WHEN entry->>'messageId'=ANY($1::text[])
+      THEN entry||jsonb_build_object('valid',false,'invalidReason',$2::text) ELSE entry END) FROM jsonb_array_elements(t.evidence) entry),
+      evidence_stale=true,completed_at=CASE WHEN status_origin='manual' THEN completed_at ELSE NULL END,updated_at=now()
+      WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(t.evidence) entry WHERE entry->>'messageId'=ANY($1::text[]) AND coalesce(entry->>'valid','true')='true')`, [ids, reason])
+  }
+  async snapshotTasks(day: string) {
+    const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns} FROM workbench.tasks WHERE deleted_at IS NULL
+      AND ((source IN ('manual','zentao') AND completed_at IS NULL) OR (${recordDateSql})=$1::date)
+      ORDER BY created_at DESC,id`, [day])
+    return rows.map(taskFromRow)
+  }
+  async recordedDays(): Promise<string[]> {
+    const { rows } = await this.pool.query(`SELECT DISTINCT to_char(${recordDateSql},'YYYY-MM-DD') AS day FROM workbench.tasks WHERE deleted_at IS NULL AND ${recordDateSql} IS NOT NULL ORDER BY day DESC`)
+    return rows.map((row) => row.day)
+  }
+  async dataVersion(): Promise<string> {
+    const { rows } = await this.pool.query(`SELECT greatest(
+      (SELECT max(updated_at) FROM workbench.tasks),(SELECT max(updated_at) FROM workbench.daily_reports),
+      (SELECT max(updated_at) FROM workbench.periodic_reports))::text AS version`)
+    return rows[0].version ?? 'empty'
+  }
+  async recordPage(input: RecordQuery): Promise<RecordPage> {
+    const limit = input.limit ?? 50, offset = input.offset ?? 0
+    const params = [input.startDate ?? null, input.endDate ?? null, input.onlyRecords ?? false]
+    const where = `deleted_at IS NULL
+      AND ($1::date IS NULL OR coalesce(${recordDateSql},(created_at AT TIME ZONE 'Asia/Shanghai')::date)>=$1)
+      AND ($2::date IS NULL OR coalesce(${recordDateSql},(created_at AT TIME ZONE 'Asia/Shanghai')::date)<=$2) AND (NOT $3::boolean OR ${recordDateSql} IS NOT NULL)`
+    const count = await this.pool.query(`SELECT count(*)::int AS count FROM workbench.tasks WHERE ${where}`, params)
+    const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns} FROM workbench.tasks WHERE ${where}
+      ORDER BY coalesce(recorded_at,completed_at,created_at) DESC,id LIMIT $4 OFFSET $5`, [...params, limit, offset])
+    return { tasks: rows.map(taskFromRow), total: count.rows[0].count, offset, limit }
+  }
+  async taskEvidence(id: string): Promise<Evidence[] | null> {
+    const { rows } = await this.pool.query('SELECT evidence FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
+    return rows[0]?.evidence ?? null
+  }
+  async periodTasks(_startDate: string, _endDate: string): Promise<Task[]> {
+    // 原版聚合包含周期结束前的未完成事项与全局项目统计，由领域逻辑筛选。
+    const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns} FROM workbench.tasks WHERE deleted_at IS NULL ORDER BY created_at DESC,id`)
+    return rows.map(taskFromRow)
+  }
+  async periodicReports(): Promise<PeriodicReportModel[]> {
+    return (await this.pool.query('SELECT data FROM workbench.periodic_reports ORDER BY type,period_key')).rows.map((row) => row.data)
+  }
+  async periodicReport(type: 'weekly' | 'monthly', key: string): Promise<PeriodicReportModel | null> {
+    return (await this.pool.query('SELECT data FROM workbench.periodic_reports WHERE type=$1 AND period_key=$2', [type, key])).rows[0]?.data ?? null
+  }
+  async savePeriodicReport(report: PeriodicReportModel, expectedRevision: number): Promise<PeriodicReportModel | null> {
+    const data = { ...report, revision: expectedRevision + 1 }
+    const result = expectedRevision === 0
+      ? await this.pool.query(`INSERT INTO workbench.periodic_reports(type,period_key,data,revision) VALUES($1,$2,$3,1) ON CONFLICT DO NOTHING RETURNING data`, [report.type, report.periodKey, JSON.stringify(data)])
+      : await this.pool.query(`UPDATE workbench.periodic_reports SET data=$3,revision=revision+1,updated_at=now() WHERE type=$1 AND period_key=$2 AND revision=$4 RETURNING data`, [report.type, report.periodKey, JSON.stringify(data), expectedRevision])
+    return result.rows[0]?.data ?? null
+  }
+  async scheduleCheckpoint(): Promise<string | null> {
+    return (await this.pool.query("SELECT value FROM workbench.settings WHERE key='report_schedule_checkpoint'")).rows[0]?.value ?? null
+  }
+  async enqueueReportJobs(jobs: ReportJob[], checkpoint: string) {
+    await this.transaction(async (client) => {
+      for (const job of jobs) await client.query(`INSERT INTO workbench.report_jobs(id,kind,day,period_key,scheduled_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`, [job.id, job.kind, job.day, job.periodKey, job.scheduledAt])
+      await client.query(`INSERT INTO workbench.settings(key,value) VALUES('report_schedule_checkpoint',$1) ON CONFLICT(key) DO UPDATE SET value=greatest(workbench.settings.value,excluded.value)`, [checkpoint])
+    })
+  }
+  async claimReportJob(kinds: string[], token: string): Promise<ReportJob | null> {
+    const { rows } = await this.pool.query(`UPDATE workbench.report_jobs SET status='running',attempts=attempts+1,lease_token=$2,lease_until=now()+interval '10 minutes'
+      WHERE id=(SELECT id FROM workbench.report_jobs WHERE kind=ANY($1::text[]) AND
+      ((status IN ('pending','failed') AND next_attempt_at<=now()) OR (status='running' AND lease_until<now()))
+      ORDER BY scheduled_at,CASE kind WHEN 'daily' THEN 0 ELSE 1 END LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING *`, [kinds, token])
+    return rows[0] ? jobFromRow(rows[0]) : null
+  }
+  async finishReportJob(id: string, token: string, status: 'succeeded' | 'failed' | 'skipped', error: string | null = null) {
+    await this.pool.query(`UPDATE workbench.report_jobs SET status=$3,last_error=$4,finished_at=now(),lease_until=NULL,
+      next_attempt_at=now()+make_interval(mins=>least(60,5*attempts)) WHERE id=$1 AND lease_token=$2`, [id, token, status, error])
+  }
+  async renewReportJob(id: string, token: string) {
+    await this.pool.query("UPDATE workbench.report_jobs SET lease_until=now()+interval '10 minutes' WHERE id=$1 AND lease_token=$2 AND status='running'", [id, token])
+  }
+  async retryReportJob(id: string): Promise<boolean> {
+    return Boolean((await this.pool.query("UPDATE workbench.report_jobs SET status='pending',next_attempt_at=now(),last_error=NULL WHERE id=$1 AND status IN ('failed','skipped') RETURNING id", [id])).rowCount)
+  }
+  async reportJobs(): Promise<ReportJob[]> {
+    return (await this.pool.query('SELECT * FROM workbench.report_jobs ORDER BY scheduled_at DESC LIMIT 30')).rows.map(jobFromRow)
   }
   async saveRun(run: SyncRun) {
     await this.pool.query('INSERT INTO workbench.sync_runs(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [run.id, JSON.stringify(run)])

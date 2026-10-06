@@ -60,3 +60,8 @@ tmp/imagegen/
 *.iconset/
 # Gemini 会话历史及本机项目映射副本
 gemini-records/
+
+# 隔离数据库测试与本机性能诊断产物
+/test-artifacts/
+*.heapsnapshot
+*.cpuprofile

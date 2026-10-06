@@ -7,14 +7,18 @@ import { Store } from './store.js'
 import { SyncService } from './sync.js'
 import { HarnessExtractor } from './harness.js'
 import { DailyReportError, DailyReportService } from './dailyReport.js'
+import { PeriodicReportError, PeriodicReportService } from './periodicReport.js'
+import type { ReportAutomation } from './reportAutomation.js'
 import { SettingsError } from './settings.js'
+import { isRecordInReport } from '../shared/dailyReports.js'
 import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
   title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable() })
 
 export async function createApp(config: Config, store: Store, sync: SyncService,
-  reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config))) {
+  reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config)),
+  periodic = new PeriodicReportService(store), automation?: ReportAutomation) {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 })
   app.addHook('onClose', () => reports.close())
   app.addHook('onRequest', async (request, reply) => {
@@ -33,7 +37,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     }
   })
   app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof SettingsError) return reply.code(error.statusCode).send({ error: error.message })
+    if (error instanceof SettingsError || error instanceof PeriodicReportError) return reply.code(error.statusCode).send({ error: error.message })
     const status = error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 500
     void reply.code(status).send({ error: status === 400 ? '请求数据无效，请检查输入内容' : status === 409 && error instanceof Error ? error.message : '请求失败，请检查服务或数据库连接后重试' })
   })
@@ -42,6 +46,43 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     catch { return reply.code(503).send({ status: 'unavailable' }) }
   })
   app.get('/api/workbench', () => sync.snapshot())
+  app.get('/api/records', async (request) => {
+    const query = z.object({ startDate: z.iso.date().optional(), endDate: z.iso.date().optional(), offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+      limit: z.coerce.number().int().min(1).max(100).default(50), onlyRecords: z.enum(['true','false']).optional().transform((value) => value === 'true') }).parse(request.query)
+    if (query.startDate && query.endDate && query.startDate > query.endDate) throw new PeriodicReportError('开始日期不能晚于结束日期', 400)
+    return store.recordPage(query)
+  })
+  app.get('/api/tasks/:id/evidence', async (request, reply) => {
+    const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
+    const evidence = await store.taskEvidence(id)
+    return evidence ?? reply.code(404).send({ error: '事项不存在' })
+  })
+  const periodParams = z.object({ type: z.enum(['weekly','monthly']), key: z.string().max(10) })
+  app.get('/api/periodic-reports/:type/:key', (request) => {
+    const { type, key } = periodParams.parse(request.params)
+    return periodic.read(type, key)
+  })
+  app.get('/api/periodic-reports/:type/:key/material', (request) => {
+    const { type, key } = periodParams.parse(request.params)
+    return periodic.material(type, key)
+  })
+  app.post('/api/periodic-reports/:type/:key', (request) => {
+    const { type, key } = periodParams.parse(request.params)
+    const { revision } = z.object({ revision: z.number().int().nonnegative() }).parse(request.body)
+    return periodic.generate(type, key, revision)
+  })
+  app.put('/api/periodic-reports/:type/:key', (request) => {
+    const { type, key } = periodParams.parse(request.params)
+    const { revision, markdown } = z.object({ revision: z.number().int().nonnegative(), markdown: z.string().trim().min(1).max(100_000) }).parse(request.body)
+    return periodic.edit(type, key, markdown, revision)
+  })
+  app.get('/api/report-jobs', () => store.reportJobs())
+  app.post('/api/report-jobs/:id/retry', async (request, reply) => {
+    const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
+    if (!await store.retryReportJob(id)) return reply.code(409).send({ error: '该任务已完成或正在执行，请刷新状态' })
+    automation?.wake()
+    return { queued: true }
+  })
   if (sync.settings) {
     const settings = sync.settings
     app.addHook('onSend', async (request, reply) => {
@@ -73,6 +114,11 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
   app.get('/api/daily-reports/:day', async (request) => {
     const { day } = z.object({ day: z.iso.date() }).parse(request.params)
     return store.dailyReport(day)
+  })
+  app.get('/api/daily-reports/:day/status', async (request) => {
+    const { day } = z.object({ day: z.iso.date() }).parse(request.params)
+    const [records, report] = await Promise.all([store.reportRecords(day), store.dailyReport(day)])
+    return { recordCount: records.length, unorganizedCount: records.filter((task) => !isRecordInReport(task, report)).length }
   })
   app.post('/api/daily-reports', async (request, reply) => {
     const { day, mode } = z.object({ day: z.iso.date(), mode: z.enum(['initial', 'append']).default('initial') }).parse(request.body)

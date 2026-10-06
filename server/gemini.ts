@@ -141,7 +141,7 @@ export async function readGeminiDelta(file: GeminiRecordFile, previous: Cursor |
     const role = row.type === 'user' ? 'user' : 'assistant'
     messages.push({
       // 同一正文的快照/迁移保持同 ID；正文补丁按内容版本采集，避免遗漏后续回复。
-      id: digest(`gemini:${sessionId}:${row.id}:${role}:${digest(text)}`), source: 'gemini', sessionId,
+      id: digest(`gemini:${sessionId}:${row.id}:${role}:${digest(text)}`), originKey: digest(`gemini:${sessionId}:${row.id}:${role}`), source: 'gemini', sessionId,
       rootSessionId: file.parentSessionId ?? sessionId, projectPath, role, timestamp, text,
     })
   }
@@ -149,5 +149,5 @@ export async function readGeminiDelta(file: GeminiRecordFile, previous: Cursor |
     path: file.path, source: 'gemini', inode: String(info.ino), offset, modifiedAt: Math.trunc(info.mtimeMs),
     context: { sessionId, projectPath, parentSessionId: file.parentSessionId, turnId: '' },
   }
-  return { messages, cursor, invalid, blocked, more: info.size > readSize }
+  return { messages, cursor, invalid, blocked, more: info.size > readSize, reconcile: !blocked && !invalid && offset === info.size }
 }

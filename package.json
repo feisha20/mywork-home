@@ -15,7 +15,8 @@
     "db:init": "tsx server/bootstrap.ts",
     "tasks:summarize": "tsx server/summarize.ts",
     "test:integration": "node scripts/integration.mjs",
-    "test:harness": "RUN_HARNESS_TESTS=true vitest run server/harness.integration.test.ts"
+    "test:harness": "RUN_HARNESS_TESTS=true vitest run server/harness.integration.test.ts",
+    "test:integration:local": "node scripts/integration-docker.mjs"
   },
   "dependencies": {
     "@deepseek-ai/dsh": "0.2.0-rc.2",

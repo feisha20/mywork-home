@@ -4,7 +4,7 @@ import { recordTimestamp } from '../src/domain/workbench.js'
 
 // 只跟踪实际参与日报的字段；来源证据追加但简介未变化时无需重复整理。
 export function reportRecordVersion(task: Task): string {
-  return JSON.stringify([task.title, task.projectPath ?? '', Boolean(task.completedAt), recordTimestamp(task)])
+  return JSON.stringify([task.title, task.projectPath ?? '', Boolean(task.completedAt), recordTimestamp(task), ...(task.evidenceStale ? ['来源已变更'] : [])])
 }
 
 export function isRecordInReport(task: Task, report: DailyReport | null | undefined): boolean {

@@ -106,4 +106,16 @@ describe('Gemini CLI 会话采集', () => {
     await expect(readGeminiDelta(await fixture(jsonl([user])), null, cutoff, [])).rejects.toThrow('元信息')
     await expect(readGeminiDelta(await fixture('{"sessionId":', 'json'), null, cutoff, [])).rejects.toThrow()
   })
+  it('仅完整且无坏行的可见快照允许数据库撤回，补丁沿用同一来源标识', async () => {
+    const file = await fixture(jsonl([metadata,user,assistant]))
+    const first = await readGeminiDelta(file,null,cutoff,[])
+    expect(first.reconcile).toBe(true)
+    await appendFile(file.path,jsonl([{ $patch: { id:'a1',content:'已修改正文' } }]))
+    const changed = await readGeminiDelta(file,first.cursor,cutoff,[])
+    expect(changed.messages[1].originKey).toBe(first.messages[1].originKey)
+    expect(changed.messages[1].id).not.toBe(first.messages[1].id)
+    await appendFile(file.path,'{"id":"unfinished"')
+    expect((await readGeminiDelta(file,changed.cursor,cutoff,[])).reconcile).toBe(false)
+  })
+
 })

@@ -17,6 +17,15 @@ afterEach(async () => { await rm(directory, { recursive: true, force: true }) })
 async function file(name: string, content: string) { const path = join(directory, name); await writeFile(path, content); return path }
 
 describe('通用会话字段兼容', () => {
+  it('有原消息标识的正文修改保留来源身份，缺少标识时不猜测替代关系', () => {
+    const one = normalizeGenericRecords(message('修改前'), context(), 'custom-other').messages[0]
+    const two = normalizeGenericRecords(message('修改后'), context(), 'custom-other').messages[0]
+    expect(one.id).not.toBe(two.id)
+    expect(one.originKey).toBeTruthy(); expect(two.originKey).toBe(one.originKey)
+    const withoutId = { ...message(), id: undefined }
+    expect(normalizeGenericRecords(withoutId, context(), 'custom-other').messages[0].originKey).toBeUndefined()
+  })
+
   it('自动识别 JSONL、JSON 快照和其他品牌的通用字段', () => {
     const samples = {
       codex: { type: 'session_meta', payload: { id: 'session-1', cwd: '/project' } },
@@ -157,4 +166,19 @@ describe('兼容采集与读取预览', () => {
     expect(isCompatibleDatabase(directory)).toBe(true)
     expect(await previewCompatibleRecords([directory], 'auto', undefined, [])).toMatchObject({ formats: ['Zcode 数据库'], checkedFiles: 1, compatibleFiles: 1 })
   })
+  it('通用 JSONL 完整末行无需换行，真正半行保留游标等待补齐', async () => {
+    const row = { id:'final',sessionId:'export',role:'user',timestamp:at,content:'完整末行' }
+    const path = await file('chat.jsonl',JSON.stringify(row))
+    const record = (await classifyCompatibleFile(path,'generic'))!
+    const complete = await readCompatibleDelta(record,'custom-export',null,cutoff,[])
+    expect(complete.messages.map((message) => message.text)).toEqual(['完整末行'])
+    expect(complete.cursor.offset).toBe(Buffer.byteLength(JSON.stringify(row)))
+    const partialPath = await file('half.jsonl',JSON.stringify(row).slice(0,-2))
+    const partialRecord = (await classifyCompatibleFile(partialPath,'generic'))!
+    const half = await readCompatibleDelta(partialRecord,'custom-export',null,cutoff,[])
+    expect(half.messages).toEqual([]); expect(half.cursor.offset).toBe(0)
+    await appendFile(partialPath,JSON.stringify(row).slice(-2))
+    expect((await readCompatibleDelta(partialRecord,'custom-export',half.cursor,cutoff,[])).messages).toHaveLength(1)
+  })
+
 })

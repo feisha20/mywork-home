@@ -10,6 +10,8 @@ export interface Evidence {
   projectPath: string
   timestamp: string
   quote: string
+  valid?: boolean
+  invalidReason?: 'edited' | 'withdrawn'
 }
 
 export interface DailyReportItem {
@@ -48,6 +50,8 @@ export interface SyncRun {
 
 export interface WorkbenchSnapshot {
   version: 1
+  recordedDays?: string[]
+  dataVersion?: string
   tasks: Task[]
   dailyReports: DailyReport[]
   harness: { run: SyncRun | null; nextSyncAt: string | null; model: string; intervalMs?: number; autoSyncEnabled?: boolean }
@@ -56,3 +60,17 @@ export interface WorkbenchSnapshot {
 }
 
 export interface SourceStatus { available: boolean; sessionCount: number; error: string | null; enabled?: boolean; collector?: string }
+
+export interface RecordQuery {
+  onlyRecords?: boolean
+  startDate?: string
+  endDate?: string
+  offset?: number
+  limit?: number
+}
+export interface RecordPage { tasks: Task[]; total: number; offset: number; limit: number }
+export interface ReportJob {
+  id: string; kind: 'daily' | 'weekly' | 'monthly'; day: string; periodKey: string
+  scheduledAt: string; status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'
+  attempts: number; error: string | null; finishedAt: string | null
+}

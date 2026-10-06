@@ -9,6 +9,7 @@ import { settingsDraft } from '../src/domain/settings.js'
 import type { Cursor, SourceMessage } from './records.js'
 import type { Store } from './store.js'
 import type { SyncRun } from '../shared/contracts.js'
+import * as compatibleRecords from './compatibleRecords.js'
 import { EMPTY_RECORD_MAPPING } from '../shared/settings.js'
 
 let directory: string
@@ -38,11 +39,14 @@ function memoryStore() {
       for (const message of input) if (!messages.has(message.id)) { messages.set(message.id, message); added++ }
       cursors.set(cursor.path, cursor); return added
     },
-    sourceCounts: async () => [], pendingMessages: async () => [...messages.values()].filter((message) => !extracted.has(message.id)),
+    sourceCounts: async () => [], pendingMessages: async (sources?: string[], after?: { timestamp: string; id: string }, limit = 500) => [...messages.values()]
+      .filter((message) => !extracted.has(message.id) && (!sources || sources.includes(message.source))
+        && (!after || message.timestamp > after.timestamp || message.timestamp === after.timestamp && message.id > after.id))
+      .sort((a,b) => a.timestamp.localeCompare(b.timestamp) || a.id.localeCompare(b.id)).slice(0,limit),
     resolveRoot: async (_source: string, session: string) => session, batchId: (batch: SourceMessage[]) => batch.map((message) => message.id).join(','),
     startBatch: async () => true, contextMessages: async () => [], projectTasks: async () => [],
     applyExtraction: async (_id: string, batch: SourceMessage[]) => { batch.forEach((message) => extracted.add(message.id)); return { created: 0, updated: 0 } },
-    tasks: async () => [], dailyReports: async () => [],
+    tasks: async () => [], snapshotTasks: async () => [], dataVersion: async () => 'fixture', recordedDays: async () => [], dailyReports: async () => [],
   } as unknown as Store
   return { store, messages, cursors }
 }
@@ -176,4 +180,59 @@ describe('设置驱动采集', () => {
       await settings.save(stopped); expect(sync.nextSyncAt).toBeNull()
     } finally { release(); await sync.close() }
   })
+  it('未变化的自定义文件不再采样，重启复用格式缓存，字段变化后重新识别', async () => {
+    const { config,settings } = await prepare()
+    const input = settingsDraft(settings.view())
+    input.channels.push({ id:'custom-cache',name:'缓存验证',logo:'',collector:'auto',pathMode:'manual',paths:[join(directory,'records')],enabled:true })
+    await settings.save(input)
+    const { store } = memoryStore(), classify = vi.spyOn(compatibleRecords,'classifyCompatibleFile')
+    const sync = new SyncService(store,config,{ extract:async () => [],close:async () => {} },settings)
+    try {
+      await sync.start(); await sync.trigger(); await finish(sync)
+      const count = classify.mock.calls.length; expect(count).toBeGreaterThan(0)
+      await sync.trigger(); await finish(sync); expect(classify.mock.calls).toHaveLength(count)
+      await sync.close()
+      const restarted = new SyncService(store,config,{ extract:async () => [],close:async () => {} },settings)
+      try {
+        await restarted.start(); await restarted.trigger(); await finish(restarted)
+        expect(classify.mock.calls).toHaveLength(count)
+        const changed = settingsDraft(settings.view()); changed.channels.at(-1)!.mapping = { ...EMPTY_RECORD_MAPPING,text:'body.text' }
+        await settings.save(changed); await restarted.trigger(); await finish(restarted)
+        expect(classify.mock.calls.length).toBeGreaterThan(count)
+      } finally { await restarted.close() }
+    } finally { await sync.close(); classify.mockRestore() }
+  })
+
+  it('超过一页的积压消息完整抽取，失败会话不越过前文，停用来源不混入分页', async () => {
+    const { config, settings } = await prepare()
+    const input = settingsDraft(settings.view()), channel = input.channels.find((row) => row.id === 'codex')!
+    channel.enabled = true; channel.paths = [join(directory, 'empty')]; await mkdir(channel.paths[0])
+    await settings.save(input)
+    const { store, messages } = memoryStore(), timestamp = new Date().toISOString()
+    for (let i = 0; i < 520; i++) {
+      const id = `message-${String(i).padStart(4,'0')}`
+      messages.set(id, { id, source:'codex', sessionId:'large', rootSessionId:'large', projectPath:'/large', role:'user', timestamp, text:'一项新增工作' })
+    }
+    const disabled = { ...messages.values().next().value!, id:'disabled', source:'claude' }
+    messages.set(disabled.id,disabled)
+    const visited: string[] = [], extract = vi.fn(async (batch: SourceMessage[]) => { visited.push(...batch.map((message) => message.id)); return [] })
+    const sync = new SyncService(store,config,{ extract,close:async () => {} },settings)
+    try {
+      await sync.start(); await sync.trigger(); await finish(sync)
+      expect(visited).toHaveLength(520); expect(new Set(visited).size).toBe(520); expect(visited).not.toContain('disabled')
+      expect((await store.pendingMessages()).map((message) => message.id)).toEqual(['disabled'])
+      // 同会话失败后，其第二页仍留待重试，不能直接使用缺失的上下文继续抽取。
+      for (let i=0; i<520; i++) {
+        const id=`retry-${String(i).padStart(4,'0')}`
+        messages.set(id,{ ...disabled,id,source:'codex',sessionId:'failed',rootSessionId:'failed' })
+      }
+      store.failBatch = async () => {}
+      extract.mockImplementation(async () => { throw new Error('模型输出未通过校验') })
+      const calls = extract.mock.calls.length
+      await sync.trigger(); await vi.waitFor(async () => expect((await store.latestRun())?.status).toBe('partial_failed'),{ interval:10 })
+      expect(extract.mock.calls.length-calls).toBe(1)
+      expect(await store.pendingMessages(['codex'],undefined,1000)).toHaveLength(520)
+    } finally { await sync.close() }
+  })
+
 })

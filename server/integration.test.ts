@@ -15,6 +15,8 @@ import type { Extractor } from './harness.js'
 import type { SourceMessage, Cursor } from './records.js'
 import { dateKey, recordsForDate } from '../src/domain/workbench.js'
 import { DailyReportService } from './dailyReport.js'
+import { PeriodicReportScheduler } from './periodicReportScheduler.js'
+import { PeriodicReportService } from './periodicReport.js'
 import { isRecordInReport } from '../shared/dailyReports.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
@@ -108,7 +110,8 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     const other = new Store(pool)
     expect((await other.reportRecords(day)).every((task) => task.evidence === undefined)).toBe(true)
     expect(await other.dailyReport(day)).toEqual(first)
-    expect((await sync.snapshot()).dailyReports).toContainEqual(first)
+    expect(await other.dailyReports(day, day)).toContainEqual(first)
+    expect((await sync.snapshot()).dailyReports.every((report) => report.day === dateKey(new Date()))).toBe(true)
     const added = { ...original, id: randomUUID(), title: '补充测试计划导出' }
     await store.importTasks([added])
     const count = reportInputs.length
@@ -259,15 +262,23 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
   it('无法入库的坏日志只失败两次，文件修复后重新采集，同行有效文件不受影响', async () => {
     const id = randomUUID(), project = `/__workbench_test__/${id}`, file = join(directory, 'claude', `${id}.jsonl`)
     const content = (text: string) => JSON.stringify({ type: 'user', uuid: randomUUID(), sessionId: id, cwd: project, timestamp: new Date().toISOString(), message: { content: text } }) + '\n'
-    await writeFile(file, content('损坏\u0000内容'))
-    expect((await waitRun()).status).toBe('partial_failed')
-    expect((await waitRun()).ignoredFiles).toBe(1)
-    expect((await store.cursor(file))).toBeNull()
-    expect((await waitRun()).errors).toEqual([])
-    await writeFile(file, content('已修复的有效内容'))
-    const recovered = await waitRun()
-    expect(recovered.status).toBe('succeeded'); expect(recovered.newMessages).toBe(1)
-    expect(await store.projectTasks(project)).toHaveLength(1)
+    // 用隔离库的真实 NOT NULL 约束模拟无法入库的正文；空字符已在采集时修复。
+    await pool.query(`CREATE FUNCTION workbench.fixture_reject_message() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.body='损坏内容' THEN NEW.body=NULL; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER fixture_reject_message BEFORE INSERT ON workbench.source_messages FOR EACH ROW EXECUTE FUNCTION workbench.fixture_reject_message();`)
+    try {
+      await writeFile(file, content('损坏内容'))
+      expect((await waitRun()).status).toBe('partial_failed')
+      expect((await waitRun()).ignoredFiles).toBe(1)
+      expect((await store.cursor(file))).toBeNull()
+      expect((await waitRun()).errors).toEqual([])
+      await writeFile(file, content('已修复的有效内容'))
+      const recovered = await waitRun()
+      expect(recovered.status).toBe('succeeded'); expect(recovered.newMessages).toBe(1)
+      expect(await store.projectTasks(project)).toHaveLength(1)
+    } finally {
+      await pool.query('DROP TRIGGER fixture_reject_message ON workbench.source_messages; DROP FUNCTION workbench.fixture_reject_message();')
+    }
   })
   it('已跳过的坏行只作统计，数据库断连不会进入日志忽略清单', async () => {
     const id = randomUUID(), file = join(directory, 'claude', `${id}.jsonl`)
@@ -332,4 +343,150 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
       await pool.query('DELETE FROM workbench.source_sessions WHERE source=$1', [source])
     }
   })
+  it('周月报生成、人工编辑、重读与版本冲突形成数据库闭环', async () => {
+    const url = '/api/periodic-reports/monthly/2026-08'
+    expect((await app.inject({ url })).json()).toBeNull()
+    const created = await app.inject({ method: 'POST', url, payload: { revision: 0 } })
+    expect(created.statusCode).toBe(200)
+    expect(created.json().revision).toBe(1)
+    expect((await new Store(pool).periodicReport('monthly','2026-08'))?.markdown).toBe(created.json().markdown)
+    const markdown = '# 我修改的月报\n\n人工确认的交付成果。'
+    expect((await app.inject({ method: 'PUT', url, payload: { revision: 1, markdown } })).json().revision).toBe(2)
+    expect((await app.inject({ url })).json()).toMatchObject({ markdown, edited: true, revision: 2 })
+    expect((await app.inject({ method: 'PUT', url, payload: { revision: 1, markdown: '过期正文' } })).statusCode).toBe(409)
+    const scheduler = new PeriodicReportScheduler(store, { subscribe: () => () => {} } as import('./settings.js').SettingsService)
+    try {
+      await scheduler.triggerMonthly('2026-08-31')
+      expect((await store.periodicReport('monthly','2026-08'))?.markdown).toBe(markdown)
+      await scheduler.triggerWeekly('2026-07-03')
+      expect((await store.periodicReport('weekly','2026-W27'))?.revision).toBe(1)
+    } finally { await scheduler.close() }
+    for (const bad of ['/api/periodic-reports/weekly/2026-W99','/api/periodic-reports/monthly/2026-13']) expect((await app.inject({ url: bad })).statusCode).toBe(400)
+  })
+  it('旧优化自动稿恢复原版后仍保存到数据库，人工报告不覆盖', async () => {
+    const service=new PeriodicReportService(store)
+    const original=await service.generate('monthly','2026-06',0)
+    const legacy={...original,markdown:'旧优化的项目拼接正文',sourceVersion:'本地测试版本'}
+    await store.savePeriodicReport(legacy,1)
+    const before=await store.periodicReport('monthly','2026-08')
+    await service.restoreOriginalFormat()
+    expect(await new Store(pool).periodicReport('monthly','2026-06')).toMatchObject({revision:3,markdown:original.markdown})
+    expect(await store.periodicReport('monthly','2026-08')).toEqual(before)
+    await service.restoreOriginalFormat()
+    expect((await store.periodicReport('monthly','2026-06'))?.revision).toBe(3)
+  })
+  it('来源正文编辑重置抽取版本，旧证据失效，新证据核对后恢复', async () => {
+    const id = randomUUID(), project = `/__source_version__/${id}`, at = '2026-09-15T02:00:00Z'
+    const message: SourceMessage = { id, source: 'zcode', sessionId: id, rootSessionId: id, projectPath: project, role: 'assistant', timestamp: at, text: '已完成旧方案' }
+    const cursor: Cursor = { path: `version:${id}`, source: 'zcode', inode: '1', offset: 1, modifiedAt: 1, context: { sessionId: id, projectPath: project, parentSessionId: null, turnId: '' } }
+    await store.ingest([message], cursor)
+    const batch = store.batchId([message]); await store.startBatch(batch, id, [message])
+    await store.applyExtraction(batch, [message], [], [{ title: '旧方案完成', status: 'completed', evidenceIds: [id] }])
+    const task = (await store.projectTasks(project))[0]
+    const edited = { ...message, text: '旧方案已撤销，正在调整新方案' }
+    expect(await store.ingest([edited], cursor)).toBe(1)
+    const changed = (await store.projectTasks(project))[0]
+    expect(changed).toMatchObject({ evidenceStale: true, completedAt: null })
+    expect(changed.evidence?.[0]).toMatchObject({ valid: false, invalidReason: 'edited' })
+    const pending = (await store.pendingMessages(['zcode'])).find((entry) => entry.id === id)!
+    expect(pending.bodyRevision).toBe(2); expect(pending.text).toBe(edited.text)
+    const nextBatch = store.batchId([pending]); expect(nextBatch).not.toBe(batch)
+    await store.startBatch(nextBatch, id, [pending])
+    await store.applyExtraction(nextBatch, [pending], [], [{ taskId: task.id, title: '正在调整新方案', status: 'todo', evidenceIds: [id] }])
+    const verified = (await store.projectTasks(project))[0]
+    expect(verified).toMatchObject({ evidenceStale: false, title: '正在调整新方案' })
+    expect(verified.evidence?.some((entry) => entry.valid === true && entry.quote === edited.text)).toBe(true)
+    expect(await store.ingest([edited], cursor)).toBe(0)
+  })
+  it('完整快照撤回会使来源证据失效，半份快照不会撤回', async () => {
+    const id = randomUUID(), project = `/__source_withdrawn__/${id}`
+    const message: SourceMessage = { id, source: 'gemini', sessionId: id, rootSessionId: id, projectPath: project, role: 'assistant', timestamp: new Date().toISOString(), text: '已完成来源工作', originKey: id }
+    const cursor: Cursor = { path: `visible:${id}`, source: 'gemini', inode: '1', offset: 100, modifiedAt: 1, context: { sessionId: id, projectPath: project, parentSessionId: null, turnId: '' } }
+    await store.ingest([message], cursor, true)
+    const batch = store.batchId([message]); await store.startBatch(batch, id, [message])
+    await store.applyExtraction(batch, [message], [], [{ title: '完成来源工作', status: 'completed', evidenceIds: [id] }])
+    await store.ingest([], cursor, false)
+    expect((await store.projectTasks(project))[0].evidenceStale).toBe(false)
+    await store.ingest([], cursor, true)
+    const task = (await store.projectTasks(project))[0]
+    expect(task).toMatchObject({ evidenceStale: true, completedAt: null })
+    expect(task.evidence?.[0]).toMatchObject({ valid: false, invalidReason: 'withdrawn' })
+    expect((await store.pendingMessages(['gemini'])).some((row) => row.id === id)).toBe(false)
+    // 可见历史回退后又恢复相同正文时，也必须产生新的抽取版本。
+    expect(await store.ingest([message],cursor,true)).toBe(1)
+    const restored = (await store.pendingMessages(['gemini'])).find((row) => row.id === id)!
+    expect(restored.bodyRevision).toBe(2)
+    const restoredBatch = store.batchId([restored]); expect(restoredBatch).not.toBe(batch)
+    expect(await store.startBatch(restoredBatch,id,[restored])).toBe(true)
+    await store.applyExtraction(restoredBatch,[restored],[],[{ taskId:task.id,title:'恢复并确认来源工作',status:'completed',evidenceIds:[id] }])
+    expect((await store.projectTasks(project))[0]).toMatchObject({ evidenceStale:false,completedAt:message.timestamp })
+
+  })
+  it('抽取保存时拒绝已变化来源，较旧进展不覆盖较新状态', async () => {
+    const id = randomUUID(), project = `/__source_race__/${id}`
+    const message: SourceMessage = { id, source: 'claude', sessionId: id, rootSessionId: id, projectPath: project, role: 'assistant', timestamp: '2026-09-18T02:00:00Z', text: '正在实施旧方案' }
+    const cursor: Cursor = { path: `race:${id}`, source: 'claude', inode: '1', offset: 1, modifiedAt: 1, context: { sessionId: id, projectPath: project, parentSessionId: null, turnId: '' } }
+    await store.ingest([message], cursor)
+    const batch = store.batchId([message]); await store.startBatch(batch, id, [message])
+    await store.ingest([{ ...message, text: '旧方案已变更' }], cursor)
+    await expect(store.applyExtraction(batch, [message], [], [{ title: '过期方案', status: 'todo', evidenceIds: [id] }])).rejects.toThrow('来源正文已修改或撤回')
+    expect(await store.projectTasks(project)).toHaveLength(0)
+    const newer = { ...message, id: randomUUID(), timestamp: '2026-09-19T02:00:00Z', text: '已完成新方案' }
+    await store.ingest([newer], cursor)
+    const newBatch = store.batchId([newer]); await store.startBatch(newBatch, id, [newer])
+    await store.applyExtraction(newBatch, [newer], [], [{ title: '完成新方案', status: 'completed', evidenceIds: [newer.id] }])
+    const task = (await store.projectTasks(project))[0]
+    const older = { ...message, id: randomUUID() }; await store.ingest([older], cursor)
+    const oldBatch = store.batchId([older]); await store.startBatch(oldBatch, id, [older])
+    await store.applyExtraction(oldBatch, [older], [], [{ taskId: task.id, title: '旧的进行中状态', status: 'todo', evidenceIds: [older.id] }])
+    expect((await store.projectTasks(project))[0]).toMatchObject({ title: '完成新方案', completedAt: '2026-09-19T02:00:00.000Z' })
+  })
+  it('日历按日期分页不携带证据，首页只读取当日与待办，证据单独读取', async () => {
+    const all = await store.recordPage({ startDate: '2026-09-15', endDate: '2026-09-19', limit: 1 })
+    expect(all.total).toBeGreaterThan(1); expect(all.tasks).toHaveLength(1); expect(all.tasks[0].evidence).toBeUndefined()
+    const second = await store.recordPage({ startDate: '2026-09-15', endDate: '2026-09-19', limit: 1, offset: 1 })
+    expect(second.tasks[0].id).not.toBe(all.tasks[0].id)
+    expect((await app.inject({ url: `/api/tasks/${all.tasks[0].id}/evidence` })).json().length).toBeGreaterThan(0)
+    const snapshot = (await app.inject({ url: '/api/workbench' })).json()
+    expect(snapshot.tasks.every((task: import('../src/domain/workbench.js').Task) => task.evidence === undefined)).toBe(true)
+    expect(snapshot.recordedDays).toContain('2026-09-15')
+    expect((await app.inject({ url: '/api/projects' })).statusCode).toBe(404)
+    expect((await app.inject({ url: '/api/records?startDate=2026-10-10&endDate=2026-10-01' })).statusCode).toBe(400)
+  })
+  it('正文版本更替保留旧引用，只有当前版本参与后续抽取', async () => {
+    const id = randomUUID(), project = `/__origin_version__/${id}`, timestamp = '2026-09-17T02:00:00Z'
+    const one: SourceMessage = { id:`${id}:1`,source:'custom-version',sessionId:id,rootSessionId:id,projectPath:project,role:'assistant',timestamp,text:'完成原方案',originKey:id }
+    const cursor: Cursor = { path:`origin:${id}`,source:one.source,inode:'1',offset:1,modifiedAt:1,context:{sessionId:id,projectPath:project,parentSessionId:null,turnId:''} }
+    await store.ingest([one],cursor)
+    const batch=store.batchId([one]); await store.startBatch(batch,id,[one]); await store.applyExtraction(batch,[one],[],[{title:'完成原方案',status:'completed',evidenceIds:[one.id]}])
+    const task=(await store.projectTasks(project))[0]
+    const two={...one,id:`${id}:2`,text:'撤销原方案，正在继续处理'}
+    await store.ingest([two],cursor)
+    expect((await store.pendingMessages([one.source])).map((row) => row.id)).toEqual([two.id])
+    expect((await store.projectTasks(project))[0].evidence?.[0]).toMatchObject({valid:false,invalidReason:'edited'})
+    const next=store.batchId([two]); await store.startBatch(next,id,[two]); await store.applyExtraction(next,[two],[],[{taskId:task.id,title:'继续处理新方案',status:'todo',evidenceIds:[two.id]}])
+    const verified=(await store.projectTasks(project))[0]
+    expect(verified.evidenceStale).toBe(false); expect(verified.evidence?.filter((row) => row.valid)).toHaveLength(1)
+  })
+  it('自动任务跨实例领取互斥，租约恢复和手动重试保留执行结果', async () => {
+    const id = `fixture:${randomUUID()}`
+    const job: import('../shared/contracts.js').ReportJob = { id, kind: 'daily', day: '2026-09-20', periodKey: '2026-09-20', scheduledAt: '2026-09-20T10:00:00Z', status: 'pending', attempts: 0, error: null, finishedAt: null }
+    await store.enqueueReportJobs([job], new Date().toISOString())
+    await store.enqueueReportJobs([job], new Date().toISOString())
+    expect(await store.claimReportJob(['monthly'],'disabled')).toBeNull()
+    const [one,two] = await Promise.all([store.claimReportJob(['daily'],'one'),new Store(pool).claimReportJob(['daily'],'two')])
+    expect([one,two].filter(Boolean)).toHaveLength(1)
+    const token = one ? 'one' : 'two'
+    await pool.query("UPDATE workbench.report_jobs SET lease_until=now()-interval '1 minute' WHERE id=$1",[id])
+    const recovered = await store.claimReportJob(['daily'],'recovered')
+    expect(recovered?.attempts).toBe(2)
+    await store.finishReportJob(id,token,'succeeded')
+    expect((await store.reportJobs()).find((row) => row.id === id)?.status).toBe('running')
+    await store.finishReportJob(id,'recovered','failed','本地测试错误')
+    expect((await app.inject({ method: 'POST', url: `/api/report-jobs/${encodeURIComponent(id)}/retry`, payload: {} })).statusCode).toBe(200)
+    expect((await store.claimReportJob(['daily'],'retry'))?.attempts).toBe(3)
+    await store.finishReportJob(id,'retry','succeeded')
+    expect(await store.retryReportJob(id)).toBe(false)
+  })
+
 })

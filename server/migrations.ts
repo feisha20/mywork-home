@@ -53,6 +53,34 @@ CREATE TABLE workbench.record_failures (
  attempts integer NOT NULL CHECK (attempts BETWEEN 1 AND 2),
  last_run_id text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now()
 );
+` }, { version: 6, sql: `
+CREATE TABLE workbench.periodic_reports (
+ type text NOT NULL CHECK(type IN ('weekly','monthly')), period_key text NOT NULL,
+ data jsonb NOT NULL, revision integer NOT NULL CHECK(revision > 0), updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(type,period_key)
+);
+CREATE TABLE workbench.report_jobs (
+ id text PRIMARY KEY, kind text NOT NULL, day date NOT NULL, period_key text NOT NULL,
+ scheduled_at timestamptz NOT NULL, status text NOT NULL DEFAULT 'pending', attempts integer NOT NULL DEFAULT 0,
+ last_error text, finished_at timestamptz, next_attempt_at timestamptz NOT NULL DEFAULT now(),
+ lease_until timestamptz, lease_token text
+);
+CREATE INDEX report_jobs_pending_idx ON workbench.report_jobs(status,next_attempt_at,scheduled_at);
+ALTER TABLE workbench.tasks ADD COLUMN evidence_stale boolean NOT NULL DEFAULT false;
+ALTER TABLE workbench.source_messages ADD COLUMN origin_key text;
+ALTER TABLE workbench.source_messages ADD COLUMN source_path text;
+CREATE INDEX messages_source_path_idx ON workbench.source_messages(source_path);
+ALTER TABLE workbench.source_messages ADD COLUMN valid boolean NOT NULL DEFAULT true;
+ALTER TABLE workbench.source_messages ADD COLUMN body_revision integer NOT NULL DEFAULT 1;
+ALTER TABLE workbench.source_messages ADD COLUMN invalid_reason text;
+CREATE INDEX messages_origin_idx ON workbench.source_messages(source,session_id,origin_key);
+CREATE INDEX messages_active_pending_idx ON workbench.source_messages(source,occurred_at,id) WHERE valid AND NOT extracted;
+CREATE INDEX tasks_log_day_idx ON workbench.tasks(((CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date)) WHERE deleted_at IS NULL;
+CREATE INDEX tasks_pending_idx ON workbench.tasks(created_at DESC,id) WHERE deleted_at IS NULL AND source IN ('manual','zentao') AND completed_at IS NULL;
+CREATE INDEX tasks_updated_idx ON workbench.tasks(updated_at DESC);
+CREATE INDEX daily_reports_updated_idx ON workbench.daily_reports(updated_at DESC);
+CREATE INDEX periodic_reports_updated_idx ON workbench.periodic_reports(updated_at DESC);
+CREATE INDEX tasks_project_activity_idx ON workbench.tasks(project_path,updated_at) WHERE deleted_at IS NULL;
 ` }]
 
 export async function migrate(pool: Pool) {

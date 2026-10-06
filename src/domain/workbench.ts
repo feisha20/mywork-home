@@ -30,6 +30,8 @@ export interface Task {
   recordedAt?: string | null
   projectPath?: string
   statusOrigin?: 'manual' | 'ai'
+  evidenceCount?: number
+  evidenceStale?: boolean
   evidence?: import('../../shared/contracts.js').Evidence[]
 }
 

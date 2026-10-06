@@ -7,11 +7,11 @@ import type { SessionSource } from '../shared/contracts.js'
 
 export type Source = SessionSource
 export type JsonlSource = 'codex' | 'claude' | 'workbuddy'
-export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string; readerSignature?: string }
+export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string; readerSignature?: string; readerFormat?: string; readerMode?: string }
 export interface Cursor { path: string; source: Source; inode: string; offset: number; context: RecordContext; modifiedAt: number }
 export interface SourceMessage {
   id: string; source: Source; sessionId: string; rootSessionId: string;
-  projectPath: string; role: 'user' | 'assistant'; timestamp: string; text: string
+  projectPath: string; role: 'user' | 'assistant'; timestamp: string; text: string; originKey?: string; bodyRevision?: number
 }
 type Json = Record<string, any>
 export function digest(input: string) { return createHash('sha256').update(input).digest('hex') }
@@ -126,7 +126,7 @@ export async function readDelta(path: string, source: JsonlSource, previous: Cur
 }
 
 export async function readJsonlDelta(path: string, source: Source, previous: Cursor | null, cutoff: string,
-  createContext: () => RecordContext, normalize: (row: unknown, context: RecordContext) => { messages: SourceMessage[]; invalid: number }, skip?: (line: Buffer) => boolean) {
+  createContext: () => RecordContext, normalize: (row: unknown, context: RecordContext) => { messages: SourceMessage[]; invalid: number }, skip?: (line: Buffer) => boolean, consumeFinal = false) {
   const info = await stat(path)
   const inode = String(info.ino)
   const reset = !previous || previous.inode !== inode || info.size < previous.offset || (previous.modifiedAt !== Math.trunc(info.mtimeMs) && info.size === previous.offset)
@@ -162,6 +162,18 @@ export async function readJsonlDelta(path: string, source: Source, previous: Cur
       if (!dropping && (consumed >= 2 * 1024 * 1024 || lines >= 2000)) break
     }
   } finally { stream.destroy() }
+  // 通用导出允许最后一条完整 JSON 没有换行；正在写入的半行继续等待。
+  if (consumeFinal && pending.length && !dropping && offset + pending.length === info.size) {
+    try {
+      const row: unknown = JSON.parse(pending.toString('utf8'))
+      const current = await stat(path)
+      if (current.size === info.size && current.mtimeMs === info.mtimeMs) {
+        const result = normalize(row, context)
+        messages.push(...result.messages.filter((message) => message.timestamp >= cutoff)); invalid += result.invalid
+        offset += pending.length
+      }
+    } catch { /* 不提交未写完的正文。 */ }
+  }
   const cursor: Cursor = { path, source, inode, offset, context, modifiedAt: Math.trunc(info.mtimeMs) }
   return { messages, cursor, invalid, blocked: dropping, more: !dropping && offset < info.size && lines > 0 && (consumed >= 2 * 1024 * 1024 || lines >= 2000) }
 }

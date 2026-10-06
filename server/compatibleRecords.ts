@@ -83,7 +83,8 @@ export function normalizeGenericRecords(input: unknown, context: RecordContext, 
     // 正文版本参与标识，追加、文件移动、重复导入保持去重，修改过的消息可重新提取。
     const id = digest(`generic:${sessionId}:${messageId}:${role}:${timestamp}:${digest(text)}`)
     text = redact(text, secrets)
-    messages.push({ id, source, sessionId, rootSessionId: local.parentSessionId ?? sessionId, projectPath: local.projectPath, role, timestamp, text })
+    messages.push({ id, source, sessionId, rootSessionId: local.parentSessionId ?? sessionId, projectPath: local.projectPath, role, timestamp, text,
+      ...(messageId ? { originKey: digest(`generic:${sessionId}:${messageId}:${role}`) } : {}) })
     Object.assign(inherited, local); Object.assign(context, local)
   }
   visit(input, { ...context }, 0)
@@ -146,11 +147,10 @@ function genericContext(path: string): RecordContext {
   return { sessionId: /^(?:messages?|conversations?|records?|chat|history)$/i.test(name) ? `${basename(dirname(path))}:${name}` : name,
     projectPath: '', parentSessionId: null, turnId: '' }
 }
-export function recordReaderSignature(format: CompatibleFormat, mapping?: RecordMapping) { return digest(JSON.stringify({ version: 1, format, mapping: mapping ?? EMPTY_RECORD_MAPPING })) }
+export function recordReaderSignature(format: CompatibleFormat, mapping?: RecordMapping) { return digest(JSON.stringify({ version: 2, format, mapping: mapping ?? EMPTY_RECORD_MAPPING })) }
 
 export async function classifyCompatibleFile(path: string, mode: 'auto' | 'generic', mapping?: RecordMapping): Promise<CompatibleRecordFile | null> {
-  const rows = await sampleRows(path)
-  const format = mode === 'generic' ? 'generic' : detectRecordFormat(rows, mapping)
+  const format = mode === 'generic' ? 'generic' : detectRecordFormat(await sampleRows(path), mapping)
   if (!format) return null
   let projectPath = '', parentSessionId: string | null = null
   if (format === 'gemini') {
@@ -170,7 +170,7 @@ export async function readCompatibleDelta(file: CompatibleRecordFile, source: So
   if (file.format === 'gemini') delta = await readGeminiDelta(file, cursor, cutoff, secrets, preview ? (/\.json$/i.test(file.path) ? 8 : 2) * 1024 * 1024 : undefined)
   else if (file.format !== 'generic' && /\.jsonl$/i.test(file.path)) delta = await readDelta(file.path, file.format, cursor, cutoff, secrets)
   else if (/\.jsonl$/i.test(file.path)) delta = await readJsonlDelta(file.path, source, cursor, cutoff, () => genericContext(file.path),
-    (row, context) => normalizeGenericRecords(row, context, source, mapping, secrets))
+    (row, context) => normalizeGenericRecords(row, context, source, mapping, secrets), undefined, true)
   else {
     const info = await stat(file.path), raw = JSON.parse(await boundedText(file.path, 8 * 1024 * 1024, true)) as unknown
     const context = file.format === 'generic' ? genericContext(file.path) : initialContext(file.path, file.format)
@@ -185,6 +185,7 @@ export async function readCompatibleDelta(file: CompatibleRecordFile, source: So
       cursor: { path: file.path, source, inode: String(info.ino), offset: info.size, context, modifiedAt: Math.trunc(info.mtimeMs) }, blocked: false, more: false }
   }
   delta.cursor.context.readerSignature = file.signature
+  delta.cursor.context.readerFormat = file.format
   return delta
 }
 

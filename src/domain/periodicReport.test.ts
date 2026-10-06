@@ -160,4 +160,30 @@ describe('periodicReport domain', () => {
     expect(emptyReport.markdown).toContain('# 2026年10月工作月报')
     expect(emptyReport.markdown).toContain('暂无已归档的工作记录')
   })
+  it('跨北京时间周月边界仍使用同一周期', () => {
+    expect(getWeekBounds(new Date('2026-10-05T00:30:00+08:00'))).toMatchObject({ weekKey: '2026-W41', startDate: '2026-10-05', endDate: '2026-10-11' })
+    expect(getMonthBounds(new Date('2026-11-01T00:30:00+08:00')).monthKey).toBe('2026-11')
+  })
+  it('恢复原版日报优先、逐条去重及三段结构，不追加已被日报取代的日志', () => {
+    const bounds = {label:'本周',startDate:'2026-10-05',endDate:'2026-10-11',key:'2026-W41'}
+    const reports: DailyReport[] = [{day:'2026-10-05',generatedAt:'2026-10-05T10:00:00Z',recordCount:2,revision:1,recordVersions:{},items:[
+      {text:'已有日报成果',taskIds:['one'],topic:'原主题'},
+      {text:'同一主题的下一项进展',taskIds:['two'],topic:'原主题'},
+      {text:'已有日报成果',taskIds:['three'],topic:'重复主题'},
+    ]}]
+    const tasks: Task[] = [
+      {id:'extra',reference:'CX-1',source:'codex',title:'不追加到已有日报的完成标题',createdAt:'2026-10-06T03:00:00Z',recordedAt:'2026-10-06T03:00:00Z',completedAt:'2026-10-06T03:00:00Z',projectPath:'/项目/目录名'},
+      {id:'old',reference:'CX-2',source:'codex',title:'早前仍在推进的事项',createdAt:'2026-09-01T03:00:00Z',recordedAt:'2026-09-01T03:00:00Z',completedAt:null},
+    ]
+    for (const type of ['weekly','monthly'] as const) {
+      const report=synthesizePeriodicReport(type,bounds,reports,tasks)
+      expect(report.sections).toHaveLength(3)
+      expect(report.sections[0].items).toEqual(['【原主题】已有日报成果','【原主题】同一主题的下一项进展'])
+      expect(report.sections[1].items).toEqual(['持续推进：早前仍在推进的事项'])
+      expect(report.sections[2].items).toEqual(['优先落地并交付：早前仍在推进的事项'])
+      expect(report.markdown).not.toContain(tasks[0].title)
+    }
+    expect(synthesizePeriodicReport('weekly',bounds,[],tasks).sections[0].items).toEqual([tasks[0].title])
+  })
+
 })

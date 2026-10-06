@@ -189,7 +189,7 @@ describe('设置持久化与密钥边界', () => {
 
 describe('设置接口', () => {
   async function appForTest() {
-    const store = { tasks: async () => [], dailyReports: async () => [], latestRun: async () => null } as unknown as Store
+    const store = { tasks: async () => [], snapshotTasks: async () => [], dataVersion: async () => 'fixture', recordedDays: async () => [], dailyReports: async () => [], latestRun: async () => null } as unknown as Store
     const sync = new SyncService(store, config, { extract: async () => [], close: async () => {} }, settings)
     const reports = new DailyReportService(store, { generateDailyReport: async () => [], close: async () => {} })
     return { app: await createApp(config, store, sync, reports), sync }

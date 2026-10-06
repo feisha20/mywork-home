@@ -1,9 +1,9 @@
 import type { Store } from './store.js'
+import { PeriodicReportService } from './periodicReport.js'
 import type { SettingsService } from './settings.js'
 import {
   getMonthBounds,
   getWeekBounds,
-  synthesizePeriodicReport,
 } from '../src/domain/periodicReport.js'
 
 export interface PeriodicScheduleDelayResult {
@@ -90,6 +90,7 @@ export function getNextMonthlyDelay(
 }
 
 export class PeriodicReportScheduler {
+  private reports: PeriodicReportService
   private weeklyTimer: NodeJS.Timeout | null = null
   private monthlyTimer: NodeJS.Timeout | null = null
   private stopping = false
@@ -99,9 +100,10 @@ export class PeriodicReportScheduler {
   nextMonthlyRun: { day: string; time: string; timestamp: number } | null = null
 
   constructor(
-    private store: Store,
+    store: Store,
     private settings: SettingsService
   ) {
+    this.reports = new PeriodicReportService(store)
     this.unsubscribe = settings.subscribe(() => this.reschedule())
   }
 
@@ -161,7 +163,7 @@ export class PeriodicReportScheduler {
         this.scheduleWeekly()
         return
       }
-      void this.triggerWeekly(next.targetDay).finally(() => {
+      void this.triggerWeekly(next.targetDay).catch(() => console.error('自动周报保存失败，请检查自动整理记录')).finally(() => {
         if (!this.stopping) this.scheduleWeekly()
       })
     }, waitMs)
@@ -196,7 +198,7 @@ export class PeriodicReportScheduler {
         this.scheduleMonthly()
         return
       }
-      void this.triggerMonthly(next.targetDay).finally(() => {
+      void this.triggerMonthly(next.targetDay).catch(() => console.error('自动月报保存失败，请检查自动整理记录')).finally(() => {
         if (!this.stopping) this.scheduleMonthly()
       })
     }, waitMs)
@@ -204,42 +206,9 @@ export class PeriodicReportScheduler {
   }
 
   async triggerWeekly(referenceDay: string) {
-    try {
-      const refDate = new Date(`${referenceDay}T12:00:00+08:00`)
-      const bounds = getWeekBounds(refDate)
-      const tasks = await this.store.tasks()
-      const dailyReports = await this.store.dailyReports()
-
-      const report = synthesizePeriodicReport('weekly', {
-        label: bounds.label,
-        startDate: bounds.startDate,
-        endDate: bounds.endDate,
-        key: bounds.weekKey,
-      }, dailyReports, tasks)
-
-      await (this.store as any).savePeriodicReport?.(report)
-    } catch {
-      // 静默处理自动定时生成错误
-    }
+    return this.reports.generate('weekly', getWeekBounds(new Date(`${referenceDay}T12:00:00+08:00`)).weekKey, undefined, true)
   }
-
   async triggerMonthly(referenceDay: string) {
-    try {
-      const refDate = new Date(`${referenceDay}T12:00:00+08:00`)
-      const bounds = getMonthBounds(refDate)
-      const tasks = await this.store.tasks()
-      const dailyReports = await this.store.dailyReports()
-
-      const report = synthesizePeriodicReport('monthly', {
-        label: bounds.label,
-        startDate: bounds.startDate,
-        endDate: bounds.endDate,
-        key: bounds.monthKey,
-      }, dailyReports, tasks)
-
-      await (this.store as any).savePeriodicReport?.(report)
-    } catch {
-      // 静默处理自动定时生成错误
-    }
+    return this.reports.generate('monthly', getMonthBounds(new Date(`${referenceDay}T12:00:00+08:00`)).monthKey, undefined, true)
   }
 }

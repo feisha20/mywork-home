@@ -53,89 +53,64 @@ export interface PeriodicReportModel {
   sections: PeriodicReportSection[]
   markdown: string
   stats: PeriodStats
+  revision: number
+  edited: boolean
 }
 
 function pad(num: number): string {
   return String(num).padStart(2, '0')
 }
 
-// 计算 ISO 周数 (周一为一周起点)
+// 所有周期边界都以北京时间日期计算，不依赖浏览器或容器的本地时区。
+function calendarDate(date: Date): Date { return new Date(`${dateKey(date)}T12:00:00Z`) }
+export function shiftDay(day: string, count: number): string {
+  return new Date(Date.parse(`${day}T12:00:00Z`) + count * 86400000).toISOString().slice(0, 10)
+}
 export function getISOWeek(date: Date): { year: number; weekNumber: number } {
-  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
-  const dayNum = d.getUTCDay() || 7
-  d.setUTCDate(d.getUTCDate() + 4 - dayNum)
-  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
-  const weekNo = Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
-  return { year: d.getUTCFullYear(), weekNumber: weekNo }
+  const d = calendarDate(date)
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7))
+  const year = d.getUTCFullYear()
+  return { year, weekNumber: Math.ceil(((d.getTime() - Date.UTC(year, 0, 1)) / 86400000 + 1) / 7) }
 }
-
 export function getWeekBounds(date: Date): WeekBounds {
-  const current = new Date(date)
-  // 获取当前星期几（0是周日，1-6是周一至周六）
-  const day = current.getDay()
-  // 周一为起点：周日视为偏移 6，其它为 day - 1
-  const diffToMonday = day === 0 ? -6 : 1 - day
-
-  const monday = new Date(current)
-  monday.setDate(current.getDate() + diffToMonday)
-
-  const sunday = new Date(monday)
-  sunday.setDate(monday.getDate() + 6)
-
-  const startDate = dateKey(monday)
-  const endDate = dateKey(sunday)
-
-  const { year, weekNumber } = getISOWeek(monday)
-  const weekKey = `${year}-W${pad(weekNumber)}`
-
-  const startMonthDay = startDate.slice(5).replace('-', '.')
-  const endMonthDay = endDate.slice(5).replace('-', '.')
-  const label = `${year}年第${weekNumber}周 (${startMonthDay} - ${endMonthDay})`
-
-  return { weekKey, year, weekNumber, startDate, endDate, label }
+  const d = calendarDate(date), day = d.getUTCDay() || 7
+  const startDate = shiftDay(dateKey(date), 1 - day), endDate = shiftDay(startDate, 6)
+  const { year, weekNumber } = getISOWeek(dateFromKey(startDate))
+  return { weekKey: `${year}-W${pad(weekNumber)}`, year, weekNumber, startDate, endDate,
+    label: `${year}年第${weekNumber}周 (${startDate.slice(5).replace('-', '.')} - ${endDate.slice(5).replace('-', '.')})` }
 }
-
 export function getMonthBounds(date: Date): MonthBounds {
-  const year = date.getFullYear()
-  const monthNumber = date.getMonth() + 1
+  const d = calendarDate(date), year = d.getUTCFullYear(), monthNumber = d.getUTCMonth() + 1
   const monthKey = `${year}-${pad(monthNumber)}`
-
-  const startDate = `${monthKey}-01`
-  const lastDay = new Date(year, monthNumber, 0).getDate()
-  const endDate = `${monthKey}-${pad(lastDay)}`
-  const label = `${year}年${pad(monthNumber)}月`
-
-  return { monthKey, year, monthNumber, startDate, endDate, label }
+  const endDate = new Date(Date.UTC(year, monthNumber, 0, 12)).toISOString().slice(0, 10)
+  return { monthKey, year, monthNumber, startDate: `${monthKey}-01`, endDate, label: `${year}年${pad(monthNumber)}月` }
 }
-
 export function listRecentWeeks(referenceDate: Date, count = 8): (WeekBounds & { isCurrent: boolean })[] {
-  const currentBounds = getWeekBounds(referenceDate)
-  const list: (WeekBounds & { isCurrent: boolean })[] = []
-
-  for (let i = 0; i < count; i++) {
-    const d = new Date(referenceDate)
-    d.setDate(d.getDate() - i * 7)
-    const bounds = getWeekBounds(d)
-    // 避免跨夏令时或极端边界出现重复周 key
-    if (!list.some((item) => item.weekKey === bounds.weekKey)) {
-      list.push({ ...bounds, isCurrent: bounds.weekKey === currentBounds.weekKey })
-    }
-  }
-
-  return list
+  const current = getWeekBounds(referenceDate)
+  return Array.from({ length: count }, (_, i) => {
+    const bounds = getWeekBounds(dateFromKey(shiftDay(current.startDate, -i * 7)))
+    return { ...bounds, isCurrent: bounds.weekKey === current.weekKey }
+  })
 }
-
 export function listRecentMonths(referenceDate: Date, count = 6): (MonthBounds & { isCurrent: boolean })[] {
-  const currentBounds = getMonthBounds(referenceDate)
-  const list: (MonthBounds & { isCurrent: boolean })[] = []
-
-  for (let i = 0; i < count; i++) {
-    const d = new Date(referenceDate.getFullYear(), referenceDate.getMonth() - i, 1)
-    const bounds = getMonthBounds(d)
-    list.push({ ...bounds, isCurrent: bounds.monthKey === currentBounds.monthKey })
+  const current = getMonthBounds(referenceDate)
+  return Array.from({ length: count }, (_, i) => {
+    const bounds = getMonthBounds(new Date(Date.UTC(current.year, current.monthNumber - 1 - i, 1, 12)))
+    return { ...bounds, isCurrent: bounds.monthKey === current.monthKey }
+  })
+}
+export function periodBounds(type: 'weekly' | 'monthly', key: string) {
+  if (type === 'monthly' && /^\d{4}-(0[1-9]|1[0-2])$/.test(key)) {
+    const bounds = getMonthBounds(dateFromKey(`${key}-01`))
+    return { ...bounds, key: bounds.monthKey }
   }
-
-  return list
+  const match = /^(\d{4})-W(\d{2})$/.exec(key)
+  if (type === 'weekly' && match) {
+    const first = getWeekBounds(dateFromKey(`${match[1]}-01-04`))
+    const bounds = getWeekBounds(dateFromKey(shiftDay(first.startDate, (Number(match[2]) - 1) * 7)))
+    if (bounds.weekKey === key) return { ...bounds, key }
+  }
+  throw new Error('报告周期无效')
 }
 
 export function aggregatePeriodData(
@@ -297,5 +272,23 @@ export function synthesizePeriodicReport(
     sections,
     markdown,
     stats: aggregated.stats,
+    revision: 0, edited: false,
   }
+}
+
+// Markdown 是编辑后的唯一正文，结构化段落由同一正文恢复，避免两份内容分叉。
+export function periodicMarkdownSections(markdown: string): PeriodicReportSection[] {
+  const sections: PeriodicReportSection[] = []
+  let current: PeriodicReportSection | undefined
+  const hasSections = /^#{3,6}\s+/m.test(markdown)
+  for (const line of markdown.split('\n')) {
+    if (!line.trim()) continue
+    const heading = /^#{1,6}\s+(.+)$/.exec(line)
+    if (hasSections && /^#{1,2}\s+/.test(line)) continue
+    if (heading) { current = { title: heading[1],items: [] }; sections.push(current); continue }
+    if (!current && hasSections) continue
+    if (!current) { current = { title:'正文',items: [] }; sections.push(current) }
+    current.items.push(line.replace(/^\s*(?:\d+[.)]|[-*])\s+/, ''))
+  }
+  return sections
 }

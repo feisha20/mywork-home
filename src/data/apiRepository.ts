@@ -1,6 +1,7 @@
 import type { Task } from '../domain/workbench'
 import { decodeSnapshot } from '../domain/workbench'
-import type { DailyReport, SyncRun, WorkbenchSnapshot } from '../../shared/contracts'
+import type { DailyReport, SyncRun, WorkbenchSnapshot, RecordPage, RecordQuery, Evidence, ReportJob } from '../../shared/contracts'
+import type { PeriodicReportModel } from '../domain/periodicReport'
 import type { CollectorKind, PathCheckResult, PathScanResult, RecordMapping, RecordPreview, SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
 
 const storageKey = 'mywork-home.workbench.v1'
@@ -59,3 +60,19 @@ export async function migrateLegacyTasks(): Promise<string | null> {
   catch { return '旧事项已迁移，浏览器无法保存迁移标记；再次迁移不会重复新增。' }
   return tasks.length ? `已将 ${tasks.length} 项手工记录迁移到数据库。` : null
 }
+
+export const fetchRecords = (query: RecordQuery, signal?: AbortSignal) => {
+  const params = new URLSearchParams()
+  for (const [key,value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
+  return request<RecordPage>(`/records?${params}`, { signal })
+}
+export const fetchTaskEvidence = (id: string, signal?: AbortSignal) => request<Evidence[]>(`/tasks/${encodeURIComponent(id)}/evidence`, { signal })
+const periodPath = (type: 'weekly' | 'monthly', key: string) => `/periodic-reports/${type}/${encodeURIComponent(key)}`
+export const fetchPeriodicReport = (type: 'weekly' | 'monthly', key: string, signal?: AbortSignal) => request<PeriodicReportModel | null>(periodPath(type, key), { signal })
+export const fetchPeriodMaterial = (type: 'weekly' | 'monthly', key: string, signal?: AbortSignal) => request<{ tasks: Task[]; dailyReports: DailyReport[] }>(`${periodPath(type, key)}/material`, { signal })
+export const generatePeriodicReport = (type: 'weekly' | 'monthly', key: string, revision: number) => request<PeriodicReportModel>(periodPath(type, key), { method: 'POST', body: JSON.stringify({ revision }) }, 240000)
+export const savePeriodicReport = (type: 'weekly' | 'monthly', key: string, markdown: string, revision: number) => request<PeriodicReportModel>(periodPath(type, key), { method: 'PUT', body: JSON.stringify({ markdown, revision }) })
+export const fetchReportJobs = (signal?: AbortSignal) => request<ReportJob[]>('/report-jobs', { signal })
+export const retryReportJob = (id: string) => request<{ queued: boolean }>(`/report-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' })
+
+export const fetchDailyReportStatus = (day: string, signal?: AbortSignal) => request<{ recordCount: number; unorganizedCount: number }>(`/daily-reports/${encodeURIComponent(day)}/status`, { signal })

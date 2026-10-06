@@ -9,8 +9,9 @@ import { digest, isRecordDataError, listRecordFiles, readDelta, type Source, typ
 import { ZcodeReader } from './zcode.js'
 import { listGeminiRecordFiles, readGeminiDelta, type GeminiRecordFile } from './gemini.js'
 import { redact } from './redact.js'
+import { dateKey } from '../src/domain/workbench.js'
 import { initialChannels, type SettingsService } from './settings.js'
-import { classifyCompatibleFile, isCompatibleDatabase, listCompatibleCandidates, readCompatibleDelta } from './compatibleRecords.js'
+import { classifyCompatibleFile, isCompatibleDatabase, listCompatibleCandidates, readCompatibleDelta, recordReaderSignature } from './compatibleRecords.js'
 import type { CompatibleRecordFile } from './compatibleRecords.js'
 
 export function messageBatches(messages: SourceMessage[], maxCharacters = 30000): SourceMessage[][] {
@@ -42,6 +43,8 @@ export class SyncService {
     zcode: { available: false, sessionCount: 0, error: '尚未扫描' },
     gemini: { available: false, sessionCount: 0, error: '尚未扫描' },
   }
+  private fileFormats = new Map<string, { fingerprint: string; file: CompatibleRecordFile }>()
+  private snapshotCache: { version: string; day: string; tasks: WorkbenchSnapshot['tasks']; dailyReports: WorkbenchSnapshot['dailyReports']; days: string[] } | null = null
   private unsubscribe: (() => void) | undefined
   constructor(readonly store: Store, private config: Config, private extractor: Extractor, readonly settings?: SettingsService) {
     this.unsubscribe = settings?.subscribe(() => this.reschedule())
@@ -174,7 +177,20 @@ export class SyncService {
             let unsupported = 0
             for (const path of await listCompatibleCandidates(root)) {
               try {
-                const file = await classifyCompatibleFile(path, collector as 'auto' | 'generic', channel.mapping)
+                const info = await stat(path), key = cursorKey(path)
+                const fingerprint = digest(`${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}:${collector}:${JSON.stringify(channel.mapping)}`)
+                let file = this.fileFormats.get(key)?.fingerprint === fingerprint ? this.fileFormats.get(key)!.file : null
+                if (!file) {
+                  const previous = await this.store.cursor(key), format = previous?.context.readerFormat as CompatibleRecordFile['format'] | undefined
+                  if (previous && format && previous.context.readerMode === collector && previous.inode === String(info.ino) && previous.offset === info.size && previous.modifiedAt === Math.trunc(info.mtimeMs)
+                    && previous.context.readerSignature === recordReaderSignature(format, channel.mapping)) {
+                    file = { path, format, projectPath: previous.context.projectPath, parentSessionId: previous.context.parentSessionId, signature: previous.context.readerSignature }
+                  } else file = await classifyCompatibleFile(path, collector as 'auto' | 'generic', channel.mapping)
+                  if (file) {
+                    if (this.fileFormats.size >= 10_000) this.fileFormats.clear()
+                    this.fileFormats.set(key, { fingerprint, file })
+                  }
+                }
                 if (file) files.push(file); else unsupported++
               } catch { unsupported++ }
             }
@@ -207,8 +223,9 @@ export class SyncService {
             try { delta = 'format' in record ? await readCompatibleDelta(record, source, cursor, cutoff, secrets, channel.mapping)
               : collector === 'gemini' ? await readGeminiDelta(record, cursor, cutoff, secrets) : await readDelta(file, collector as 'codex' | 'claude' | 'workbuddy', cursor, cutoff, secrets) }
             catch { await this.failRecord(run, source, key, fingerprint); failed = true; break }
+            delta.cursor.context.readerMode = collector
             const data = mapped(delta, file)
-            try { run.newMessages += await this.store.ingest(data.messages, data.cursor) }
+            try { run.newMessages += await this.store.ingest(data.messages, data.cursor, 'reconcile' in delta && delta.reconcile === true) }
             catch (error) {
               if (!isRecordDataError(error)) throw error
               await this.failRecord(run, source, key, fingerprint); failed = true; break
@@ -226,24 +243,12 @@ export class SyncService {
         if (this.sources[entry.source]) this.sources[entry.source].sessionCount = entry.count
       }
       run.phase = 'extracting'; run.activeSource = null; await this.saveRunProgress(run)
-      const groups = new Map<string, SourceMessage[]>()
-      const rootCache = new Map<string, string>()
-      for (const message of await this.store.pendingMessages()) {
-        if (!enabledSources.has(message.source)) continue
-        const cacheKey = `${message.source}:${message.sessionId}`
-        let root = rootCache.get(cacheKey)
-        if (!root) { root = await this.store.resolveRoot(message.source, message.sessionId); rootCache.set(cacheKey, root) }
-        message.rootSessionId = root
-        const key = `${message.source}:${root}:${message.projectPath}`
-        if (!groups.has(key)) groups.set(key, [])
-        groups.get(key)!.push(message)
-      }
+      // 每次只读取有限消息；一页全部完成后再推进，失败的会话不会越过依赖继续抽取。
+      const rootCache = new Map<string, string>(), blockedGroups = new Set<string>()
       let modelUnavailable = false
-      const entries = [...groups.entries()]
-      const concurrency = Math.min(config.WORKBENCH_SYNC_CONCURRENCY, entries.length)
-      let nextIndex = 0
 
       const processGroup = async ([key, messages]: [string, SourceMessage[]]) => {
+        if (blockedGroups.has(key)) return
         for (const batch of messageBatches(messages)) {
           if (this.stopping || modelUnavailable) break
           const id = this.store.batchId(batch)
@@ -263,19 +268,35 @@ export class SyncService {
             await this.store.failBatch(id, reason); run.failedBatches++; this.error(run, reason)
             if (/密钥|模型接入/.test(reason)) modelUnavailable = true
             // 当前会话依赖前文；本批失败后不继续处理该会话的后续消息。
-            break
+            blockedGroups.add(key); break
           }
         }
       }
 
-      const workers = Array.from({ length: concurrency }, async () => {
-        while (nextIndex < entries.length && !this.stopping && !modelUnavailable) {
-          const entry = entries[nextIndex++]
-          if (!entry) break
-          await processGroup(entry)
+      let after: { timestamp: string; id: string } | undefined
+      while (!this.stopping && !modelUnavailable) {
+        const page = await this.store.pendingMessages([...enabledSources], after, 500)
+        if (!page.length) break
+        const groups = new Map<string, SourceMessage[]>()
+        for (const message of page) {
+          if (!enabledSources.has(message.source)) continue
+          const cacheKey = `${message.source}:${message.sessionId}`
+          let root = rootCache.get(cacheKey)
+          if (!root) { root = await this.store.resolveRoot(message.source, message.sessionId); rootCache.set(cacheKey, root) }
+          message.rootSessionId = root
+          const key = `${message.source}:${root}:${message.projectPath}`
+          if (!groups.has(key)) groups.set(key, [])
+          groups.get(key)!.push(message)
         }
-      })
-      await Promise.all(workers)
+        const entries = [...groups.entries()]
+        let nextIndex = 0
+        await Promise.all(Array.from({ length: Math.min(config.WORKBENCH_SYNC_CONCURRENCY, entries.length) }, async () => {
+          while (nextIndex < entries.length && !this.stopping && !modelUnavailable) await processGroup(entries[nextIndex++]!)
+        }))
+        const last = page.at(-1)!
+        after = { timestamp: last.timestamp, id: last.id }
+        if (page.length < 500) break
+      }
       await this.runSavePromise
       run.status = this.stopping ? 'interrupted' : run.errors.length ? 'partial_failed' : 'succeeded'
     } catch { run.status = 'failed'; this.error(run, '同步失败，请检查数据库连接；已有记录和进度已保留') }
@@ -289,7 +310,13 @@ export class SyncService {
     }
   }
   async snapshot(): Promise<WorkbenchSnapshot> {
-    const [tasks, dailyReports, run] = await Promise.all([this.store.tasks(), this.store.dailyReports(), this.store.latestRun()])
+    const day = dateKey(new Date()), version = await this.store.dataVersion()
+    if (!this.snapshotCache || this.snapshotCache.version !== version || this.snapshotCache.day !== day) {
+      const [tasks, dailyReports, days] = await Promise.all([this.store.snapshotTasks(day), this.store.dailyReports(day, day), this.store.recordedDays()])
+      this.snapshotCache = { version, day, tasks, dailyReports, days }
+    }
+    const { tasks, dailyReports, days } = this.snapshotCache
+    const run = await this.store.latestRun()
     const config = this.currentConfig()
     const channels = this.settings?.channels()
     const sources = { ...this.sources }
@@ -297,10 +324,11 @@ export class SyncService {
       ...(sources[channel.id] ?? { available: false, sessionCount: 0, error: '尚未扫描' }),
       enabled: channel.enabled, collector: channel.collector,
     }
-    return { version: 1, tasks: tasks.map((task) => ({ ...task, sourceLabel: channels?.find((channel) => channel.id === task.source)?.name })), dailyReports,
+    return { version: 1, recordedDays: days, dataVersion: version, tasks: tasks.map((task) => ({ ...task, sourceLabel: channels?.find((channel) => channel.id === task.source)?.name })), dailyReports,
       harness: { run, nextSyncAt: this.nextSyncAt, model: config.WORKBENCH_LLM_MODEL, intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' },
       sources, channels: this.settings?.summaries() }
   }
+  async waitForIdle() { await this.starting; await this.active }
   async close() {
     this.unsubscribe?.()
     this.stopping = true; if (this.timer) clearTimeout(this.timer); this.nextSyncAt = null

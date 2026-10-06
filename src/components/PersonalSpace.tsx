@@ -1,161 +1,78 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { DailyReport } from '../../shared/contracts'
 import type { Task } from '../domain/workbench'
-import {
-  aggregatePeriodData,
-  listRecentMonths,
-  listRecentWeeks,
-  synthesizePeriodicReport,
-  type MonthBounds,
-  type PeriodicReportModel,
-  type WeekBounds,
-} from '../domain/periodicReport'
+import { aggregatePeriodData, listRecentMonths, listRecentWeeks, synthesizePeriodicReport, type MonthBounds, type PeriodicReportModel, type WeekBounds } from '../domain/periodicReport'
+import { fetchPeriodicReport, fetchPeriodMaterial, generatePeriodicReport, savePeriodicReport } from '../data/apiRepository'
+import { legacyReportMarkdown } from '../data/legacyPeriodicReports'
 import { copyReportText } from '../data/clipboard'
 import { Icon } from './Icon'
 
-interface PersonalSpaceProps {
-  tasks: Task[]
-  dailyReports: DailyReport[]
-  clock: Date
-  onClose: () => void
-  onOpenSettings: () => void
-}
-
-const STORAGE_KEY = 'workbench_periodic_reports_cache'
-
-function loadSavedReports(): Record<string, PeriodicReportModel> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : {}
-  } catch {
-    return {}
-  }
-}
-
-function persistSavedReports(reports: Record<string, PeriodicReportModel>) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(reports))
-    return true
-  } catch {
-    return false
-  }
-}
-
-export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSettings }: PersonalSpaceProps) {
+interface PersonalSpaceProps { clock: Date; onClose: () => void; onOpenSettings: () => void }
+export function PersonalSpace({ clock, onClose, onOpenSettings }: PersonalSpaceProps) {
   const [tab, setTab] = useState<'weekly' | 'monthly'>('weekly')
-  const [savedReports, setSavedReports] = useState<Record<string, PeriodicReportModel>>(() => loadSavedReports())
-
+  const [savedReports, setSavedReports] = useState<Record<string, PeriodicReportModel>>({})
   const weeks = useMemo(() => listRecentWeeks(clock, 8), [clock])
   const months = useMemo(() => listRecentMonths(clock, 6), [clock])
-
   const [selectedWeek, setSelectedWeek] = useState<WeekBounds & { isCurrent: boolean }>(() => weeks[0])
   const [selectedMonth, setSelectedMonth] = useState<MonthBounds & { isCurrent: boolean }>(() => months[0])
-
   const currentBounds = tab === 'weekly' ? selectedWeek : selectedMonth
   const currentKey = tab === 'weekly' ? selectedWeek.weekKey : selectedMonth.monthKey
-
-  // 当前周期的汇总统计与关联数据
-  const aggregated = useMemo(() => {
-    return aggregatePeriodData(currentBounds.startDate, currentBounds.endDate, dailyReports, tasks)
-  }, [currentBounds.startDate, currentBounds.endDate, dailyReports, tasks])
-
-  // 当前周期已保存或默认生成的报告
-  const activeReport = useMemo(() => {
-    if (savedReports[currentKey]) {
-      return savedReports[currentKey]
-    }
-    // 默认生成
-    return synthesizePeriodicReport(tab, {
-      label: currentBounds.label,
-      startDate: currentBounds.startDate,
-      endDate: currentBounds.endDate,
-      key: currentKey,
-    }, dailyReports, tasks)
-  }, [savedReports, currentKey, tab, currentBounds, dailyReports, tasks])
-
-  const [isEditing, setIsEditing] = useState(false)
-  const [draftMarkdown, setDraftMarkdown] = useState(activeReport.markdown)
-  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
-  const [showSources, setShowSources] = useState(false)
-  const [regenerateFeedback, setRegenerateFeedback] = useState<{
-    kind: 'success' | 'error'
-    message: string
-  } | null>(null)
-
-  // 整理结果只属于当前周期，切换报表后清除提示。
+  const [material, setMaterial] = useState<{ key: string; tasks: Task[]; reports: DailyReport[] } | null>(null)
+  const [loading, setLoading] = useState(true), [saving, setSaving] = useState(false)
+  const [isEditing, setIsEditing] = useState(false), [draftMarkdown, setDraftMarkdown] = useState('')
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle'), [showSources, setShowSources] = useState(false)
+  const [regenerateFeedback, setRegenerateFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null)
+  const materialKey = `${tab}:${currentKey}`
+  const tasks = material?.key === materialKey ? material.tasks : [], dailyReports = material?.key === materialKey ? material.reports : []
+  const aggregated = useMemo(() => aggregatePeriodData(currentBounds.startDate, currentBounds.endDate, dailyReports, tasks), [currentBounds, dailyReports, tasks])
+  const activeReport = useMemo(() => savedReports[currentKey] ?? synthesizePeriodicReport(tab, { ...currentBounds, key: currentKey }, dailyReports, tasks), [savedReports, currentKey, tab, currentBounds, dailyReports, tasks])
   useEffect(() => {
-    setRegenerateFeedback(null)
-  }, [tab, currentKey])
-
-  // 当切换周/月或 tab 时，同步更新编辑草稿
+    const controller = new AbortController()
+    setLoading(true); setIsEditing(false); setCopyState('idle'); setRegenerateFeedback(null)
+    void (async () => {
+      try {
+        let [report, data] = await Promise.all([fetchPeriodicReport(tab, currentKey, controller.signal), fetchPeriodMaterial(tab, currentKey, controller.signal)])
+        if (controller.signal.aborted) return
+        const legacy = !report ? legacyReportMarkdown(currentKey) : null
+        if (legacy) {
+          try { report = await savePeriodicReport(tab, currentKey, legacy, 0) }
+          catch { report = await fetchPeriodicReport(tab, currentKey, controller.signal); if (!report) throw new Error('旧报告保存到数据库失败，请稍后重试。') }
+        }
+        if (controller.signal.aborted) return
+        setMaterial({ key: materialKey, tasks: data.tasks, reports: data.dailyReports })
+        if (report) { const saved = report; setSavedReports((current) => ({ ...current, [currentKey]: saved })) }
+      } catch (cause) { if (!controller.signal.aborted) setRegenerateFeedback({ kind: 'error', message: cause instanceof Error ? cause.message : '报告读取失败，请稍后重试。' }) }
+      finally { if (!controller.signal.aborted) setLoading(false) }
+    })()
+    return () => controller.abort()
+  }, [tab, currentKey, materialKey])
+  useEffect(() => { if (!isEditing) setDraftMarkdown(activeReport.markdown) }, [activeReport, isEditing])
   useEffect(() => {
-    setIsEditing(false)
-    setDraftMarkdown(activeReport.markdown)
-    setCopyState('idle')
-  }, [activeReport])
-
-  // 支持键盘 Esc 返回工作台（非编辑输入状态）
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !isEditing) {
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isEditing, onClose])
-
-  const handleSaveDraft = useCallback(() => {
-    const updated: PeriodicReportModel = {
-      ...activeReport,
-      markdown: draftMarkdown,
-      generatedAt: new Date().toISOString(),
-    }
-    const nextSaved = { ...savedReports, [currentKey]: updated }
-    setSavedReports(nextSaved)
-    persistSavedReports(nextSaved)
-    setIsEditing(false)
-  }, [activeReport, draftMarkdown, savedReports, currentKey])
-
-  const handleRegenerate = useCallback(() => {
-    const typeName = tab === 'weekly' ? '周报' : '月报'
+    const handleKey = (event: KeyboardEvent) => { if (event.key === 'Escape' && !isEditing && !saving && !document.querySelector('dialog[open]')) onClose() }
+    window.addEventListener('keydown', handleKey); return () => window.removeEventListener('keydown', handleKey)
+  }, [isEditing, saving, onClose])
+  const handleSaveDraft = async () => {
+    setSaving(true)
     try {
-      const fresh = synthesizePeriodicReport(tab, {
-        label: currentBounds.label,
-        startDate: currentBounds.startDate,
-        endDate: currentBounds.endDate,
-        key: currentKey,
-      }, dailyReports, tasks)
-
-      const nextSaved = { ...savedReports, [currentKey]: fresh }
-      const persisted = persistSavedReports(nextSaved)
-      setSavedReports(nextSaved)
-      setDraftMarkdown(fresh.markdown)
-      setIsEditing(false)
-      setRegenerateFeedback(persisted ? {
-        kind: 'success',
-        message: `${typeName}已重新整理并保存，汇总了 ${fresh.stats.reportedDays} 篇日报和 ${fresh.stats.completedTasks} 项完成事项。`,
-      } : {
-        kind: 'error',
-        message: `${typeName}已重新整理，但本机保存失败，请复制 Markdown 备份后重试。`,
-      })
-    } catch (cause) {
-      setRegenerateFeedback({
-        kind: 'error',
-        message: `${typeName}整理失败，原有内容已保留。${cause instanceof Error ? cause.message : '请稍后重试。'}`,
-      })
-    }
-  }, [tab, currentBounds, currentKey, dailyReports, tasks, savedReports])
-
-  const handleCopy = useCallback(async () => {
+      const report = await savePeriodicReport(tab, currentKey, draftMarkdown, activeReport.revision ?? 0)
+      setSavedReports((current) => ({ ...current, [currentKey]: report })); setIsEditing(false)
+      setRegenerateFeedback({ kind: 'success', message: '修改已保存到数据库。' })
+    } catch (cause) { setRegenerateFeedback({ kind: 'error', message: cause instanceof Error ? cause.message : '保存失败，编辑内容已保留。' }) }
+    finally { setSaving(false) }
+  }
+  const handleRegenerate = async () => {
+    setSaving(true)
     try {
-      await copyReportText(isEditing ? draftMarkdown : activeReport.markdown)
-      setCopyState('copied')
-      setTimeout(() => setCopyState('idle'), 2500)
-    } catch {
-      // 容错已在 copyReportText 内处理
-    }
-  }, [isEditing, draftMarkdown, activeReport.markdown])
+      const report = await generatePeriodicReport(tab, currentKey, activeReport.revision ?? 0)
+      setSavedReports((current) => ({ ...current, [currentKey]: report })); setDraftMarkdown(report.markdown); setIsEditing(false)
+      setRegenerateFeedback({ kind: 'success', message: `${tab === 'weekly' ? '周报' : '月报'}已重新整理并保存，汇总了 ${report.stats.reportedDays} 篇日报和 ${report.stats.completedTasks} 项完成事项。` })
+    } catch (cause) { setRegenerateFeedback({ kind: 'error', message: cause instanceof Error ? cause.message : '整理失败，原有内容已保留。' }) }
+    finally { setSaving(false) }
+  }
+  const handleCopy = async () => {
+    try { await copyReportText(isEditing ? draftMarkdown : activeReport.markdown); setCopyState('copied'); setTimeout(() => setCopyState('idle'), 2500) }
+    catch { setRegenerateFeedback({ kind: 'error', message: '复制失败，请选中正文手动复制。' }) }
+  }
 
   return (
     <div className="personal-space-view" role="region" aria-label="全屏个人空间">
@@ -165,7 +82,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
           <button
             type="button"
             className="space-back-btn"
-            onClick={onClose}
+            disabled={saving} onClick={onClose}
             aria-label="返回工作台"
             title="返回主工作台 (可按 Esc)"
           >
@@ -187,7 +104,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
               role="tab"
               aria-selected={tab === 'weekly'}
               className={`space-tab-btn${tab === 'weekly' ? ' is-active' : ''}`}
-              onClick={() => setTab('weekly')}
+              disabled={saving} onClick={() => setTab('weekly')}
             >
               <Icon name="calendar" />
               <span>工作周报</span>
@@ -197,7 +114,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
               role="tab"
               aria-selected={tab === 'monthly'}
               className={`space-tab-btn${tab === 'monthly' ? ' is-active' : ''}`}
-              onClick={() => setTab('monthly')}
+              disabled={saving} onClick={() => setTab('monthly')}
             >
               <Icon name="book" />
               <span>月度复盘</span>
@@ -240,7 +157,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                         role="option"
                         aria-selected={isSelected}
                         className={`space-period-item${isSelected ? ' is-selected' : ''}`}
-                        onClick={() => setSelectedWeek(item)}
+                        disabled={saving} onClick={() => setSelectedWeek(item)}
                       >
                         <div className="period-item-header">
                           <strong className="period-item-label">第 {item.weekNumber} 周</strong>
@@ -263,7 +180,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                         role="option"
                         aria-selected={isSelected}
                         className={`space-period-item${isSelected ? ' is-selected' : ''}`}
-                        onClick={() => setSelectedMonth(item)}
+                        disabled={saving} onClick={() => setSelectedMonth(item)}
                       >
                         <div className="period-item-header">
                           <strong className="period-item-label">{item.year}年{item.monthNumber}月</strong>
@@ -328,7 +245,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                     <button
                       type="button"
                       className="space-btn space-btn-primary"
-                      onClick={handleSaveDraft}
+                      disabled={saving || !draftMarkdown.trim()} onClick={() => void handleSaveDraft()}
                     >
                       <Icon name="check" />
                       <span>保存修改</span>
@@ -336,7 +253,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                     <button
                       type="button"
                       className="space-btn space-btn-secondary"
-                      onClick={() => {
+                      disabled={saving} onClick={() => {
                         setDraftMarkdown(activeReport.markdown)
                         setIsEditing(false)
                       }}
@@ -349,7 +266,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                     <button
                       type="button"
                       className="space-btn space-btn-primary"
-                      onClick={handleRegenerate}
+                      disabled={loading || saving} onClick={() => void handleRegenerate()}
                       title="基于本期日报和任务重新智能提炼"
                     >
                       <Icon name={regenerateFeedback?.kind === 'success' ? 'check' : 'sparkles'} />
@@ -358,7 +275,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                     <button
                       type="button"
                       className="space-btn space-btn-secondary"
-                      onClick={() => setIsEditing(true)}
+                      disabled={loading || saving} onClick={() => setIsEditing(true)}
                     >
                       <Icon name="edit" />
                       <span>编辑文本</span>
@@ -376,6 +293,8 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
               </div>
             </div>
 
+            {loading && <p className="space-report-feedback" role="status">正在读取报告…</p>}
+            {saving && <p className="space-report-feedback" role="status">正在保存报告…</p>}
             {regenerateFeedback && (
               <div
                 className={`space-report-feedback is-${regenerateFeedback.kind}`}
@@ -405,7 +324,7 @@ export function PersonalSpace({ tasks, dailyReports, clock, onClose, onOpenSetti
                     className="space-markdown-editor"
                     value={draftMarkdown}
                     rows={18}
-                    onChange={(e) => setDraftMarkdown(e.target.value)}
+                    disabled={saving} onChange={(e) => setDraftMarkdown(e.target.value)}
                     aria-label="编辑周报/月报内容"
                   />
                 </div>

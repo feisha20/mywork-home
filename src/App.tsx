@@ -1,4 +1,4 @@
-import { createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { dateKey, recordsForDate, requiresManualCompletion } from './domain/workbench'
 import type { Task, WorkbenchState } from './domain/workbench'
 import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
@@ -18,8 +18,9 @@ import { Icon } from './components/Icon'
 import { SettingsDialog } from './components/SettingsDialog'
 import { PerpetualCalendar } from './components/PerpetualCalendar'
 import { UserMenu } from './components/UserMenu'
-import { PersonalSpace } from './components/PersonalSpace'
 import type { WorkbenchSettings } from '../shared/settings'
+
+const PersonalSpace = lazy(() => import('./components/PersonalSpace').then((module) => ({ default: module.PersonalSpace })))
 
 const busPaths = ['M 100 240 L 460 240 L 520 280 L 700 280', 'M 100 420 L 480 420 L 540 320 L 700 320', 'M 700 280 L 880 280 L 940 240 L 1300 240', 'M 700 320 L 860 320 L 920 420 L 1300 420']
 const phaseLabels = { inbound: '待办正在汇入核心', orbit: '核心正在处理 · 环轨加速', outbound: '正在收进今天的日报', idle: '工作流就绪，等待下一次推进' }
@@ -82,7 +83,7 @@ export default function App() {
     finally { refreshing.current = false }
   }, [])
   const handleReportSaved = useCallback((report: DailyReport) => {
-    setSnapshot((current) => current ? { ...current, dailyReports: mergeDailyReports(current.dailyReports ?? [], [report]) } : current)
+    setSnapshot((current) => current ? { ...current, dailyReports: mergeDailyReports(current.dailyReports ?? [], [report]).filter((entry) => entry.day === dateKey(new Date())) } : current)
   }, [])
   useEffect(() => {
     let disposed = false, ready = false
@@ -157,11 +158,11 @@ export default function App() {
     busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
     try {
       const saved = await updateTask(task.id, false)
-      setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === task.id ? saved : item) }))
+      setState((current) => ({ ...current, tasks: [saved, ...current.tasks.filter((item) => item.id !== task.id)] }))
       captureBaseline.current = captureBaseline.current?.map((item) => item.id === task.id ? saved : item) ?? null
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '恢复操作失败') }
-    finally { mutationVersion.current++; busy.current = false; setChangingId(null) }
+    finally { mutationVersion.current++; busy.current = false; setChangingId(null); void pollerRef.current?.refreshNow() }
   }, [])
   const finishCaptureOutput = useCallback((id: number) => {
     setCaptureOutputs((current) => current.filter((event) => event.id !== id))
@@ -193,13 +194,11 @@ export default function App() {
   if (spaceOpen) {
     return (
       <div className={`app-shell is-space-mode${pageVisible ? '' : ' is-background'}`}>
-        <PersonalSpace
-          tasks={state.tasks}
-          dailyReports={snapshot?.dailyReports ?? []}
+        <Suspense fallback={<p role="status">正在打开个人空间…</p>}><PersonalSpace
           clock={clock}
           onClose={() => setSpaceOpen(false)}
           onOpenSettings={() => setSettingsOpen(true)}
-        />
+        /></Suspense>
         {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       </div>
     )
@@ -223,7 +222,7 @@ export default function App() {
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
         <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null} onAdd={handleAdd} onComplete={handleComplete} onDelete={handleDelete} />
         <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} channels={snapshot?.channels} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
+        <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}

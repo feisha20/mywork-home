@@ -57,7 +57,8 @@ export function dailyReportInput(day: string, records: Task[], secrets: string[]
       taskId: task.id,
       // 模型只需要项目名来归类，本机完整路径保留在数据库中。
       project: redact(task.projectPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? '', secrets),
-      title: redact(task.title, secrets),
+      title: redact(`${task.evidenceStale ? '来源已修改或撤回，需重新核对：' : ''}${task.title}`, secrets),
+      sourceChanged: Boolean(task.evidenceStale),
       completed: task.completedAt !== null,
       recordedAt: recordTimestamp(task),
       // 日志简介已经概括工作内容，不再引入包含实现和验证过程的长篇会话证据。
@@ -214,6 +215,15 @@ export class DailyReportService {
     this.active = { key, promise }
     try { return await promise }
     finally { if (this.active?.promise === promise) this.active = null }
+  }
+
+  // 自动汇总串行等待正在生成的日报，保证同一时间点的周月报读取完整结果。
+  async generateQueued(day: string): Promise<DailyReport> {
+    while (true) {
+      await this.active?.promise.catch(() => {})
+      try { return await this.generate(day, 'append') }
+      catch (error) { if (error instanceof DailyReportError && error.statusCode === 409 && this.active) continue; throw error }
+    }
   }
 
   private async run(day: string, records: Task[], previous?: DailyReport): Promise<DailyReport> {
