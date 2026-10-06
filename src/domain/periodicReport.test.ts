@@ -11,6 +11,24 @@ import type { DailyReport } from '../../shared/contracts'
 import type { Task } from './workbench'
 
 describe('periodicReport domain', () => {
+  it('周月报排除私人完成事项、推进事项、项目统计以及旧日报的混合摘要', () => {
+    const bounds = { label: '本期', startDate: '2026-10-05', endDate: '2026-10-11', key: '2026-W41' }
+    const at = '2026-10-06T03:00:00Z'
+    const tasks: Task[] = [
+      { id: 'work', reference: 'CX-work', source: 'codex', title: '完成工作交付', createdAt: at, completedAt: at, projectPath: '/项目/工作项目' },
+      { id: 'private', reference: 'CX-private', source: 'codex', title: '安排家庭旅行', createdAt: at, completedAt: at, projectPath: '/个人/家庭旅行', isPersonal: true },
+      { id: 'private-pending', reference: 'TASK-private', source: 'manual', title: '准备私人购物清单', createdAt: '2026-09-01T03:00:00Z', completedAt: null, isPersonal: true },
+    ]
+    const reports: DailyReport[] = [{ day: '2026-10-06', generatedAt: at, recordCount: 2, revision: 1, recordVersions: {},
+      items: [{ text: '工作交付和家庭旅行的混合摘要', taskIds: ['work', 'private'] }] }]
+    for (const type of ['weekly', 'monthly'] as const) {
+      const report = synthesizePeriodicReport(type, bounds, reports, tasks)
+      expect(report.stats).toMatchObject({ totalTasks: 1, completedTasks: 1, projectCount: 1, reportedDays: 0 })
+      expect(report.sections[0].items).toEqual(['完成工作交付'])
+      expect(report.markdown).not.toMatch(/家庭旅行|购物清单|混合摘要/)
+    }
+    expect(aggregatePeriodData(bounds.startDate, bounds.endDate, reports, tasks).projects).toEqual(['工作项目'])
+  })
   it('correctly calculates week bounds for a given date', () => {
     // 2026-10-02 是周五，该周应该从 2026-09-28 (周一) 到 2026-10-04 (周日)
     const date = new Date('2026-10-02T12:00:00+08:00')

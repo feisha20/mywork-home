@@ -26,7 +26,7 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
       const body = JSON.parse(raw)
       requests.push({ url: request.url!, body, authorization: request.headers.authorization })
       response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      const content = JSON.stringify({ items: [{ ...(requests.length === 1 ? { taskId: 'T999' } : {}), title: '完成接口测试', status: 'completed', evidenceIds: ['M1'] }] })
+      const content = JSON.stringify({ items: [{ ...(requests.length === 1 ? { taskId: 'T999' } : {}), title: '完成接口测试', status: 'completed', isPersonal: true, evidenceIds: ['M1'] }] })
       response.write(`data: ${JSON.stringify({ id: 'chatcmpl-fixture', object: 'chat.completion.chunk', model: 'glm-5.3-flash', choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}\n\n`)
       response.write(`data: ${JSON.stringify({ id: 'chatcmpl-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 20, total_tokens: 40 } })}\n\n`)
       response.end('data: [DONE]\n\n')
@@ -38,6 +38,7 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
     extractor = new HarnessExtractor(original)
     const result = await extractor.extract([message], [], [], { ...original, WORKBENCH_LLM_MODEL: 'glm-5.3-flash', WORKBENCH_LLM_API_KEY: 'fixture-api-key', WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${address.port}/api/coding/v3` })
     expect(result[0].status).toBe('completed')
+    expect(result[0].isPersonal).toBe(true)
     expect(result[0].evidenceIds).toEqual([message.id])
     expect(requests).toHaveLength(2)
     expect(JSON.stringify(requests[1].body)).toContain('新事项必须省略 taskId')
@@ -76,7 +77,7 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
         : { items: summarizing
           ? (++summaryAttempts, [{ groupId: 'group-1', text: '推进工作日报生成与一键复制功能，整合相关工作进展。' }, { groupId: 'group-2', text: longText }])
           : compacting ? [{ groupId: 'group-2', text: ++compactAttempts === 1 ? longText : compactText }]
-            : [{ title: '完善工作日报功能', status: 'todo', evidenceIds: [message.id] }] })
+            : [{ title: '完善工作日报功能', status: 'todo', isPersonal: false, evidenceIds: [message.id] }] })
       // 模拟真实请求遇到一次连接中断，下一轮超长后仍有机会修复摘要。
       if (summarizing && summaryAttempts === 1) { response.destroy(); return }
       response.writeHead(200, { 'Content-Type': 'text/event-stream' })
@@ -99,7 +100,8 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
     expect(groupAttempts).toBe(2); expect(summaryAttempts).toBe(2); expect(compactAttempts).toBe(2)
     const extraction = requests.find((body) => body.messages.some((row: any) => row.content?.includes('newMessages')))
     const reports = requests.filter((body) => body.messages.some((row: any) => row.content?.includes('"records":')))
-    expect(extraction.messages[0].content).toContain('工作事项抽取器')
+    expect(extraction.messages[0].content).toContain('事项抽取器')
+    expect(extraction.messages[0].content).toContain('isPersonal')
     expect(reports[0].messages[0].content).toContain('工作日报任务归类助手')
     expect(JSON.stringify(reports[1])).toContain('日报遗漏了工作记录')
     expect(JSON.stringify(reports.at(-1))).toContain(`${longText.length}个字符`)

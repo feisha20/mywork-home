@@ -30,6 +30,8 @@ export interface Task {
   recordedAt?: string | null
   projectPath?: string
   statusOrigin?: 'manual' | 'ai' | 'zentao'
+  isPersonal?: boolean
+  personalOrigin?: 'manual' | 'ai'
   zentao?: {
     instance: string; account: string; type: 'bug' | 'task'; id: string
     status: string; url: string; priority: number | null; project: string; deadline: string | null
@@ -186,6 +188,8 @@ export function decodeSnapshot(raw: string): WorkbenchState | null {
         || typeof task.title !== 'string' || !task.title.trim() || task.title.length > 300
         || !validTimestamp(task.createdAt)
         || (task.completedAt !== null && !validTimestamp(task.completedAt))
+        || (task.isPersonal !== undefined && typeof task.isPersonal !== 'boolean')
+        || (task.personalOrigin !== undefined && !['manual', 'ai'].includes(task.personalOrigin as string))
         || (task.recordedAt != null && !validTimestamp(task.recordedAt))) return null
       ids.add(task.id)
     }

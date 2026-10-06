@@ -14,7 +14,7 @@ import { isRecordInReport } from '../shared/dailyReports.js'
 import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
-  title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable() })
+  title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable(), isPersonal: z.boolean().optional() })
 
 export async function createApp(config: Config, store: Store, sync: SyncService,
   reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config)),
@@ -130,8 +130,14 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     }
   })
   app.post('/api/tasks', async (request, reply) => {
-    const { title } = z.object({ title: z.string().trim().min(1).max(300) }).parse(request.body)
-    return reply.code(201).send(await store.createTask(title))
+    const { title, isPersonal } = z.object({ title: z.string().trim().min(1).max(300), isPersonal: z.boolean().default(false) }).parse(request.body)
+    return reply.code(201).send(await store.createTask(title, isPersonal))
+  })
+  app.patch('/api/tasks/:id/personal', async (request, reply) => {
+    const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
+    const { isPersonal } = z.object({ isPersonal: z.boolean() }).strict().parse(request.body)
+    const task = await store.setPersonal(id, isPersonal)
+    return task ?? reply.code(404).send({ error: '事项不存在' })
   })
   app.patch('/api/tasks/:id', async (request, reply) => {
     const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)

@@ -4,7 +4,7 @@ import { recordsForDate } from '../src/domain/workbench.js'
 import type { DailyReport, DailyReportItem } from '../shared/contracts.js'
 import { dailyReportInput, parseDailyReport, parseDailyReportGroups, parseDailyReportSummaries, dailyReportSummaryInput,
   parseDailyReportSummaryDrafts, dailyReportSummaryRepairInput, parseDailyReportCompactSummaries, DailyReportService } from './dailyReport.js'
-import { isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
+import { excludePersonalReportItems, isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 import type { DailyReportGenerator } from './dailyReport.js'
 import { createApp } from './app.js'
 import { loadConfig } from './config.js'
@@ -34,6 +34,36 @@ const generator = (): DailyReportGenerator => ({ generateDailyReport: vi.fn(asyn
   taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...input.map((task) => task.id)])].sort() }]), close: vi.fn(async () => {}) })
 
 describe('工作日报的汇总范围与完整性', () => {
+  it('个人日志保留归档，初次及补充日报均不向模型发送个人事项', async () => {
+    const privateTask = { ...records[0], id: 'private', title: '安排家庭出行', projectPath: '/私人/家庭', isPersonal: true }
+    const store = inputStore([...records, privateTask]), model = generator(), service = new DailyReportService(store, model)
+    expect(recordsForDate({ version: 1, tasks: [privateTask] }, day)).toHaveLength(1)
+    expect(dailyReportInput(day, [...records, privateTask]).records.map((task) => task.taskId)).toEqual(records.map((task) => task.id))
+    const report = await service.generate(day)
+    expect(report.recordCount).toBe(2)
+    expect(vi.mocked(model.generateDailyReport).mock.calls[0][1].some((task) => task.isPersonal)).toBe(false)
+    expect(isRecordInReport(privateTask, report)).toBe(false)
+    await service.generate(day, 'append')
+    expect(model.generateDailyReport).toHaveBeenCalledOnce()
+    await service.close()
+    const privateModel = generator(), privateService = new DailyReportService(inputStore([privateTask]), privateModel)
+    await expect(privateService.generate(day)).rejects.toMatchObject({ statusCode: 400 })
+    expect(privateModel.generateDailyReport).not.toHaveBeenCalled()
+    await privateService.close()
+  })
+  it('移除含个人事项的整条混合摘要，释放其中工作记录的整理标记，保留其他摘要', () => {
+    const report: DailyReport = { day, generatedAt: records[0].createdAt, revision: 2, recordCount: 3,
+      recordVersions: { work: '原工作', private: '原私人', other: '其他工作' }, items: [
+        { text: '工作交付与家庭旅行的混合摘要', taskIds: ['work', 'private'] },
+        { text: '其他项目成果', taskIds: ['other'] },
+      ] }
+    const cleaned = excludePersonalReportItems(report, new Set(['private']))
+    expect(cleaned.items).toEqual([report.items[1]])
+    expect(cleaned.recordVersions).toEqual({ other: '其他工作' })
+    expect(cleaned.recordCount).toBe(1)
+    expect(report.items).toHaveLength(2)
+    expect(excludePersonalReportItems(cleaned, new Set(['private']))).toBe(cleaned)
+  })
   it('接受跨来源的同一任务合并，保留来源记录关联', () => {
     expect(parseDailyReport(`\`\`\`json\n${JSON.stringify({ items: grouped })}\n\`\`\``, records)).toEqual(grouped)
   })

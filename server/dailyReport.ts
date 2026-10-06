@@ -41,6 +41,7 @@ export interface DailyReportGroup {
 }
 
 export function dailyReportGroupLimit(records: Task[], previous?: DailyReport): number {
+  records = records.filter((task) => !task.isPersonal)
   // 独立项目较多时保留汇报空间；通常最多六项，防止再生成逐条日志清单。
   const projects = new Set(records.map((task) => task.projectPath?.trim()).filter(Boolean))
   for (const item of previous?.items ?? []) for (const path of item.projectPaths ?? []) if (path) projects.add(path)
@@ -48,6 +49,7 @@ export function dailyReportGroupLimit(records: Task[], previous?: DailyReport): 
 }
 
 export function dailyReportInput(day: string, records: Task[], secrets: string[] = [], previous?: DailyReport) {
+  records = records.filter((task) => !task.isPersonal)
   return {
     day,
     maxGroups: dailyReportGroupLimit(records, previous),
@@ -201,9 +203,9 @@ export class DailyReportService {
     const previous = await this.store.dailyReport(day)
     // 已有日报的普通打开请求只读取，不因新日志出现而自动触发模型。
     if (previous && mode === 'initial') return previous
-    const records = await this.store.reportRecords(day)
+    const records = (await this.store.reportRecords(day)).filter((task) => !task.isPersonal)
     if (this.stopped) throw new DailyReportError('日报服务正在关闭，请稍后重试', 503)
-    if (!records.length) throw new DailyReportError('这一天还没有工作日志，添加记录后即可生成日报', 400)
+    if (!records.length) throw new DailyReportError('这一天还没有工作日志可整理，个人事项不参与日报', 400)
     const pending = records.filter((task) => !isRecordInReport(task, previous))
     if (previous && !pending.length) return previous
     const key = JSON.stringify([day, previous?.revision ?? 0, pending])
@@ -234,7 +236,7 @@ export class DailyReportService {
       const report = { day, generatedAt: new Date().toISOString(), recordCount: Object.keys(recordVersions).length, items,
         revision: (previous?.revision ?? 0) + 1, recordVersions }
       const saved = await this.store.saveDailyReport(report, previous?.revision ?? 0)
-      if (!saved) throw new DailyReportError('日报已被其他请求更新，请重新打开后补充整理', 409)
+      if (!saved) throw new DailyReportError('日报或事项分类已更新，请重新打开后补充整理', 409)
       return saved
     } catch (error) {
       if (error instanceof DailyReportError) throw error

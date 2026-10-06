@@ -1089,6 +1089,17 @@ button:focus-visible, input:focus-visible {
 .delete-task svg { width: 12px; height: 12px; }
 .delete-task:hover { color: #c24135; border-color: #f4b8b1; background: #fff5f3; }
 .delete-task:disabled { opacity: .5; cursor: wait; }
+/* 个人分类使用独立开关，保留原日志并在汇报时排除。 */
+.personal-task-toggle { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 10px; line-height: 1.2; white-space: nowrap; color: #64748b; background: #fff; cursor: pointer; }
+.personal-task-toggle svg { width: 12px; height: 12px; }
+.personal-task-toggle:hover { border-color: #c4b5fd; color: #6d28d9; background: #faf5ff; }
+.personal-task-toggle.is-personal { border-color: #ddd6fe; color: #6d28d9; background: #f5f3ff; }
+.personal-task-toggle small { border-radius: 3px; padding: 1px 3px; background: #ede9fe; font-size: 8px; }
+.personal-task-toggle:disabled { opacity: .5; cursor: wait; }
+.quick-add-personal { margin-right: 4px; padding: 5px 6px; }
+.daily-log-report-state.is-excluded { color: #8b7aab; background: #f5f3ff; }
+.daily-log-actions { flex-wrap: wrap; }
+.task-action-buttons { flex-wrap: wrap; justify-content: flex-end; }
 .daily-log-card.just-arrived { background: #fff4ec; animation: logArrival .4s ease-out; }
 .page-bottom-mark { font-size: 8px; color: #acb5c3; letter-spacing: 0.5px; margin: 14px 0 0; padding-top: 10px; border-top: 1px solid #f1f4f8; }
 

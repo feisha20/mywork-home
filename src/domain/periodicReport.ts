@@ -1,4 +1,5 @@
 import type { DailyReport } from '../../shared/contracts.js'
+import { excludePersonalReportItems } from '../../shared/dailyReports.js'
 import { dateFromKey, dateKey, recordTimestamp, type Task } from './workbench.js'
 
 export interface WeekBounds {
@@ -55,6 +56,7 @@ export interface PeriodicReportModel {
   stats: PeriodStats
   revision: number
   edited: boolean
+  needsRefresh?: boolean
 }
 
 function pad(num: number): string {
@@ -120,8 +122,11 @@ export function aggregatePeriodData(
   tasks: Task[]
 ): AggregatedPeriodData {
   // 匹配落在该时间区间内的已保存日报
+  const personalIds = new Set(tasks.filter((task) => task.isPersonal).map((task) => task.id))
   const matchedReports = reports
     .filter((report) => report.day >= startDate && report.day <= endDate)
+    .map((report) => excludePersonalReportItems(report, personalIds))
+    .filter((report) => report.items.length > 0)
     .sort((a, b) => a.day.localeCompare(b.day))
 
   // 匹配任务：已完成任务以记录/完成日期判定，未完成任务在创建时间或记录时间内
@@ -130,6 +135,7 @@ export function aggregatePeriodData(
   const projectsSet = new Set<string>()
 
   for (const task of tasks) {
+    if (task.isPersonal) continue
     const time = recordTimestamp(task) ?? task.completedAt ?? task.createdAt
     const taskDay = dateKey(new Date(time))
 

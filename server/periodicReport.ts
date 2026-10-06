@@ -1,4 +1,4 @@
-import { periodBounds, synthesizePeriodicReport, periodicMarkdownSections } from '../src/domain/periodicReport.js'
+import { aggregatePeriodData, periodBounds, synthesizePeriodicReport, periodicMarkdownSections } from '../src/domain/periodicReport.js'
 import type { Store } from './store.js'
 
 export class PeriodicReportError extends Error {
@@ -19,7 +19,19 @@ export class PeriodicReportService {
   }
   async read(type: 'weekly' | 'monthly', key: string) {
     this.bounds(type, key)
-    return this.store.periodicReport(type, key)
+    const report = await this.store.periodicReport(type, key)
+    if (report?.needsRefresh && !report.edited) {
+      try { return await this.generate(type, key, report.revision) }
+      catch (error) {
+        // 并发读取可能已由另一请求刷新，直接返回其已保存的新版本。
+        if (error instanceof PeriodicReportError && error.statusCode === 409) {
+          const latest = await this.store.periodicReport(type, key)
+          if (latest && !latest.needsRefresh) return latest
+        }
+        throw error
+      }
+    }
+    return report
   }
   async generate(type: 'weekly' | 'monthly', key: string, expectedRevision?: number, automatic = false) {
     const previous = await this.store.periodicReport(type, key)
@@ -28,7 +40,7 @@ export class PeriodicReportService {
     if (automatic && previous?.edited) return previous
     const { bounds, tasks, dailyReports } = await this.material(type, key)
     const report = synthesizePeriodicReport(type, bounds, dailyReports, tasks)
-    const saved = await this.store.savePeriodicReport(report, previous?.revision ?? 0)
+    const saved = await this.store.savePeriodicReport(report, previous?.revision ?? 0, tasks)
     if (!saved) throw new PeriodicReportError('报告已被其他请求更新，请重新载入后再整理', 409)
     return saved
   }
@@ -38,7 +50,8 @@ export class PeriodicReportService {
     const { bounds, tasks, dailyReports } = await this.material(type, key)
     const baseline = previous ?? synthesizePeriodicReport(type, bounds, dailyReports, tasks)
     const saved = await this.store.savePeriodicReport({ ...baseline, markdown, sections: periodicMarkdownSections(markdown),
-      edited: true, generatedAt: new Date().toISOString() }, expectedRevision)
+      edited: true, needsRefresh: false, stats: aggregatePeriodData(bounds.startDate, bounds.endDate, dailyReports, tasks).stats,
+      generatedAt: new Date().toISOString() }, expectedRevision, tasks)
     if (!saved) throw new PeriodicReportError('报告已被其他请求更新，当前编辑内容已保留', 409)
     return saved
   }

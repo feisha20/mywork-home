@@ -84,6 +84,10 @@ CREATE INDEX tasks_project_activity_idx ON workbench.tasks(project_path,updated_
 ` }, { version: 7, sql: `
 ALTER TABLE workbench.tasks ADD COLUMN zentao jsonb;
 CREATE INDEX tasks_zentao_identity_idx ON workbench.tasks((zentao->>'instance'),(zentao->>'account')) WHERE source='zentao';
+` }, { version: 8, sql: `
+ALTER TABLE workbench.tasks ADD COLUMN is_personal boolean NOT NULL DEFAULT false;
+ALTER TABLE workbench.tasks ADD COLUMN personal_origin text NOT NULL DEFAULT 'ai' CHECK (personal_origin IN ('ai','manual'));
+UPDATE workbench.tasks SET personal_origin='manual' WHERE source IN ('manual','zentao');
 ` }]
 
 export async function migrate(pool: Pool) {

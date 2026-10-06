@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Pool, type PoolClient } from 'pg'
-import { requiresManualCompletion, type Task } from '../src/domain/workbench.js'
+import { dateKey, recordTimestamp, requiresManualCompletion, type Task } from '../src/domain/workbench.js'
+import { excludePersonalReportItems } from '../shared/dailyReports.js'
 import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob } from '../shared/contracts.js'
 import type { Cursor, Source, SourceMessage } from './records.js'
 import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
@@ -8,7 +9,7 @@ import { digest } from './records.js'
 import type { ZentaoSnapshot, ZentaoTrackedItem } from './zentao.js'
 
 const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
-const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale,zentao,jsonb_array_length(evidence) AS evidence_count'
+const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,zentao,jsonb_array_length(evidence) AS evidence_count'
 function jobFromRow(row: any): ReportJob {
   return { id: row.id, kind: row.kind, day: new Date(row.day).toISOString().slice(0,10), periodKey: row.period_key,
     scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
@@ -18,11 +19,12 @@ function taskFromRow(row: any): Task {
   return { id: row.id, reference: row.reference, source: row.source, title: row.title,
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
-    projectPath: row.project_path, statusOrigin: row.status_origin, evidence: row.evidence, zentao: row.zentao,
+    projectPath: row.project_path, statusOrigin: row.status_origin, isPersonal: Boolean(row.is_personal), personalOrigin: row.personal_origin,
+    evidence: row.evidence, zentao: row.zentao,
     evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count), evidenceStale: Boolean(row.evidence_stale) }
 }
 
-export interface ExtractedItem { taskId?: string; title: string; status: 'todo' | 'completed'; evidenceIds: string[] }
+export interface ExtractedItem { taskId?: string; title: string; status: 'todo' | 'completed'; isPersonal?: boolean; evidenceIds: string[] }
 
 export class Store {
   constructor(readonly pool: Pool) {}
@@ -38,8 +40,8 @@ export class Store {
   }
   async reportRecords(day: string): Promise<Task[]> {
     // 日报只读取简介与归档信息，不查询会话证据内容。
-    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale
-      FROM workbench.tasks WHERE deleted_at IS NULL AND
+    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale
+      FROM workbench.tasks WHERE deleted_at IS NULL AND NOT is_personal AND
       ((CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END)
         AT TIME ZONE 'Asia/Shanghai')::date=$1::date
       ORDER BY coalesce(recorded_at,completed_at,created_at) DESC,id`, [day])
@@ -55,12 +57,18 @@ export class Store {
   }
   async saveDailyReport(report: DailyReport, expectedRevision: number): Promise<DailyReport | null> {
     // 生成结果和已整理标记保存在同一个文档里，版本检查防止并发覆盖。
-    const result = expectedRevision === 0
-      ? await this.pool.query(`INSERT INTO workbench.daily_reports(day,data,revision) VALUES($1,$2,1)
-          ON CONFLICT(day) DO NOTHING RETURNING data`, [report.day, JSON.stringify(report)])
-      : await this.pool.query(`UPDATE workbench.daily_reports SET data=$2,revision=revision+1,updated_at=now()
-          WHERE day=$1 AND revision=$3 RETURNING data`, [report.day, JSON.stringify(report), expectedRevision])
-    return result.rows[0]?.data ?? null
+    return this.transaction(async (client) => {
+      const ids = [...new Set([...Object.keys(report.recordVersions), ...report.items.flatMap((item) => item.taskIds)])]
+      // 生成期间被标为个人的记录不能写回报告；行锁覆盖检查到保存之间的窗口。
+      const { rows } = await client.query('SELECT is_personal FROM workbench.tasks WHERE id=ANY($1::text[]) ORDER BY id FOR SHARE', [ids])
+      if (rows.some((row) => row.is_personal)) return null
+      const result = expectedRevision === 0
+        ? await client.query(`INSERT INTO workbench.daily_reports(day,data,revision) VALUES($1,$2,1)
+            ON CONFLICT(day) DO NOTHING RETURNING data`, [report.day, JSON.stringify(report)])
+        : await client.query(`UPDATE workbench.daily_reports SET data=$2,revision=revision+1,updated_at=now()
+            WHERE day=$1 AND revision=$3 RETURNING data`, [report.day, JSON.stringify(report), expectedRevision])
+      return result.rows[0]?.data ?? null
+    })
   }
   async applySummaries(tasks: Task[], items: { taskId: string; title: string }[]) {
     const originals = new Map(tasks.map((task) => [task.id, task.title]))
@@ -77,11 +85,46 @@ export class Store {
       return updated
     })
   }
-  async createTask(title: string) {
+  async createTask(title: string, isPersonal = false) {
     const id = randomUUID()
-    const { rows } = await this.pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,status_origin)
-      VALUES($1,$2,'manual',$3,now(),'manual') RETURNING *`, [id, `TASK-${id.slice(0, 8).toUpperCase()}`, title])
+    const { rows } = await this.pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,status_origin,is_personal,personal_origin)
+      VALUES($1,$2,'manual',$3,now(),'manual',$4,'manual') RETURNING *`, [id, `TASK-${id.slice(0, 8).toUpperCase()}`, title, isPersonal])
     return taskFromRow(rows[0])
+  }
+  async setPersonal(id: string, isPersonal: boolean): Promise<Task | null> {
+    return this.transaction(async (client) => {
+      const existing = await client.query('SELECT * FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE', [id])
+      if (!existing.rows[0]) return null
+      // 分类来源独立于完成状态，人工改正后仍允许 AI 更新真实进展。
+      const { rows } = await client.query(`UPDATE workbench.tasks SET is_personal=$2,personal_origin='manual',updated_at=now()
+        WHERE id=$1 RETURNING *`, [id, isPersonal])
+      const saved = taskFromRow(rows[0])
+      if (Boolean(existing.rows[0].is_personal) !== isPersonal) await this.updatePersonalReports(client, [saved])
+      return saved
+    })
+  }
+  private async updatePersonalReports(client: PoolClient, changedTasks: Task[]) {
+    if (!changedTasks.length) return
+    const ids = [...new Set(changedTasks.map((task) => task.id))]
+    const changes = changedTasks.map((task) => ({ day: dateKey(new Date(recordTimestamp(task) ?? task.createdAt)), pending: !task.completedAt }))
+    const personalIds = new Set<string>((await client.query('SELECT id FROM workbench.tasks WHERE id=ANY($1::text[]) AND is_personal', [ids])).rows.map((row) => row.id))
+    if (personalIds.size) {
+      const reports = await client.query(`SELECT day,data,revision FROM workbench.daily_reports WHERE data->'recordVersions' ?| $1::text[]
+        OR EXISTS(SELECT 1 FROM jsonb_array_elements(data->'items') item WHERE item->'taskIds' ?| $1::text[])
+        ORDER BY day FOR UPDATE`, [[...personalIds]])
+      for (const row of reports.rows) {
+        const cleaned = excludePersonalReportItems(row.data, personalIds)
+        // 同一事项可能跨日推进，早期日报引用的日期也要刷新关联周月报。
+        changes.push({ day: cleaned.day, pending: false })
+        await client.query(`UPDATE workbench.daily_reports SET data=$2,revision=revision+1,updated_at=now() WHERE day=$1`,
+          [row.day, JSON.stringify({ ...cleaned, revision: row.revision + 1 })])
+      }
+    }
+    // 已生成的自动周月报下次读取时重整；人工正文提示复核，防止无声覆盖编辑。
+    await client.query(`UPDATE workbench.periodic_reports SET revision=revision+1,updated_at=now(),
+      data=data||jsonb_build_object('needsRefresh',true,'revision',revision+1)
+      WHERE EXISTS(SELECT 1 FROM jsonb_to_recordset($1::jsonb) AS changed(day text,pending boolean)
+        WHERE data->>'endDate'>=changed.day AND (changed.pending OR data->>'startDate'<=changed.day))`, [JSON.stringify(changes)])
   }
   async setCompleted(id: string, completed: boolean) {
     const existing = await this.pool.query('SELECT source, zentao FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
@@ -121,8 +164,8 @@ export class Store {
               OR (deleted_at IS NULL AND (completed_at IS NULL OR zentao->>'type'='bug')))`, [item.id, metadata])).rowCount ?? 0
           continue
         }
-        const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,status_origin,zentao)
-          VALUES($1,$2,'zentao',$3,$4,$5,'zentao',$6::jsonb)
+        const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,status_origin,personal_origin,zentao)
+          VALUES($1,$2,'zentao',$3,$4,$5,'zentao','manual',$6::jsonb)
           ON CONFLICT(id) DO UPDATE SET title=excluded.title,zentao=excluded.zentao,deleted_at=NULL,updated_at=now(),
             completed_at=CASE
               WHEN (excluded.zentao->>'type')='bug' THEN (CASE WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END)
@@ -155,8 +198,8 @@ export class Store {
     return this.transaction(async (client) => {
       let imported = 0
       for (const task of tasks) {
-        const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,status_origin)
-          VALUES($1,$2,'manual',$3,$4,$5,'manual') ON CONFLICT(id) DO NOTHING`, [task.id, task.reference, task.title, task.createdAt, task.completedAt])
+        const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,status_origin,is_personal,personal_origin)
+          VALUES($1,$2,'manual',$3,$4,$5,'manual',$6,'manual') ON CONFLICT(id) DO NOTHING`, [task.id, task.reference, task.title, task.createdAt, task.completedAt, task.isPersonal ?? false])
         imported += result.rowCount ?? 0
       }
       return { imported, duplicates: tasks.length - imported }
@@ -293,6 +336,7 @@ export class Store {
         if (!row || !row.valid || (message.bodyRevision ? message.bodyRevision !== row.body_revision : row.body !== message.text)) throw new Error('来源正文已修改或撤回，下次同步将重新核对')
       }
       let created = 0, updated = 0
+      const classificationChanges: Task[] = []
       for (const item of items) {
         const evidence: Evidence[] = item.evidenceIds.map((id) => {
           const message = evidenceMessages.get(id)
@@ -308,19 +352,22 @@ export class Store {
           const task = existing.rows[0]
           if (task.project_path !== first.projectPath || requiresManualCompletion(task.source)) throw new Error('模型尝试修改其他项目、手工事项或禅道任务')
           const merged = [...task.evidence as Evidence[], ...evidence].filter((entry, index, all) => all.findIndex((other) => other.messageId === entry.messageId && other.quote === entry.quote && other.valid === entry.valid) === index)
-          await client.query(`UPDATE workbench.tasks SET title=CASE WHEN status_origin='manual' OR recorded_at>$5::timestamptz THEN title ELSE $2 END,
+          const saved = await client.query(`UPDATE workbench.tasks SET title=CASE WHEN status_origin='manual' OR recorded_at>$5::timestamptz THEN title ELSE $2 END,
             completed_at=CASE WHEN status_origin='manual' OR recorded_at>$5::timestamptz THEN completed_at ELSE $3 END,evidence=$4,evidence_stale=CASE WHEN recorded_at>$5::timestamptz THEN evidence_stale ELSE false END,
-            recorded_at=greatest(recorded_at,$5::timestamptz),updated_at=now() WHERE id=$1`, [id, item.title, completed, JSON.stringify(merged), last.timestamp])
+            is_personal=CASE WHEN personal_origin='manual' OR recorded_at>$5::timestamptz THEN is_personal ELSE $6 END,
+            recorded_at=greatest(recorded_at,$5::timestamptz),updated_at=now() WHERE id=$1 RETURNING *`, [id, item.title, completed, JSON.stringify(merged), last.timestamp, item.isPersonal ?? false])
+          if (Boolean(task.is_personal) !== Boolean(saved.rows[0].is_personal)) classificationChanges.push(taskFromRow(task), taskFromRow(saved.rows[0]))
           updated++
         } else {
           if (item.taskId) throw new Error('模型返回了未知事项 ID')
           const prefix = ({ codex: 'CX', claude: 'CC', workbuddy: 'WB', zcode: 'ZC', gemini: 'GM' } as Record<string, string>)[first.source] ?? 'CH'
-          const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,project_path,status_origin,evidence,recorded_at)
-            VALUES($1,$2,$3,$4,$5,$6,$7,'ai',$8,$9) ON CONFLICT(id) DO NOTHING`,
-          [id, `${prefix}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence), last.timestamp])
+          const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,project_path,status_origin,evidence,recorded_at,is_personal)
+            VALUES($1,$2,$3,$4,$5,$6,$7,'ai',$8,$9,$10) ON CONFLICT(id) DO NOTHING`,
+          [id, `${prefix}-${id.slice(0, 8).toUpperCase()}`, first.source, item.title, first.timestamp, completed, first.projectPath, JSON.stringify(evidence), last.timestamp, item.isPersonal ?? false])
           created += result.rowCount ?? 0
         }
       }
+      await this.updatePersonalReports(client, classificationChanges)
       await client.query('UPDATE workbench.source_messages SET extracted=true WHERE id=ANY($1::text[])', [messages.map((message) => message.id)])
       await client.query("UPDATE workbench.extraction_batches SET status='succeeded',error=NULL,updated_at=now() WHERE id=$1", [batchId])
       return { created, updated }
@@ -375,12 +422,19 @@ export class Store {
   async periodicReport(type: 'weekly' | 'monthly', key: string): Promise<PeriodicReportModel | null> {
     return (await this.pool.query('SELECT data FROM workbench.periodic_reports WHERE type=$1 AND period_key=$2', [type, key])).rows[0]?.data ?? null
   }
-  async savePeriodicReport(report: PeriodicReportModel, expectedRevision: number): Promise<PeriodicReportModel | null> {
+  async savePeriodicReport(report: PeriodicReportModel, expectedRevision: number, scopeSnapshot?: Task[]): Promise<PeriodicReportModel | null> {
     const data = { ...report, revision: expectedRevision + 1 }
-    const result = expectedRevision === 0
-      ? await this.pool.query(`INSERT INTO workbench.periodic_reports(type,period_key,data,revision) VALUES($1,$2,$3,1) ON CONFLICT DO NOTHING RETURNING data`, [report.type, report.periodKey, JSON.stringify(data)])
-      : await this.pool.query(`UPDATE workbench.periodic_reports SET data=$3,revision=revision+1,updated_at=now() WHERE type=$1 AND period_key=$2 AND revision=$4 RETURNING data`, [report.type, report.periodKey, JSON.stringify(data), expectedRevision])
-    return result.rows[0]?.data ?? null
+    return this.transaction(async (client) => {
+      if (scopeSnapshot) {
+        const { rows } = await client.query('SELECT id,is_personal FROM workbench.tasks WHERE deleted_at IS NULL ORDER BY id FOR SHARE')
+        const scopes = new Map(scopeSnapshot.map((task) => [task.id, Boolean(task.isPersonal)]))
+        if (rows.some((row) => Boolean(row.is_personal) !== (scopes.get(row.id) ?? false))) return null
+      }
+      const result = expectedRevision === 0
+        ? await client.query(`INSERT INTO workbench.periodic_reports(type,period_key,data,revision) VALUES($1,$2,$3,1) ON CONFLICT DO NOTHING RETURNING data`, [report.type, report.periodKey, JSON.stringify(data)])
+        : await client.query(`UPDATE workbench.periodic_reports SET data=$3,revision=revision+1,updated_at=now() WHERE type=$1 AND period_key=$2 AND revision=$4 RETURNING data`, [report.type, report.periodKey, JSON.stringify(data), expectedRevision])
+      return result.rows[0]?.data ?? null
+    })
   }
   async scheduleCheckpoint(): Promise<string | null> {
     return (await this.pool.query("SELECT value FROM workbench.settings WHERE key='report_schedule_checkpoint'")).rows[0]?.value ?? null

@@ -3,7 +3,7 @@ import { dateKey, recordsForDate, requiresManualCompletion } from './domain/work
 import type { Task, WorkbenchState } from './domain/workbench'
 import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
 import { mergeDailyReports } from '../shared/dailyReports'
-import { createTask, deleteTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask } from './data/apiRepository'
+import { createTask, deleteTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask, updateTaskPersonal } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
 import { changedCaptureDestinations } from './domain/captureFlow'
 import { CaptureOutput } from './components/CaptureOutput'
@@ -39,6 +39,7 @@ export default function App() {
   const [recentId, setRecentId] = useState<string | null>(null)
   const [changingId, setChangingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [classifyingId, setClassifyingId] = useState<string | null>(null)
   const [syncRequested, setSyncRequested] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [spaceOpen, setSpaceOpen] = useState(false)
@@ -146,12 +147,25 @@ export default function App() {
       setPhase('inbound'); setJob(nextJob)
     } catch (cause) { busy.current = false; setChangingId(null); setError(cause instanceof Error ? cause.message : '完成操作失败') }
   }, [finishTransfer, processorRefs])
-  const handleAdd = useCallback(async (title: string) => {
+  const handleAdd = useCallback(async (title: string, isPersonal: boolean) => {
     mutationVersion.current++
     setError(null)
-    try { const task = await createTask(title); setState((current) => ({ ...current, tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)] })) }
+    try { const task = await createTask(title, isPersonal); setState((current) => ({ ...current, tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)] })) }
     catch (cause) { setError(cause instanceof Error ? cause.message : '添加失败'); throw cause }
     finally { mutationVersion.current++ }
+  }, [])
+  const handleTogglePersonal = useCallback(async (task: Task): Promise<Task> => {
+    if (busy.current) throw new Error('正在保存其他事项，请稍后重试')
+    busy.current = true; mutationVersion.current++; setClassifyingId(task.id); setError(null)
+    try {
+      const saved = await updateTaskPersonal(task.id, !task.isPersonal)
+      setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === saved.id ? saved : item) }))
+      captureBaseline.current = captureBaseline.current?.map((item) => item.id === saved.id ? saved : item) ?? null
+      return saved
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '事项分类保存失败，请重试')
+      throw cause
+    } finally { mutationVersion.current++; busy.current = false; setClassifyingId(null); void pollerRef.current?.refreshNow() }
   }, [])
   const handleReopen = useCallback(async (task: Task) => {
     if (busy.current) return
@@ -220,9 +234,9 @@ export default function App() {
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
       <main className={`stage-container${working ? ' is-working' : ''}`}>
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
-        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null} onAdd={handleAdd} onComplete={handleComplete} onDelete={handleDelete} />
+        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null || classifyingId !== null} onAdd={handleAdd} onTogglePersonal={handleTogglePersonal} onComplete={handleComplete} onDelete={handleDelete} />
         <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} channels={snapshot?.channels} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
+        <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} onTogglePersonal={handleTogglePersonal} disabled={!connected || changingId !== null || deletingId !== null || classifyingId !== null} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}

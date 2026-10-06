@@ -5,6 +5,7 @@ import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
 import { TaskReference, ZentaoTaskDetails } from './TaskReference'
+import { PersonalTaskToggle } from './PersonalTaskToggle'
 
 interface TaskPanelProps {
   tasks: Task[]
@@ -12,20 +13,22 @@ interface TaskPanelProps {
   activeId: string | null
   deletingId: string | null
   disabled?: boolean
-  onAdd: (title: string) => Promise<void>
+  onAdd: (title: string, isPersonal: boolean) => Promise<void>
+  onTogglePersonal: (task: Task) => Promise<Task>
   onComplete: (task: Task, button: HTMLButtonElement) => void
   onDelete: (task: Task) => void
 }
 
-export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, disabled, onAdd, onComplete, onDelete }: TaskPanelProps) {
+export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, disabled, onAdd, onTogglePersonal, onComplete, onDelete }: TaskPanelProps) {
   const [title, setTitle] = useState('')
+  const [isPersonal, setIsPersonal] = useState(false)
   const [adding, setAdding] = useState(false)
   const busy = activeId !== null || !!disabled || adding
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!title.trim() || busy) return
     setAdding(true)
-    try { await onAdd(title); setTitle('') } catch { /* 请求失败时保留输入内容。 */ }
+    try { await onAdd(title, isPersonal); setTitle(''); setIsPersonal(false) } catch { /* 请求失败时保留输入内容。 */ }
     finally { setAdding(false) }
   }
 
@@ -49,24 +52,23 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
             <ZentaoTaskDetails task={task} />
-            {(task.source === 'manual' || canManualComplete(task) || task.projectPath || task.evidenceCount || task.evidence?.length || task.evidenceStale) && (
-              <div className="daily-log-actions">
-                <TaskEvidence task={task} />
-                <div className="task-action-buttons">
-                  {task.source === 'manual' && <button className="delete-task" disabled={busy} onClick={() => onDelete(task)} aria-label={`删除待办：${task.title}`}><Icon name="trash" /><span>{deletingId === task.id ? '删除中' : '删除'}</span></button>}
-                  {canManualComplete(task) && (
-                    <button
-                      className="reopen-task complete-task"
-                      disabled={busy}
-                      onClick={(event) => onComplete(task, event.currentTarget)}
-                      aria-label={`完成任务：${task.title}`}
-                    >
-                      <span>{activeId === task.id ? '传输中' : '完成'}</span>
-                    </button>
-                  )}
-                </div>
+            <div className="daily-log-actions">
+              <TaskEvidence task={task} />
+              <div className="task-action-buttons">
+                <PersonalTaskToggle task={task} disabled={busy} onToggle={onTogglePersonal} />
+                {task.source === 'manual' && <button className="delete-task" disabled={busy} onClick={() => onDelete(task)} aria-label={`删除待办：${task.title}`}><Icon name="trash" /><span>{deletingId === task.id ? '删除中' : '删除'}</span></button>}
+                {canManualComplete(task) && (
+                  <button
+                    className="reopen-task complete-task"
+                    disabled={busy}
+                    onClick={(event) => onComplete(task, event.currentTarget)}
+                    aria-label={`完成任务：${task.title}`}
+                  >
+                    <span>{activeId === task.id ? '传输中' : '完成'}</span>
+                  </button>
+                )}
               </div>
-            )}
+            </div>
           </article>
         ))}
         {tasks.length === 0 && (
@@ -89,9 +91,12 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
           disabled={busy}
           onChange={(event) => setTitle(event.target.value)}
         />
+        <button type="button" className={`personal-task-toggle quick-add-personal${isPersonal ? ' is-personal' : ''}`} disabled={busy}
+          aria-label="新待办是否为个人事项" aria-pressed={isPersonal} title="个人事项不参与日报、周报和月报"
+          onClick={() => setIsPersonal((current) => !current)}><Icon name="user" /><span>个人</span></button>
         <button className="quick-add-btn" disabled={busy || !title.trim()} type="submit">{adding ? '保存中' : '添加'}</button>
       </form>
-      <span className="panel-footnote">待办完成后会自动收进工作日志</span>
+      <span className="panel-footnote">待办完成后进入日志，个人事项不参与工作汇报</span>
     </section>
   )
 })

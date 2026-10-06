@@ -135,6 +135,8 @@ export function PersonalSpace({ clock, onClose, onOpenSettings }: PersonalSpaceP
         </div>
       </header>
 
+      {activeReport.needsRefresh && <p className="storage-notice" role="status">事项的工作／个人分类已变更。此报告含人工编辑内容，请复核并保存，或点击“重新整理”生成排除个人事项的新报告。</p>}
+
       {/* 主工作区：双栏布局 */}
       <div className="space-layout-body">
         {/* 左栏：周期选择与数据画像 */}

@@ -5,6 +5,7 @@ import { TaskEvidence } from './TaskEvidence'
 import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 import type { DailyReport } from '../../shared/contracts'
 import { isRecordInReport } from '../../shared/dailyReports'
+import { PersonalTaskToggle } from './PersonalTaskToggle'
 
 const logTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
 export interface LogRecordsProps {
@@ -12,10 +13,11 @@ export interface LogRecordsProps {
   dailyReport?: DailyReport | null
   recentId?: string | null
   onReopen: (task: Task) => void
+  onTogglePersonal: (task: Task) => Promise<Task>
   disabled: boolean
 }
 
-export function LogRecords({ records, dailyReport, recentId, onReopen, disabled }: LogRecordsProps) {
+export function LogRecords({ records, dailyReport, recentId, onReopen, onTogglePersonal, disabled }: LogRecordsProps) {
   return <div className="daily-item-list">
     {records.map((task) => <article key={task.id} className={`daily-log-card${task.id === recentId ? ' just-arrived' : ''}`}>
       <div className="daily-log-top">
@@ -29,8 +31,9 @@ export function LogRecords({ records, dailyReport, recentId, onReopen, disabled 
       <div className="daily-log-actions">
         <ZentaoTaskDetails task={task} />
         <TaskEvidence task={task} />
-        <span className={`daily-log-report-state ${isRecordInReport(task, dailyReport) ? 'is-organized' : 'is-pending'}`}
-          title={isRecordInReport(task, dailyReport) ? '已整合进这一天保存的日报' : '尚未整理，或内容更新后需要补充整理'}>{isRecordInReport(task, dailyReport) ? '已整理' : '待整理'}</span>
+        <PersonalTaskToggle task={task} disabled={disabled} onToggle={onTogglePersonal} />
+        <span className={`daily-log-report-state ${task.isPersonal ? 'is-excluded' : isRecordInReport(task, dailyReport) ? 'is-organized' : 'is-pending'}`}
+          title={task.isPersonal ? '个人事项不会纳入工作日报、周报和月报' : isRecordInReport(task, dailyReport) ? '已整合进这一天保存的日报' : '尚未整理，或内容更新后需要补充整理'}>{task.isPersonal ? '不纳入报告' : isRecordInReport(task, dailyReport) ? '已整理' : '待整理'}</span>
         {canManualComplete(task) && <button className="reopen-task" disabled={disabled} onClick={() => onReopen(task)} aria-label={`恢复为待办：${task.title}`}>恢复待办</button>}
       </div>
     </article>)}

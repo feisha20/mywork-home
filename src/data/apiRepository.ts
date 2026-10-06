@@ -25,8 +25,9 @@ export async function fetchWorkbench() {
   if (!snapshot || !decodeSnapshot(JSON.stringify(snapshot)) || !snapshot.harness || !snapshot.sources) throw new Error('服务返回的数据无法读取')
   return snapshot
 }
-export const createTask = (title: string) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify({ title }) })
+export const createTask = (title: string, isPersonal?: boolean) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify({ title, isPersonal }) })
 export const updateTask = (id: string, completed: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ completed }) })
+export const updateTaskPersonal = (id: string, isPersonal: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}/personal`, { method: 'PATCH', body: JSON.stringify({ isPersonal }) })
 export const deleteTask = (id: string) => request<{ deleted: boolean }>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
 export const startSync = () => request<SyncRun>('/sync', { method: 'POST', body: '{}' })
 export const fetchSettings = (signal?: AbortSignal) => request<WorkbenchSettings>('/settings', { signal, cache: 'no-store' })

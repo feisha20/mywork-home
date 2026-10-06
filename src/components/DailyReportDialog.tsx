@@ -26,7 +26,12 @@ export function DailyReportDialog({ day, records, savedReport, onSaved, onClose 
   const [copyError, setCopyError] = useState<string | null>(null)
   const requestRef = useRef<AbortController | null>(null)
   const [coverage, setCoverage] = useState<{ recordCount: number; unorganizedCount: number } | null>(null)
-  const unorganizedCount = coverage?.unorganizedCount ?? records.filter((task) => !isRecordInReport(task, report)).length
+  const workRecordCount = records.filter((task) => !task.isPersonal).length
+  const unorganizedCount = coverage?.unorganizedCount ?? records.filter((task) => !task.isPersonal && !isRecordInReport(task, report)).length
+
+  useEffect(() => {
+    if (savedReport) setReport((current) => !current || savedReport.revision > current.revision ? savedReport : current)
+  }, [savedReport])
 
   useEffect(() => {
     const dialog = dialogRef.current
@@ -87,7 +92,7 @@ export function DailyReportDialog({ day, records, savedReport, onSaved, onClose 
       if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) event.currentTarget.close()
     }}>
     <header className="daily-report-header">
-      <div><h2 id={headingId}>{dailyReportTitle(day)}</h2><p id={helpId}>按项目与工作目标归类，每项用一句话概括主要进展。</p></div>
+      <div><h2 id={headingId}>{dailyReportTitle(day)}</h2><p id={helpId}>按项目与工作目标归类，忽略个人事项，每项用一句话概括主要进展。</p></div>
       <button className="log-history-close" autoFocus aria-label="关闭工作日报窗口" onClick={() => dialogRef.current?.close()}><Icon name="close" /></button>
     </header>
     <div className="daily-report-body" aria-busy={pending}>
@@ -97,6 +102,7 @@ export function DailyReportDialog({ day, records, savedReport, onSaved, onClose 
         <p className="daily-report-meta">已保存 · 已整理 {report.recordCount} 条记录，汇总为 {report.items.length} 项工作</p>
         <h3>{dailyReportTitle(report.day)}</h3>
         <ol>{report.items.map((item, index) => <li key={index}>{item.text}</li>)}</ol>
+        {!report.items.length && <p>已排除个人事项，当前暂无已整理的工作摘要。</p>}
       </section>}
       {report && unorganizedCount > 0 && !pending && <p className="daily-report-change" role="status">还有 {unorganizedCount} 条新增或更新的日志待整理，可点击“补充整理”纳入日报。</p>}
     </div>
@@ -105,8 +111,8 @@ export function DailyReportDialog({ day, records, savedReport, onSaved, onClose 
         {copyError ? <p role="alert">{copyError}</p> : copyState === 'copied' ? <p>已复制，可直接粘贴。</p> : <p>复制内容包含日期和分点总结。</p>}
       </div>
       <div className="daily-report-actions">
-        <button className="report-button report-regenerate" disabled={pending || !(coverage?.recordCount ?? records.length) || Boolean(report && !unorganizedCount)} onClick={() => void handleSupplement()}>{report ? unorganizedCount ? `补充整理（${unorganizedCount}）` : '已全部整理' : '重试生成'}</button>
-        <button className="report-button report-copy" disabled={!report || pending || copyState === 'copying'} onClick={() => void handleCopy()}><Icon name={copyState === 'copied' ? 'check' : 'copy'} />{copyState === 'copied' ? '已复制' : copyState === 'copying' ? '正在复制…' : '一键复制'}</button>
+        <button className="report-button report-regenerate" disabled={pending || !(coverage?.recordCount ?? workRecordCount) || Boolean(report && !unorganizedCount)} onClick={() => void handleSupplement()}>{report ? unorganizedCount ? `补充整理（${unorganizedCount}）` : '已全部整理' : '重试生成'}</button>
+        <button className="report-button report-copy" disabled={!report?.items.length || pending || copyState === 'copying'} onClick={() => void handleCopy()}><Icon name={copyState === 'copied' ? 'check' : 'copy'} />{copyState === 'copied' ? '已复制' : copyState === 'copying' ? '正在复制…' : '一键复制'}</button>
       </div>
     </footer>
   </dialog>, document.body)

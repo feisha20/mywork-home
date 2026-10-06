@@ -17,7 +17,7 @@ import { dateKey, recordsForDate } from '../src/domain/workbench.js'
 import { DailyReportService } from './dailyReport.js'
 import { PeriodicReportScheduler } from './periodicReportScheduler.js'
 import { PeriodicReportService } from './periodicReport.js'
-import { isRecordInReport } from '../shared/dailyReports.js'
+import { isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 import { ZentaoV2Client, type ZentaoSnapshot, type ZentaoWorkItem } from './zentao.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
@@ -533,6 +533,127 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await store.tasks()).find((row) => row.id === bug.id)?.title).toBe(edited.title)
     // 源为禅道的事项不作为会话模型可修改的既有任务。
     expect((await store.projectTasks('')).some((row) => row.source === 'zentao')).toBe(false)
+  })
+  it('个人分类清理旧日报混合摘要，刷新自动周报并提示人工月报复核', async () => {
+    const day = '2026-07-15', at = `${day}T03:00:00Z`
+    const originals = ['完成项目交付', '安排家庭旅行', '完善另一个工作项目'].map((title) => ({
+      id: randomUUID(), source: 'manual' as const, reference: 'TASK-private-fixture', title, createdAt: at, completedAt: at,
+    }))
+    await store.importTasks(originals)
+    const normalized = await store.reportRecords(day)
+    const initial = { day, generatedAt: at, revision: 1, recordCount: 3,
+      recordVersions: Object.fromEntries(normalized.map((task) => [task.id, reportRecordVersion(task)])), items: [
+        { text: '完成项目交付并安排家庭旅行', taskIds: originals.slice(0, 2).map((task) => task.id) },
+        { text: '完善另一个工作项目', taskIds: [originals[2].id] },
+      ] }
+    expect(await store.saveDailyReport(initial, 0)).toEqual(initial)
+    const weeklyPath = '/api/periodic-reports/weekly/2026-W29', monthlyPath = '/api/periodic-reports/monthly/2026-07'
+    expect((await app.inject({ method: 'POST', url: weeklyPath, payload: { revision: 0 } })).json().markdown).toContain('家庭旅行')
+    const manual = '# 人工月报\n完成项目交付并安排家庭旅行。'
+    expect((await app.inject({ method: 'PUT', url: monthlyPath, payload: { revision: 0, markdown: manual } })).statusCode).toBe(200)
+    const path = `/api/tasks/${originals[1].id}/personal`
+    for (const payload of [{}, { isPersonal: 'true' }, { isPersonal: 1 }, { isPersonal: true, completed: false }]) {
+      expect((await app.inject({ method: 'PATCH', url: path, payload })).statusCode).toBe(400)
+    }
+    expect((await app.inject({ method: 'PATCH', url: '/api/tasks/missing/personal', payload: { isPersonal: true } })).statusCode).toBe(404)
+    const marked = await app.inject({ method: 'PATCH', url: path, payload: { isPersonal: true } })
+    expect(marked.statusCode).toBe(200)
+    expect(marked.json()).toMatchObject({ isPersonal: true, personalOrigin: 'manual', title: originals[1].title, completedAt: '2026-07-15T03:00:00.000Z' })
+    const other = new Store(pool)
+    expect((await other.recordPage({ startDate: day, endDate: day, onlyRecords: true })).tasks.find((task) => task.id === originals[1].id)?.isPersonal).toBe(true)
+    expect((await other.reportRecords(day)).map((task) => task.id).sort()).toEqual([originals[0].id, originals[2].id].sort())
+    const cleaned = (await app.inject({ url: `/api/daily-reports/${day}` })).json()
+    expect(cleaned).toMatchObject({ revision: 2, recordCount: 1, items: [initial.items[1]] })
+    expect(cleaned.recordVersions).toEqual({ [originals[2].id]: initial.recordVersions[originals[2].id] })
+    expect((await app.inject({ url: `/api/daily-reports/${day}/status` })).json()).toEqual({ recordCount: 2, unorganizedCount: 1 })
+    const refreshed = (await app.inject({ url: weeklyPath })).json()
+    expect(refreshed.markdown).not.toContain('家庭旅行')
+    expect(refreshed.revision).toBe(3)
+    expect(refreshed.stats.completedTasks).toBe(2)
+    expect((await app.inject({ url: monthlyPath })).json()).toMatchObject({ markdown: manual, edited: true, needsRefresh: true, revision: 2 })
+    const supplemented = await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day, mode: 'append' } })
+    expect(supplemented.statusCode).toBe(200)
+    expect(reportInputs.at(-1)).toEqual([originals[0].id])
+    expect(supplemented.json().recordCount).toBe(2)
+    expect((await app.inject({ method: 'PATCH', url: path, payload: { isPersonal: false } })).json().personalOrigin).toBe('manual')
+    expect((await app.inject({ url: `/api/daily-reports/${day}/status` })).json().unorganizedCount).toBe(1)
+    const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: '记下私人安排', isPersonal: true } })
+    expect(created.json()).toMatchObject({ isPersonal: true, personalOrigin: 'manual', completedAt: null })
+    const completed = (await app.inject({ method: 'PATCH', url: `/api/tasks/${created.json().id}`, payload: { completed: true } })).json()
+    expect(completed.isPersonal).toBe(true)
+    expect((await store.reportRecords(dateKey(new Date(completed.completedAt)))).some((task) => task.id === completed.id)).toBe(false)
+  })
+  it('所有会话来源保存 AI 分类，旧结果不覆盖新分类，手动双向改正仍允许 AI 更新进展', async () => {
+    for (const source of ['codex', 'claude', 'workbuddy', 'zcode', 'gemini', 'custom-private'] as const) {
+      const session = randomUUID(), projectPath = `/__personal_test__/${session}`
+      const apply = async (index: number, isPersonal: boolean, taskId?: string) => {
+        const message: SourceMessage = { id: `${session}:${index}`, sessionId: session, rootSessionId: session, projectPath, source,
+          role: 'assistant', timestamp: `2026-05-12T0${index}:00:00Z`, text: `个人事项与进展测试 ${index}` }
+        const cursor: Cursor = { path: `personal:${session}`, source, inode: '1', offset: index, modifiedAt: index,
+          context: { sessionId: session, projectPath, parentSessionId: null, turnId: '' } }
+        await store.ingest([message], cursor)
+        const batch = store.batchId([message]); await store.startBatch(batch, session, [message])
+        await store.applyExtraction(batch, [message], [], [{ taskId, title: '安排事项并确认执行结果', status: index >= 3 ? 'completed' : 'todo', isPersonal, evidenceIds: [message.id] }])
+        return (await store.projectTasks(projectPath))[0]
+      }
+      let task = await apply(1, true)
+      expect(task).toMatchObject({ source, isPersonal: true, personalOrigin: 'ai', statusOrigin: 'ai', completedAt: null })
+      task = await apply(3, false, task.id)
+      expect(task.isPersonal).toBe(false)
+      task = await apply(2, true, task.id)
+      expect(task.isPersonal).toBe(false)
+      expect(task.recordedAt).toBe('2026-05-12T03:00:00.000Z')
+      await store.setPersonal(task.id, true)
+      task = await apply(4, false, task.id)
+      expect(task).toMatchObject({ isPersonal: true, personalOrigin: 'manual', statusOrigin: 'ai', completedAt: '2026-05-12T04:00:00.000Z' })
+      await store.setPersonal(task.id, false)
+      task = await apply(5, true, task.id)
+      expect(task).toMatchObject({ isPersonal: false, personalOrigin: 'manual', statusOrigin: 'ai', completedAt: '2026-05-12T05:00:00.000Z' })
+      expect((await new Store(pool).recordPage({ startDate: '2026-05-12', endDate: '2026-05-12', onlyRecords: true })).tasks.find((item) => item.id === task.id)?.isPersonal).toBe(false)
+    }
+  })
+  it('AI 将跨月推进的事项改为个人时，清理更早日报并刷新早期月报', async () => {
+    const session = randomUUID(), source = 'codex', projectPath = `/__personal_history__/${session}`
+    const apply = async (day: string, isPersonal: boolean, taskId?: string) => {
+      const message: SourceMessage = { id: `${session}:${day}`, sessionId: session, rootSessionId: session, projectPath, source,
+        role: 'assistant', timestamp: `${day}T03:00:00Z`, text: `确认事项实际用途 ${day}` }
+      const cursor: Cursor = { path: `personal-history:${session}`, source, inode: '1', offset: 1, modifiedAt: Date.parse(message.timestamp),
+        context: { sessionId: session, projectPath, parentSessionId: null, turnId: '' } }
+      await store.ingest([message], cursor)
+      const batch = store.batchId([message]); await store.startBatch(batch, session, [message])
+      await store.applyExtraction(batch, [message], [], [{ taskId, title: '安排家庭旅行并确认行程', status: 'completed', isPersonal, evidenceIds: [message.id] }])
+      return (await store.projectTasks(projectPath))[0]
+    }
+    const task = await apply('2026-03-17', false)
+    await store.saveDailyReport({ day: '2026-03-17', generatedAt: task.createdAt, revision: 1, recordCount: 1,
+      recordVersions: { [task.id]: reportRecordVersion(task) }, items: [{ text: '安排家庭旅行并确认行程', taskIds: [task.id] }] }, 0)
+    const path = '/api/periodic-reports/monthly/2026-03'
+    expect((await app.inject({ method: 'POST', url: path, payload: { revision: 0 } })).json().markdown).toContain('家庭旅行')
+    await apply('2026-05-17', false, task.id)
+    const personal = await apply('2026-06-17', true, task.id)
+    expect(personal).toMatchObject({ isPersonal: true, personalOrigin: 'ai' })
+    expect(await store.dailyReport('2026-03-17')).toMatchObject({ items: [], recordCount: 0, recordVersions: {}, revision: 2 })
+    expect(await store.periodicReport('monthly', '2026-03')).toMatchObject({ needsRefresh: true, revision: 2 })
+    expect((await app.inject({ url: path })).json().markdown).not.toContain('家庭旅行')
+  })
+  it('分类变化时拒绝保存生成中的日报和周月报，防止旧素材带回私人事项', async () => {
+    const day = '2026-04-08', at = `${day}T03:00:00Z`
+    const task = { id: randomUUID(), reference: 'TASK-race', source: 'manual' as const, title: '会被改为个人的事项', createdAt: at, completedAt: at }
+    await store.importTasks([task])
+    const reports = new DailyReportService(store, { async generateDailyReport(_day, records) {
+      await store.setPersonal(task.id, true)
+      return [{ text: '生成期间分类已变更的摘要', taskIds: records.map((item) => item.id) }]
+    }, async close() {} })
+    await expect(reports.generate(day)).rejects.toMatchObject({ statusCode: 409 })
+    expect(await store.dailyReport(day)).toBeNull()
+    await reports.close()
+    await store.setPersonal(task.id, false)
+    const periodic = new PeriodicReportService({
+      periodTasks: store.periodTasks.bind(store), dailyReports: store.dailyReports.bind(store), periodicReport: store.periodicReport.bind(store), periodicReports: store.periodicReports.bind(store),
+      savePeriodicReport: async (report, revision, scopes) => { await store.setPersonal(task.id, true); return store.savePeriodicReport(report, revision, scopes) },
+    })
+    await expect(periodic.generate('monthly', '2026-04', 0)).rejects.toMatchObject({ statusCode: 409 })
+    expect(await store.periodicReport('monthly', '2026-04')).toBeNull()
   })
   it('三条待验证 Bug 关闭一条后保留两个待办，并恢复旧版误归档及误删除到关闭当日日志', async () => {
     const connection = { baseUrl: `https://zentao-${randomUUID()}.example`, account: 'fixture', password: '隔离测试密码' }
