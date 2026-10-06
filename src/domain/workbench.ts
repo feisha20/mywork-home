@@ -29,7 +29,11 @@ export interface Task {
   completedAt: string | null
   recordedAt?: string | null
   projectPath?: string
-  statusOrigin?: 'manual' | 'ai'
+  statusOrigin?: 'manual' | 'ai' | 'zentao'
+  zentao?: {
+    instance: string; account: string; type: 'bug' | 'task'; id: string
+    status: string; url: string; priority: number | null; project: string; deadline: string | null
+  } | null
   evidenceCount?: number
   evidenceStale?: boolean
   evidence?: import('../../shared/contracts.js').Evidence[]

@@ -68,6 +68,6 @@ export function ChannelDetailsDialog({ sources, channels, harness, activeSource,
         </> : <p className="sync-detail-empty">等待首次同步，采集完成后显示结果。</p>}
       </section>
     </div>
-    <p className="channel-details-note">自动采集的工作记录按原始日期进入日志。</p>
+    <p className="channel-details-note">禅道待处理事项进入待办；会话采集的工作记录按原始日期进入日志。</p>
   </dialog>, document.body)
 }

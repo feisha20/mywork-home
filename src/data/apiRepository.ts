@@ -36,6 +36,7 @@ export const checkChannelPaths = (collector: CollectorKind, paths: string[], sig
 export const previewChannelRecords = (collector: 'auto' | 'generic', paths: string[], mapping?: RecordMapping, signal?: AbortSignal) => request<RecordPreview>('/settings/preview-records',
   { method: 'POST', body: JSON.stringify({ collector, paths, mapping }), signal, cache: 'no-store' }, 20000)
 export const testModelConnection = (model: SettingsUpdate['model']) => request<{ message: string }>('/settings/test-model', { method: 'POST', body: JSON.stringify(model) }, 20000)
+export const testZentaoConnection = (connection: NonNullable<SettingsUpdate['channels'][number]['zentao']>) => request<{ message: string; bugs: number; tasks: number }>('/settings/test-zentao', { method: 'POST', body: JSON.stringify(connection) }, 70000)
 // 模型总结需要比普通数据请求更长的等待时间；关闭预览时可取消前端等待。
 export const generateDailyReport = (day: string, signal?: AbortSignal, mode: 'initial' | 'append' = 'initial') => request<DailyReport>('/daily-reports',
   { method: 'POST', body: JSON.stringify(mode === 'initial' ? { day } : { day, mode }), signal }, 240000)

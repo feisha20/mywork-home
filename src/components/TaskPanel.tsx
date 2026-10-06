@@ -4,6 +4,7 @@ import { sourceInfo } from '../domain/workbench'
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
+import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 
 interface TaskPanelProps {
   tasks: Task[]
@@ -43,10 +44,11 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
             <div className="daily-log-top">
               <div className="daily-log-source-group">
                 <span className="daily-log-source">{task.sourceLabel ?? sourceInfo(task.source).label}</span>
-                <span className="daily-log-reference">{task.reference}</span>
+                <TaskReference task={task} />
               </div>
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
+            <ZentaoTaskDetails task={task} />
             <div className="daily-log-actions">
               <TaskEvidence task={task} />
               <div className="task-action-buttons">

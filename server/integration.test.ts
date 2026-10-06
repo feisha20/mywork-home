@@ -18,6 +18,7 @@ import { DailyReportService } from './dailyReport.js'
 import { PeriodicReportScheduler } from './periodicReportScheduler.js'
 import { PeriodicReportService } from './periodicReport.js'
 import { isRecordInReport } from '../shared/dailyReports.js'
+import type { ZentaoSnapshot, ZentaoWorkItem } from './zentao.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
 let pool: Pool, store: Store, sync: SyncService, app: FastifyInstance, directory: string
@@ -489,4 +490,45 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect(await store.retryReportJob(id)).toBe(false)
   })
 
+  it('禅道待办在事务内去重更新，保留手动完成，完成日期归档，转派移除且异常回滚', async () => {
+    const instance = `https://zentao-${randomUUID()}.example`, account = 'fixture'
+    const item = (type: 'bug' | 'task', id: string, state: ZentaoWorkItem['state'] = 'pending'): ZentaoWorkItem => ({
+      id: `zentao-fixture-${type}-${id}`, reference: `${type.toUpperCase()}-${id}`, title: `禅道测试${type}${id}`, createdAt: '2026-09-20T01:00:00Z', completedAt: null, state,
+      zentao: { instance, account, type, id, status: type === 'bug' ? 'resolved' : 'doing', url: `${instance}/${type}-view-${id}.html`, priority: 2, project: '测试项目', deadline: null },
+    })
+    const bug = item('bug', randomUUID()), task = item('task', randomUUID()), history = item('task', randomUUID(), 'completed')
+    const snapshot = (items: ZentaoWorkItem[]): ZentaoSnapshot => ({ instance, account, items, bugs: 1, tasks: 1 })
+    expect(await store.applyZentaoSnapshot(snapshot([bug, task, history]))).toEqual({ created: 2, updated: 0 })
+    expect((await store.tasks()).find((row) => row.id === history.id)).toBeUndefined()
+    const originalBug = (await store.tasks()).find((row) => row.id === bug.id)!
+    expect(await store.applySummaries([originalBug], [{ taskId: bug.id, title: '不应改写禅道原始标题' }])).toBe(0)
+    expect(await store.applyZentaoSnapshot(snapshot([bug, task, history]))).toEqual({ created: 0, updated: 0 })
+    const beforeVersion = await store.dataVersion()
+    const edited = { ...bug, title: '更新后的禅道标题', createdAt: '2026-09-21T01:00:00Z' }
+    expect(await store.applyZentaoSnapshot(snapshot([edited, task]))).toEqual({ created: 0, updated: 1 })
+    expect(await store.dataVersion()).not.toBe(beforeVersion)
+    expect((await store.tasks()).find((row) => row.id === bug.id)).toMatchObject({ title: edited.title, createdAt: bug.createdAt.replace('Z', '.000Z'), zentao: bug.zentao })
+    const local = await store.setCompleted(bug.id, true)
+    await store.applyZentaoSnapshot(snapshot([edited, task]))
+    expect((await store.tasks()).find((row) => row.id === bug.id)?.completedAt).toBe(local?.completedAt)
+    const done = { ...task, state: 'completed' as const, completedAt: '2026-10-05T08:20:00Z', zentao: { ...task.zentao, status: 'done' } }
+    expect(await store.applyZentaoSnapshot(snapshot([edited, done]))).toEqual({ created: 0, updated: 1 })
+    expect((await store.recordPage({ startDate: '2026-10-05', endDate: '2026-10-05' })).tasks.find((row) => row.id === task.id)).toMatchObject({ completedAt: '2026-10-05T08:20:00.000Z', zentao: done.zentao })
+    expect(await store.applyZentaoSnapshot(snapshot([edited, done]))).toEqual({ created: 0, updated: 0 })
+    await store.setCompleted(bug.id, false)
+    expect(await store.applyZentaoSnapshot(snapshot([]))).toEqual({ created: 0, updated: 1 })
+    expect((await store.tasks()).some((row) => row.id === bug.id)).toBe(false)
+    expect((await store.tasks()).some((row) => row.id === task.id)).toBe(true)
+    // 重新指派给本人后恢复原编号；取消的待办不形成完成日志。
+    await store.applyZentaoSnapshot(snapshot([edited, task]))
+    expect((await store.tasks()).find((row) => row.id === bug.id)?.completedAt).toBeNull()
+    expect((await store.tasks()).find((row) => row.id === task.id)?.completedAt).toBeNull()
+    await store.applyZentaoSnapshot(snapshot([edited, { ...task, state: 'removed', zentao: { ...task.zentao, status: 'cancel' } }]))
+    expect((await store.tasks()).some((row) => row.id === task.id)).toBe(false)
+    const invalid = { ...item('bug', randomUUID()), title: '' }
+    await expect(store.applyZentaoSnapshot(snapshot([{ ...edited, title: '不应保存的标题' }, invalid]))).rejects.toThrow()
+    expect((await store.tasks()).find((row) => row.id === bug.id)?.title).toBe(edited.title)
+    // 源为禅道的事项不作为会话模型可修改的既有任务。
+    expect((await store.projectTasks('')).some((row) => row.source === 'zentao')).toBe(false)
+  })
 })

@@ -26,6 +26,41 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllGlobals(); await rm(directory, { recursive: true, force: true }) })
 
 describe('设置持久化与密钥边界', () => {
+  it('禅道密码仅在服务端保存，留空保留、修改身份重填、停用后可清除，重启保留配置', async () => {
+    const input = settingsDraft(settings.view()), channel = input.channels.find((entry) => entry.id === 'zentao')!
+    channel.enabled = true; channel.zentao = { baseUrl: 'https://pm.example/zentao/', account: 'linjt', password: '禅道测试专用密码' }
+    const saved = await settings.save(input)
+    expect(saved.channels.find((entry) => entry.id === 'zentao')?.zentao).toEqual({ baseUrl: 'https://pm.example/zentao', account: 'linjt', hasPassword: true })
+    expect(JSON.stringify(saved)).not.toContain('禅道测试专用密码')
+    expect(JSON.stringify(settings.summaries())).not.toContain('pm.example')
+    const reopened = await SettingsService.open(config)
+    expect(reopened.view()).toEqual(saved)
+    expect(reopened.zentaoConnection()?.password).toBe('禅道测试专用密码')
+    expect(reopened.runtimeConfig().sourceSecrets).toContain('禅道测试专用密码')
+    await reopened.save(settingsDraft(saved))
+    expect(reopened.zentaoConnection()?.password).toBe('禅道测试专用密码')
+    const changed = settingsDraft(reopened.view()); changed.channels.find((entry) => entry.id === 'zentao')!.zentao!.baseUrl = 'https://other.example/zentao'
+    await expect(reopened.save(changed)).rejects.toThrow('更换地址或账号')
+    const clear = settingsDraft(reopened.view()), target = clear.channels.find((entry) => entry.id === 'zentao')!
+    target.zentao!.clearPassword = true
+    await expect(reopened.save(clear)).rejects.toThrow('填写密码')
+    target.enabled = false
+    await reopened.save(clear)
+    expect((await SettingsService.open(config)).zentaoConnection()).toBeNull()
+    expect(reopened.view().channels.find((entry) => entry.id === 'zentao')?.zentao?.hasPassword).toBe(false)
+  })
+  it('旧版禅道占位配置自动升级为 V2，其他渠道配置和模型密钥完整保留', async () => {
+    const file = join(directory, 'settings/workbench.json'), raw = JSON.parse(await readFile(file, 'utf8'))
+    raw.channels.find((entry: { id: string }) => entry.id === 'zentao').collector = 'none'
+    raw.channels.find((entry: { id: string }) => entry.id === 'zentao').enabled = true
+    delete raw.zentaoPassword
+    await writeFile(file, JSON.stringify(raw))
+    const upgraded = await SettingsService.open(config)
+    expect(upgraded.view().channels.find((entry) => entry.id === 'zentao')).toMatchObject({ collector: 'zentao', enabled: false, paths: [], zentao: { hasPassword: false } })
+    expect(upgraded.runtimeConfig().WORKBENCH_LLM_API_KEY).toBe(config.WORKBENCH_LLM_API_KEY)
+    expect(upgraded.channels().filter((entry) => entry.id !== 'zentao')).toEqual(settings.channels().filter((entry) => entry.id !== 'zentao'))
+    expect((await SettingsService.open(config)).view()).toEqual(upgraded.view())
+  })
   it('首次继承环境默认值，接口只返回密钥是否存在，文件仅当前用户可读写', async () => {
     expect(settings.view().model).toEqual({ baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, hasApiKey: true })
     expect(JSON.stringify(settings.view())).not.toContain(config.WORKBENCH_LLM_API_KEY)
@@ -189,11 +224,33 @@ describe('设置持久化与密钥边界', () => {
 
 describe('设置接口', () => {
   async function appForTest() {
-    const store = { tasks: async () => [], snapshotTasks: async () => [], dataVersion: async () => 'fixture', recordedDays: async () => [], dailyReports: async () => [], latestRun: async () => null } as unknown as Store
+    const store = { tasks: async () => [], snapshotTasks: async () => [], sourceCounts: async () => [], dataVersion: async () => 'fixture', recordedDays: async () => [], dailyReports: async () => [], latestRun: async () => null } as unknown as Store
     const sync = new SyncService(store, config, { extract: async () => [], close: async () => {} }, settings)
     const reports = new DailyReportService(store, { generateDailyReport: async () => [], close: async () => {} })
     return { app: await createApp(config, store, sync, reports), sync }
   }
+  it('禅道连接测试检查草稿的个人待办权限，不保存草稿或密码，不回传令牌', async () => {
+    const { app, sync } = await appForTest(), before = settings.view()
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', token: '私密禅道令牌' })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', bugs: [{ id: '10', title: '验证 Bug', status: 'resolved', assignedTo: 'linjt' }], pager: { recTotal: 1, recPerPage: 100, pageID: 1 } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', tasks: [], pager: { recTotal: 0, recPerPage: 100, pageID: 1 } })))
+    vi.stubGlobal('fetch', fetch)
+    const payload = { baseUrl: 'https://pm.example/zentao', account: 'linjt', password: '草稿禅道密码' }
+    try {
+      const result = await app.inject({ method: 'POST', url: '/api/settings/test-zentao', payload })
+      expect(result.statusCode).toBe(200)
+      expect(result.headers['cache-control']).toBe('no-store')
+      expect(result.json()).toMatchObject({ bugs: 1, tasks: 0 })
+      expect(result.body).not.toContain(payload.password); expect(result.body).not.toContain('私密禅道令牌')
+      expect(settings.view()).toEqual(before); expect(settings.zentaoConnection()).toBeNull()
+      fetch.mockReset().mockResolvedValue(new Response('含有密码的私密响应', { status: 403 }))
+      const failure = await app.inject({ method: 'POST', url: '/api/settings/test-zentao', payload })
+      expect(failure.statusCode).toBe(502); expect(failure.body).toContain('权限'); expect(failure.body).not.toContain('私密响应')
+      for (const baseUrl of ['file:///tmp/zentao', 'https://user:secret@pm.example', 'https://pm.example?token=secret', 'https://pm.example/api.php/v1']) {
+        expect((await app.inject({ method: 'POST', url: '/api/settings/test-zentao', payload: { ...payload, baseUrl } })).statusCode).toBe(400)
+      }
+    } finally { await app.close(); await sync.close() }
+  })
   it('兼容检测预览脱敏的可见正文，不调用模型或保存草稿，非法字段和目录返回 400', async () => {
     await mkdir(config.CODEX_SESSIONS_DIR)
     const row = { sessionId: 'preview', role: 'user', timestamp: new Date().toISOString(), text: `整理记录 ${config.WORKBENCH_LLM_API_KEY} postgresql://user:test@localhost/db` }

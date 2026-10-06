@@ -49,7 +49,7 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
   const run = harness?.run
   const activeSource = running && (run?.phase === 'scanning' || run?.phase === 'extracting') ? run.activeSource ?? null : null
   const syncTime = run?.finishedAt ? shortTime.format(new Date(run.finishedAt)) : null
-  const connectedCount = channelIds.filter((source) => source !== 'zentao' && sources?.[source]?.enabled !== false && sources?.[source]?.available).length
+  const connectedCount = channelIds.filter((source) => sources?.[source]?.enabled !== false && sources?.[source]?.available).length
   const hasWarnings = !!run && ['partial_failed', 'failed', 'interrupted'].includes(run.status)
   const syncLabel = phase !== 'idle' ? status : running ? `${activeSource ? `${sourceInfo(activeSource, channels).shortLabel} · ` : ''}${labels[run!.phase]}`
     : !run ? '等待首次同步' : `${syncTime ? `${syncTime} · ` : ''}${hasWarnings ? run.status === 'interrupted' ? '同步中断' : run.status === 'failed' ? '同步失败' : '部分待重试' : '已同步'}`

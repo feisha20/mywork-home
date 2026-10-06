@@ -9,7 +9,9 @@ export function settingsDraft(settings: WorkbenchSettings): SettingsUpdate {
     periodicReportSchedule: settings.periodicReportSchedule
       ? { ...settings.periodicReportSchedule }
       : { ...defaultPeriodicReportSchedule },
-    channels: structuredClone(settings.channels) }
+    channels: settings.channels.map((channel) => ({ ...structuredClone(channel), ...(channel.collector === 'zentao' ? {
+      zentao: { baseUrl: channel.zentao?.baseUrl ?? '', account: channel.zentao?.account ?? '', password: '', clearPassword: false },
+    } : {}) })) }
 }
 
 export function moveChannel<T extends { id: string }>(channels: readonly T[], id: string, targetIndex: number): T[] {

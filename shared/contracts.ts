@@ -35,7 +35,7 @@ export interface SyncRun {
   id: string
   status: 'running' | 'succeeded' | 'partial_failed' | 'failed' | 'interrupted'
   phase: SyncPhase
-  activeSource?: SessionSource | null
+  activeSource?: Exclude<Task['source'], 'manual'> | null
   startedAt: string
   finishedAt: string | null
   scannedFiles: number

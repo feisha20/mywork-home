@@ -110,6 +110,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     app.post('/api/settings/check-paths', (request) => settings.checkPaths(request.body))
     app.post('/api/settings/preview-records', (request) => settings.previewRecords(request.body))
     app.post('/api/settings/test-model', (request) => settings.testModel(request.body))
+    app.post('/api/settings/test-zentao', (request) => settings.testZentao(request.body))
   }
   app.get('/api/daily-reports/:day', async (request) => {
     const { day } = z.object({ day: z.iso.date() }).parse(request.params)
@@ -147,7 +148,10 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     const { tasks } = z.object({ tasks: z.array(legacyTask).max(2000) }).parse(request.body)
     return store.importTasks(tasks)
   })
-  app.post('/api/sync', async (_request, reply) => reply.code(202).send(await sync.trigger()))
+  app.post('/api/sync', async (request, reply) => {
+    const { source } = z.object({ source: z.literal('zentao').optional() }).default({}).parse(request.body)
+    return reply.code(202).send(await sync.trigger(source))
+  })
   app.get('/api/sync/:id', async (request, reply) => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params)
     return await store.run(id) ?? reply.code(404).send({ error: '同步记录不存在' })

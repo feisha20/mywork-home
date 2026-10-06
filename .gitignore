@@ -34,6 +34,9 @@ dist-server/
 .runtime/
 # 设置密钥与本机路径备份（运行目录之外的手工备份也不入库）
 workbench-settings*.json
+# 禅道连接草稿和接口调试响应包含本机账号或业务数据
+zentao-connection*.json
+zentao-debug*.json
 # 本机会话副本与抽取调试记录
 records/
 sessions/

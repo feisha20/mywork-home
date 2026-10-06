@@ -1078,6 +1078,9 @@ button:focus-visible, input:focus-visible {
 .daily-log-text { font-size: 12px; line-height: 1.45; }
 .daily-log-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
 .daily-log-actions .task-evidence { flex: 1; min-width: 0; margin: 0; font-size: 10px; }
+.zentao-reference { color: inherit; text-decoration: none; }
+.zentao-reference:hover { color: #ef6a42; text-decoration: underline; }
+.zentao-task-details { margin: 0 0 8px; color: #8590a3; font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .daily-log-actions .task-evidence summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .daily-log-actions .reopen-task { flex: 0 0 auto; margin: 0; padding: 5px 9px; font-size: 10px; line-height: 1.2; white-space: nowrap; }
 .task-action-buttons { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }

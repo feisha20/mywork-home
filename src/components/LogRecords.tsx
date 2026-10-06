@@ -2,6 +2,7 @@ import { recordTimestamp, requiresManualCompletion, sourceInfo } from '../domain
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
+import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 import type { DailyReport } from '../../shared/contracts'
 import { isRecordInReport } from '../../shared/dailyReports'
 
@@ -20,11 +21,12 @@ export function LogRecords({ records, dailyReport, recentId, onReopen, disabled 
       <div className="daily-log-top">
         <div className="daily-log-source-group">
           <span className="daily-log-source">{task.sourceLabel ?? sourceInfo(task.source).label}</span>
-          <span className="daily-log-reference">{task.reference}</span>
+          <TaskReference task={task} />
         </div>
         <time className="daily-log-time" dateTime={recordTimestamp(task)!}>{logTime.format(new Date(recordTimestamp(task)!))}</time>
       </div>
       <p className="daily-log-text" title={task.title}>{task.title}</p>
+      <ZentaoTaskDetails task={task} />
       <div className="daily-log-actions">
         <TaskEvidence task={task} />
         <span className={`daily-log-report-state ${isRecordInReport(task, dailyReport) ? 'is-organized' : 'is-pending'}`}

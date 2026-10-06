@@ -81,6 +81,9 @@ CREATE INDEX tasks_updated_idx ON workbench.tasks(updated_at DESC);
 CREATE INDEX daily_reports_updated_idx ON workbench.daily_reports(updated_at DESC);
 CREATE INDEX periodic_reports_updated_idx ON workbench.periodic_reports(updated_at DESC);
 CREATE INDEX tasks_project_activity_idx ON workbench.tasks(project_path,updated_at) WHERE deleted_at IS NULL;
+` }, { version: 7, sql: `
+ALTER TABLE workbench.tasks ADD COLUMN zentao jsonb;
+CREATE INDEX tasks_zentao_identity_idx ON workbench.tasks((zentao->>'instance'),(zentao->>'account')) WHERE source='zentao';
 ` }]
 
 export async function migrate(pool: Pool) {

@@ -32,9 +32,16 @@ describe('渠道入口与采集状态', () => {
   })
   it('会话数为零仍显示已接入，待接入和初次扫描不伪装成异常', () => {
     expect(channelStatus('zcode', { ...sources, zcode: { available: true, sessionCount: 0, error: null } }, null)).toMatchObject({ kind: 'connected', sessionCount: 0 })
-    expect(channelStatus('zentao', sources, null)).toMatchObject({ kind: 'pending', label: '待接入', sessionCount: null })
+    expect(channelStatus('zentao', sources, null)).toMatchObject({ kind: 'pending', label: '等待连接', sessionCount: null })
     expect(channelStatus('claude', undefined, null)).toMatchObject({ kind: 'pending', label: '等待扫描' })
     expect(channelStatus('claude', { ...sources, claude: { available: false, sessionCount: 0, error: '尚未扫描' } }, null)).toMatchObject({ kind: 'pending' })
+  })
+  it('禅道接入和活动状态按待办数量展示，包括没有待办的正常连接', () => {
+    const connected = { ...sources, zentao: { available: true, sessionCount: 3, error: null, collector: 'zentao' } }
+    expect(channelStatus('zentao', connected, null)).toMatchObject({ kind: 'connected', detail: '3 条待办 · 已接入' })
+    expect(channelStatus('zentao', connected, 'zentao')).toMatchObject({ kind: 'active', detail: '3 条待办 · 正在采集' })
+    expect(channelStatus('zentao', { ...sources, zentao: { available: true, sessionCount: 0, error: null } }, null).kind).toBe('connected')
+    expect(channelStatus('zentao', connected, null, ['zentao：认证失败']).kind).toBe('warning')
   })
   it('读取异常只标记对应渠道，当前活动来源优先显示采集中', () => {
     const errors = ['codex：部分记录读取失败，下次同步重试', 'codex：跳过 1 条超大记录']

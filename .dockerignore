@@ -4,6 +4,8 @@
 !.env.example
 .runtime
 workbench-settings*.json
+zentao-connection*.json
+zentao-debug*.json
 records
 gemini-records
 sessions

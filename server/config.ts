@@ -32,6 +32,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   try { database = new URL(config.DATABASE_URL) } catch { throw new Error('数据库连接地址格式无效') }
   if (!['postgres:', 'postgresql:'].includes(database.protocol) || !database.password) throw new Error('请配置有效的 PostgreSQL 专属连接及密码')
   if (database.username === 'postgres') throw new Error('运行服务必须使用工作台专属数据库用户')
-  return config
+  return { ...config, sourceSecrets: [] as string[] }
 }
 export type Config = ReturnType<typeof loadConfig>

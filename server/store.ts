@@ -5,9 +5,10 @@ import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob
 import type { Cursor, Source, SourceMessage } from './records.js'
 import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
 import { digest } from './records.js'
+import type { ZentaoSnapshot } from './zentao.js'
 
 const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
-const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale,jsonb_array_length(evidence) AS evidence_count'
+const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale,zentao,jsonb_array_length(evidence) AS evidence_count'
 function jobFromRow(row: any): ReportJob {
   return { id: row.id, kind: row.kind, day: new Date(row.day).toISOString().slice(0,10), periodKey: row.period_key,
     scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
@@ -17,7 +18,7 @@ function taskFromRow(row: any): Task {
   return { id: row.id, reference: row.reference, source: row.source, title: row.title,
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
-    projectPath: row.project_path, statusOrigin: row.status_origin, evidence: row.evidence,
+    projectPath: row.project_path, statusOrigin: row.status_origin, evidence: row.evidence, zentao: row.zentao,
     evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count), evidenceStale: Boolean(row.evidence_stale) }
 }
 
@@ -70,7 +71,7 @@ export class Store {
         if (!original || item.title.length > 60 || !item.title.trim()) throw new Error('工作简介校验失败')
         // 仅更新简介；期间被用户改动的事项跳过，不修改状态、日期、证据及同步游标。
         const result = await client.query(`UPDATE workbench.tasks SET title=$2,updated_at=now()
-          WHERE id=$1 AND title=$3 AND source<>'manual' AND status_origin<>'manual'`, [item.taskId, item.title, original])
+          WHERE id=$1 AND title=$3 AND source NOT IN ('manual','zentao') AND status_origin<>'manual'`, [item.taskId, item.title, original])
         updated += result.rowCount ?? 0
       }
       return updated
@@ -90,6 +91,36 @@ export class Store {
     const { rows } = await this.pool.query(`UPDATE workbench.tasks SET completed_at=CASE WHEN $2 THEN coalesce(completed_at,now()) ELSE NULL END,
       status_origin='manual',updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *`, [id, completed])
     return rows[0] ? taskFromRow(rows[0]) : null
+  }
+  async applyZentaoSnapshot(snapshot: ZentaoSnapshot) {
+    return this.transaction(async (client) => {
+      const existing = new Set((await client.query("SELECT id FROM workbench.tasks WHERE source='zentao' AND zentao->>'instance'=$1 AND zentao->>'account'=$2", [snapshot.instance, snapshot.account])).rows.map((row) => row.id))
+      let created = 0, updated = 0
+      for (const item of snapshot.items) {
+        // 首次只导入待处理事项，避免历史已完成任务突然进入今天的日志。
+        if (item.state !== 'pending' && !existing.has(item.id)) continue
+        if (item.state === 'removed') {
+          updated += (await client.query(`UPDATE workbench.tasks SET deleted_at=now(),zentao=$2,updated_at=now()
+            WHERE id=$1 AND completed_at IS NULL AND deleted_at IS NULL`, [item.id, JSON.stringify(item.zentao)])).rowCount ?? 0
+          continue
+        }
+        const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,status_origin,zentao)
+          VALUES($1,$2,'zentao',$3,$4,$5,'zentao',$6::jsonb)
+          ON CONFLICT(id) DO UPDATE SET title=excluded.title,zentao=excluded.zentao,deleted_at=NULL,updated_at=now(),
+            completed_at=CASE WHEN workbench.tasks.status_origin='manual' THEN workbench.tasks.completed_at
+              WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END
+          WHERE (workbench.tasks.title,workbench.tasks.zentao,workbench.tasks.deleted_at) IS DISTINCT FROM (excluded.title,excluded.zentao,NULL::timestamptz)
+            OR (workbench.tasks.status_origin<>'manual' AND workbench.tasks.completed_at IS DISTINCT FROM
+              CASE WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END)
+          RETURNING id`, [item.id, item.reference, item.title, item.createdAt, item.state === 'pending' ? null : item.completedAt, JSON.stringify(item.zentao), item.state === 'pending'])
+        if (result.rowCount) { if (existing.has(item.id)) updated++; else created++ }
+      }
+      // 只有完整快照提交后才移除不再指派给自己的待办，不把转派或删除伪装成完成。
+      updated += (await client.query(`UPDATE workbench.tasks SET deleted_at=now(),updated_at=now()
+        WHERE source='zentao' AND zentao->>'instance'=$1 AND zentao->>'account'=$2
+          AND id<>ALL($3::text[]) AND completed_at IS NULL AND deleted_at IS NULL`, [snapshot.instance, snapshot.account, snapshot.items.map((item) => item.id)])).rowCount ?? 0
+      return { created, updated }
+    })
   }
   async deleteTask(id: string): Promise<boolean> {
     // 保留删除标记，旧缓存再次导入时不会把已删除的待办复活。
@@ -215,7 +246,7 @@ export class Store {
       projectPath: row.project_path, role: row.role, timestamp: new Date(row.occurred_at).toISOString(), bodyRevision: row.body_revision, text: row.body.slice(0, 6000) }))
   }
   async projectTasks(path: string) {
-    const { rows } = await this.pool.query('SELECT * FROM workbench.tasks WHERE project_path=$1 AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100', [path])
+    const { rows } = await this.pool.query("SELECT * FROM workbench.tasks WHERE project_path=$1 AND source<>'zentao' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100", [path])
     return rows.map(taskFromRow)
   }
   batchId(messages: SourceMessage[]) { return digest(`v2:${messages.map((message) => `${message.id}:${message.bodyRevision ?? 1}:${digest(message.text)}`).join(':')}`) }

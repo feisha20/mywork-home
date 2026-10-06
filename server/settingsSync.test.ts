@@ -62,6 +62,89 @@ async function finish(sync: SyncService) {
 }
 
 describe('设置驱动采集', () => {
+  it('关闭自动采集时重启也恢复已接入和历史会话数量，不重新读取正文或调用模型', async () => {
+    const { config, settings } = await prepare(), draft = settingsDraft(settings.view())
+    const codex = draft.channels.find((channel) => channel.id === 'codex')!
+    codex.enabled = true; codex.paths = [join(directory, 'records')]
+    await settings.save(draft)
+    // 无效正文仍可检查目录，证明连接恢复不依赖解析和重新入库。
+    await writeFile(join(directory, 'records/session.jsonl'), '此正文不是 JSON，连接检查不读取它')
+    const { store, messages, cursors } = memoryStore(), extract = vi.fn(async () => [])
+    store.sourceCounts = vi.fn(async () => [{ source: 'codex' as const, count: 88 }])
+    const ingest = vi.spyOn(store, 'ingest'), check = vi.spyOn(settings, 'checkPaths')
+    for (let restart = 0; restart < 2; restart++) {
+      const sync = new SyncService(store, config, { extract, close: async () => {} }, settings)
+      try {
+        await sync.start()
+        for (let poll = 0; poll < 2; poll++) expect((await sync.snapshot()).sources.codex).toMatchObject({ available: true, sessionCount: 88, error: null, enabled: true })
+        expect(sync.nextSyncAt).toBeNull(); expect(await store.latestRun()).toBeNull()
+      } finally { await sync.close() }
+    }
+    expect(check).toHaveBeenCalledTimes(2)
+    expect(ingest).not.toHaveBeenCalled(); expect(extract).not.toHaveBeenCalled()
+    expect(messages.size).toBe(0); expect(cursors.size).toBe(0)
+  })
+  it('目录配置改变后重查，空目录可接入，缺失路径和缺失 Zcode 数据库不误显示已接入', async () => {
+    const { config, settings } = await prepare(), draft = settingsDraft(settings.view())
+    const codex = draft.channels.find((channel) => channel.id === 'codex')!
+    codex.enabled = true; codex.paths = [directory]
+    const zcode = draft.channels.find((channel) => channel.id === 'zcode')!
+    zcode.enabled = true; zcode.paths = [directory]
+    await settings.save(draft)
+    const { store } = memoryStore(), extract = vi.fn(async () => []), check = vi.spyOn(settings, 'checkPaths')
+    const sync = new SyncService(store, config, { extract, close: async () => {} }, settings)
+    try {
+      await sync.start()
+      expect((await sync.snapshot()).sources.codex.available).toBe(true)
+      expect((await sync.snapshot()).sources.zcode).toMatchObject({ available: false, error: expect.stringContaining('未找到 db.sqlite') })
+      const changed = settingsDraft(settings.view()); changed.channels.find((channel) => channel.id === 'codex')!.paths = [join(directory, 'missing')]
+      await settings.save(changed)
+      expect((await sync.snapshot()).sources.codex).toMatchObject({ available: false, error: expect.stringContaining('目录不存在') })
+      const renamed = settingsDraft(settings.view()); renamed.model.name = '仅修改模型'; await settings.save(renamed)
+      await sync.snapshot(); expect(check).toHaveBeenCalledTimes(3)
+      const disabled = settingsDraft(settings.view()); disabled.channels.find((channel) => channel.id === 'codex')!.enabled = false
+      await settings.save(disabled)
+      expect((await sync.snapshot()).sources.codex).toMatchObject({ available: false, enabled: false, error: null })
+      expect(await store.latestRun()).toBeNull(); expect(extract).not.toHaveBeenCalled()
+    } finally { await sync.close() }
+  })
+  it('已同步渠道修改路径后不复用旧接入状态，新增会话数量独立于事项版本刷新', async () => {
+    const { config, settings } = await prepare(), draft = settingsDraft(settings.view())
+    const codex = draft.channels.find((channel) => channel.id === 'codex')!
+    codex.enabled = true; codex.paths = [join(directory, 'records')]; await settings.save(draft)
+    const { store } = memoryStore()
+    store.sourceCounts = vi.fn().mockResolvedValueOnce([{ source: 'codex', count: 88 }]).mockResolvedValue([{ source: 'codex', count: 89 }])
+    const sync = new SyncService(store, config, { extract: async () => [], close: async () => {} }, settings)
+    try {
+      await sync.start()
+      expect((await sync.snapshot()).sources.codex.sessionCount).toBe(88)
+      await sync.trigger(); await sync.waitForIdle()
+      expect((await sync.snapshot()).sources.codex).toMatchObject({ available: true, sessionCount: 89, error: null })
+      const changed = settingsDraft(settings.view()); changed.channels.find((channel) => channel.id === 'codex')!.paths = [join(directory, 'missing')]
+      await settings.save(changed)
+      expect((await sync.snapshot()).sources.codex).toMatchObject({ available: false, sessionCount: 89, error: expect.stringContaining('目录不存在') })
+    } finally { await sync.close() }
+  })
+  it('一个渠道正在读取时，尚未轮到的已配置渠道保持接入状态', async () => {
+    const { config, settings } = await prepare(), draft = settingsDraft(settings.view())
+    for (const id of ['codex', 'claude']) {
+      const channel = draft.channels.find((entry) => entry.id === id)!
+      channel.enabled = true; channel.paths = [join(directory, 'records')]
+    }
+    await settings.save(draft)
+    const { store } = memoryStore(), cursor = store.cursor.bind(store)
+    let entered!: () => void, release!: () => void
+    const ready = new Promise<void>((resolve) => { entered = resolve }), gate = new Promise<void>((resolve) => { release = resolve })
+    store.cursor = async (path) => { entered(); await gate; return cursor(path) }
+    const sync = new SyncService(store, config, { extract: async () => [], close: async () => {} }, settings)
+    try {
+      await sync.start(); await sync.trigger(); await ready
+      const snapshot = await sync.snapshot()
+      expect(snapshot.harness.run?.activeSource).toBe('claude')
+      expect(snapshot.sources.codex).toMatchObject({ available: true, error: null, enabled: true })
+      release(); await sync.waitForIdle()
+    } finally { release(); await sync.close() }
+  })
   it('新增渠道自动读取不同格式，重复同步和复制文件不重复抽取，后续追加正常采集', async () => {
     const { config, settings } = await prepare()
     const timestamp = new Date().toISOString(), path = join(directory, 'records/other.jsonl')

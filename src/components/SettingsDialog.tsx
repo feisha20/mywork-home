@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { COLLECTORS, settingsUpdateSchema } from '../../shared/settings'
+import { COLLECTORS, EMPTY_ZENTAO_SETTINGS, settingsUpdateSchema } from '../../shared/settings'
 import type { ChannelId, CollectorKind, SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
-import { fetchSettings, saveSettings, scanChannelPaths, testModelConnection } from '../data/apiRepository'
+import { fetchSettings, saveSettings, scanChannelPaths, testModelConnection, testZentaoConnection } from '../data/apiRepository'
 import { channelSlots } from '../domain/channelDock'
 import { moveChannel, settingsDraft, type SettingsTab } from '../domain/settings'
 import { sourceInfo } from '../domain/workbench'
@@ -31,6 +31,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
   const [testing, setTesting] = useState(false)
   const [scanning, setScanning] = useState<string | null>(null)
   const [showKey, setShowKey] = useState(false)
+  const [showZentaoPassword, setShowZentaoPassword] = useState(false)
   const [dragged, setDragged] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -115,7 +116,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
     setSaving(true)
     try {
       const result = await saveSettings(parsed.data)
-      setSaved(result); setDraft(settingsDraft(result)); setShowKey(false); setUnresolvedPaths(result.unresolvedPaths ?? [])
+      setSaved(result); setDraft(settingsDraft(result)); setShowKey(false); setShowZentaoPassword(false); setUnresolvedPaths(result.unresolvedPaths ?? [])
       setFeedback('设置已保存，下次采集和模型请求使用新配置。'); onSaved(result)
     } catch (cause) { setError(messageOf(cause)) }
     finally { setSaving(false) }
@@ -138,6 +139,16 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
     if (!draft || busy) return
     setTesting(true); setError(null); setFeedback(null)
     try { setFeedback((await testModelConnection(draft.model)).message) }
+    catch (cause) { setError(messageOf(cause)) }
+    finally { setTesting(false) }
+  }
+  function changeZentao(patch: Partial<NonNullable<DraftChannel['zentao']>>) {
+    if (channel) changeChannel(channel.id, { zentao: { ...EMPTY_ZENTAO_SETTINGS, ...channel.zentao, ...patch } })
+  }
+  async function handleTestZentao() {
+    if (!channel?.zentao || busy) return
+    setTesting(true); setError(null); setFeedback(null)
+    try { setFeedback((await testZentaoConnection(channel.zentao)).message) }
     catch (cause) { setError(messageOf(cause)) }
     finally { setTesting(false) }
   }
@@ -209,8 +220,14 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                   <div className="settings-field"><span>渠道 Logo</span><div className="settings-logo-actions"><button type="button" className="settings-secondary" onClick={() => uploadRef.current?.click()}><Icon name="upload" />上传图片</button><button type="button" className="settings-text-button" onClick={() => changeChannel(channel.id, { logo: sourceInfo(channel.id as ChannelId).logo })}>恢复默认</button></div><small>PNG、JPEG 或 WebP，最大 256 KB；未上传时使用名称图标。</small><input ref={uploadRef} className="settings-file-input" type="file" accept="image/png,image/jpeg,image/webp" aria-label="上传渠道 Logo" onChange={(event) => { void uploadLogo(event.target.files?.[0]); event.target.value = '' }} /></div>
                   <SettingsSelect key={channel.id} label="记录读取方式" value={channel.collector} options={collectorLocked ? collectorOptions : compatibleOptions} disabled={busy || collectorLocked}
                     onChange={(collector) => { changeChannel(channel.id, { collector }); setScanFeedback(null); setScanChoices(null) }}
-                    help={collectorLocked ? '使用该渠道的专用读取器。' : channel.collector === 'auto' ? '识别已支持的工具记录，也会尝试通用 JSON / JSONL，不受渠道名称限制。' : channel.collector === 'generic' ? '读取其他工具导出的 JSON / JSONL，可配置字段对应关系。' : '只展示渠道，暂不读取会话。'} />
-                  {channel.collector === 'none' ? <p className="settings-channel-placeholder">选择“自动识别”并配置本机会话目录，即可检测和采集记录。</p> : <>
+                    help={channel.collector === 'zentao' ? '通过禅道 V2 接口读取分配给你的 Bug 和任务。' : collectorLocked ? '使用该渠道的专用读取器。' : channel.collector === 'auto' ? '识别已支持的工具记录，也会尝试通用 JSON / JSONL，不受渠道名称限制。' : channel.collector === 'generic' ? '读取其他工具导出的 JSON / JSONL，可配置字段对应关系。' : '只展示渠道，暂不读取会话。'} />
+                  {channel.collector === 'zentao' ? <>
+                    <label className="settings-field">禅道地址<input type="url" required={channel.enabled} value={channel.zentao?.baseUrl ?? ''} maxLength={2048} placeholder="http://你的禅道地址/zentao" onChange={(event) => changeZentao({ baseUrl: event.target.value })} /><small>填写禅道首页地址，使用 V2 接口采集。</small></label>
+                    <label className="settings-field">禅道账号<input required={channel.enabled} autoComplete="username" value={channel.zentao?.account ?? ''} maxLength={100} onChange={(event) => changeZentao({ account: event.target.value })} /></label>
+                    <div className="settings-field"><label htmlFor="settings-zentao-password">禅道密码</label><div className="settings-key-input"><input id="settings-zentao-password" type={showZentaoPassword ? 'text' : 'password'} autoComplete="new-password" value={channel.zentao?.password ?? ''} disabled={busy || channel.zentao?.clearPassword} maxLength={4096} placeholder={channelSaved?.zentao?.hasPassword ? '已配置 · 留空保留现有密码' : '输入禅道登录密码'} onChange={(event) => changeZentao({ password: event.target.value })} /><button type="button" aria-label={showZentaoPassword ? '隐藏禅道密码' : '显示禅道密码'} aria-pressed={showZentaoPassword} onClick={() => setShowZentaoPassword((current) => !current)}><Icon name="eye" /></button></div><small>密码仅保存在服务端，不会回传明文或存入浏览器缓存；更换地址或账号后需重新填写。</small></div>
+                    <div className="settings-model-actions"><button type="button" className="settings-secondary" onClick={() => void handleTestZentao()}><Icon name="refresh" />{testing ? '连接测试中…' : '测试禅道连接'}</button>{channelSaved?.zentao?.hasPassword && <label className="settings-checkbox"><input type="checkbox" checked={!!channel.zentao?.clearPassword} onChange={(event) => changeZentao({ clearPassword: event.target.checked, password: '' })} />清除已保存密码</label>}</div>
+                    <p className="settings-channel-placeholder">采集分配给你的待处理和待验证 Bug，以及未开始、进行中、暂停的任务。工作台中的完成与恢复操作用于本地工作记录；处理禅道事项可点击待办编号打开原始页面。</p>
+                  </> : channel.collector === 'none' ? <p className="settings-channel-placeholder">选择“自动识别”并配置本机会话目录，即可检测和采集记录。</p> : <>
                     <div className="settings-field"><span>路径获取方式</span><div className="settings-segmented" role="group" aria-label="路径获取方式"><button type="button" aria-pressed={channel.pathMode === 'scan'} className={channel.pathMode === 'scan' ? 'is-active' : ''} onClick={() => { changeChannel(channel.id, { pathMode: 'scan' }); setScanFeedback(null) }}><Icon name="search" />扫描</button><button type="button" disabled={pathNamesUnavailable} title={pathNamesUnavailable ? '请先重新扫描并识别本机目录' : undefined} aria-pressed={channel.pathMode === 'manual'} className={channel.pathMode === 'manual' ? 'is-active' : ''} onClick={() => changeChannel(channel.id, { pathMode: 'manual' })}>手动输入</button></div></div>
                     {channel.pathMode === 'scan' ? <div className="settings-scan-area"><p>{compatibleCollector ? '查找可读取的会话目录，请勾选属于这个渠道的目录。新工具的目录也可手动填写。' : '查找你的会话目录，并检查读取状态。'}</p><button type="button" className="settings-secondary" onClick={() => void handleScan(channel)}><Icon name="search" />{scanning === channel.id ? '扫描中…' : '扫描路径'}</button>
                       {compatibleCollector && scanChoices?.id === channel.id && scanChoices.paths.length > 0 && <div className="settings-scan-choices" role="group" aria-label="选择采集目录">{scanChoices.paths.map((path) => <label key={path}><input type="checkbox" checked={channel.paths.includes(path)} disabled={!channel.paths.includes(path) && channel.paths.length >= 10} onChange={(event) => changeChannel(channel.id, { paths: event.target.checked ? [...channel.paths, path] : channel.paths.filter((entry) => entry !== path) })} /><code>{path}</code></label>)}</div>}
@@ -227,9 +244,9 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                 return <span className="settings-preview-channel" key={slot.id}>{slot.overflow ? <span className="settings-preview-more">+{slot.sources.length}</span> : <ChannelLogo logo={entry.logo} name={entry.name} size={32} />}<small>{slot.overflow ? '更多' : entry.name}</small></span>
               })}</div></section>
             </div> : <div className="settings-automation-page">
-              <div className="settings-section-heading"><div><h3>自动化</h3><p>配置自动采集会话与定时生成日报</p></div></div>
+              <div className="settings-section-heading"><div><h3>自动化</h3><p>配置自动采集与定时生成日报</p></div></div>
               <section className="settings-automation-card" aria-labelledby="settings-sync-heading">
-                <div className="settings-section-heading"><div><h4 id="settings-sync-heading">自动采集</h4><p>定时检查各渠道的新会话与工作进展</p></div><button type="button" role="switch" aria-checked={draft.sync.enabled} aria-label="自动采集" className={`settings-switch${draft.sync.enabled ? ' is-on' : ''}`} onClick={() => setDraft((current) => current && { ...current, sync: { ...current.sync, enabled: !current.sync.enabled } })}><span /></button></div>
+                <div className="settings-section-heading"><div><h4 id="settings-sync-heading">自动采集</h4><p>定时检查各渠道的待办、会话与工作进展</p></div><button type="button" role="switch" aria-checked={draft.sync.enabled} aria-label="自动采集" className={`settings-switch${draft.sync.enabled ? ' is-on' : ''}`} onClick={() => setDraft((current) => current && { ...current, sync: { ...current.sync, enabled: !current.sync.enabled } })}><span /></button></div>
                 <label className="settings-interval">采集间隔<div><input type="number" min={1} max={1440} step={1} value={draft.sync.intervalMs / 60000} onChange={(event) => setDraft((current) => current && { ...current, sync: { ...current.sync, intervalMs: Number(event.target.value) * 60000 } })} /><span>分钟</span></div></label>
                 <p className="settings-help">{draft.sync.enabled ? '保存后重新计算下次采集时间，正在进行的同步会继续完成。' : '已暂停定时采集，仍可在首页点击“立即同步”。'}</p>
               </section>
