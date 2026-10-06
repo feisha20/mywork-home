@@ -92,23 +92,35 @@ export class SyncService {
   }
   private async sourceStatuses(channels: ChannelConfig[]): Promise<WorkbenchSnapshot['sources']> {
     const sources = { ...this.sources }
+    const zentaoConnection = this.settings?.zentaoConnection()
     await Promise.all(channels.map(async (channel) => {
       let state = sources[channel.id] ?? { available: false, sessionCount: 0, error: '尚未扫描' }
       const key = this.sourceKey(channel)
-      if (!channel.enabled || channel.collector === 'none') state = { ...state, available: false, error: null }
-      else if (this.sourceSyncKeys.get(channel.id) !== key) {
-        if (channel.collector === 'zentao') state = { available: false, sessionCount: 0, error: '尚未扫描' }
-        else {
-          let check = this.sourceChecks.get(channel.id)
-          if (check?.key !== key) {
-            check = { key, status: this.checkSourcePaths(channel).catch(() => ({ available: false, error: '记录目录无法检查，请核对路径和访问权限' })) }
-            this.sourceChecks.set(channel.id, check)
-          }
-          state = { ...state, ...await check.status }
+      if (!channel.enabled || channel.collector === 'none') {
+        state = { ...state, available: false, error: null }
+      } else if (channel.collector === 'zentao') {
+        if (!zentaoConnection) {
+          state = { available: false, sessionCount: 0, error: null }
+        } else if (this.sources.zentao?.error && this.sources.zentao.error !== '尚未扫描') {
+          state = { ...this.sources.zentao }
+        } else {
+          const dbCount = typeof this.store.zentaoPendingCount === 'function'
+            ? await this.store.zentaoPendingCount(zentaoConnection.baseUrl.replace(/\/+$/, ''), zentaoConnection.account).catch(() => 0)
+            : 0
+          const count = this.sources.zentao?.available ? this.sources.zentao.sessionCount : dbCount
+          state = { available: true, sessionCount: count, error: null }
         }
+      } else if (this.sourceSyncKeys.get(channel.id) !== key) {
+        let check = this.sourceChecks.get(channel.id)
+        if (check?.key !== key) {
+          check = { key, status: this.checkSourcePaths(channel).catch(() => ({ available: false, error: '记录目录无法检查，请核对路径和访问权限' })) }
+          this.sourceChecks.set(channel.id, check)
+        }
+        state = { ...state, ...await check.status }
       }
       sources[channel.id] = { ...state, enabled: channel.enabled, collector: channel.collector }
     }))
+    this.sources = sources
     return sources
   }
   private reschedule() {
@@ -194,15 +206,18 @@ export class SyncService {
           run.activeSource = 'zentao'; await this.saveRunProgress(run)
           try {
             if (!zentaoConnection) throw new ZentaoError('请在采集源的禅道设置中填写地址、账号和密码')
-            const snapshot = await new ZentaoV2Client(zentaoConnection).readWork()
+            const tracked = await this.store.zentaoTrackedItems(zentaoConnection.baseUrl.replace(/\/+$/, ''), zentaoConnection.account)
+            const snapshot = await new ZentaoV2Client(zentaoConnection).readWork(tracked)
             if (this.stopping) break
             run.phase = 'saving'; await this.saveRunProgress(run)
             const counts = await this.store.applyZentaoSnapshot(snapshot)
             run.newTasks += counts.created; run.updatedTasks += counts.updated
             this.sources.zentao = { available: true, sessionCount: snapshot.bugs + snapshot.tasks, error: null }
+            this.sourceChecks.set(channel.id, { key: this.sourceKey(channel), status: Promise.resolve(this.sources.zentao) })
           } catch (error) {
             const reason = error instanceof ZentaoError ? error.message : '禅道待办保存失败，本轮保留已有记录，下次同步重试'
             this.sources.zentao = { available: false, sessionCount: 0, error: reason }
+            this.sourceChecks.set(channel.id, { key: this.sourceKey(channel), status: Promise.resolve(this.sources.zentao) })
             this.error(run, `zentao：${reason}`)
           }
           run.phase = 'scanning'; await this.saveRunProgress(run)
@@ -400,6 +415,11 @@ export class SyncService {
     const sources = await this.sourceStatuses(channels)
     const counts = await (this.sourceCounts ??= this.store.sourceCounts().catch((error) => { this.sourceCounts = null; throw error }))
     for (const { source, count } of counts) if (sources[source] && sources[source].collector !== 'zentao') sources[source] = { ...sources[source], sessionCount: count }
+    const zentaoConn = this.settings?.zentaoConnection()
+    if (sources.zentao && sources.zentao.available && sources.zentao.sessionCount === 0 && zentaoConn && typeof this.store.zentaoPendingCount === 'function') {
+      const dbCount = await this.store.zentaoPendingCount(zentaoConn.baseUrl.replace(/\/+$/, ''), zentaoConn.account).catch(() => 0)
+      if (dbCount > 0) sources.zentao.sessionCount = dbCount
+    }
     return { version: 1, recordedDays: days, dataVersion: version, tasks: tasks.map((task) => ({ ...task, sourceLabel: channels.find((channel) => channel.id === task.source)?.name })), dailyReports,
       harness: { run, nextSyncAt: this.nextSyncAt, model: config.WORKBENCH_LLM_MODEL, intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' },
       sources, channels: this.settings?.summaries() }

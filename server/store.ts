@@ -5,7 +5,7 @@ import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob
 import type { Cursor, Source, SourceMessage } from './records.js'
 import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
 import { digest } from './records.js'
-import type { ZentaoSnapshot } from './zentao.js'
+import type { ZentaoSnapshot, ZentaoTrackedItem } from './zentao.js'
 
 const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
 const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,evidence_stale,zentao,jsonb_array_length(evidence) AS evidence_count'
@@ -84,13 +84,26 @@ export class Store {
     return taskFromRow(rows[0])
   }
   async setCompleted(id: string, completed: boolean) {
-    const existing = await this.pool.query('SELECT source FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
-    if (existing.rows[0] && !['manual', 'zentao'].includes(existing.rows[0].source)) {
-      throw Object.assign(new Error('自动工作记录直接进入日志，无需手动完成或恢复'), { statusCode: 409 })
+    const existing = await this.pool.query('SELECT source, zentao FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
+    if (existing.rows[0]) {
+      if (!['manual', 'zentao'].includes(existing.rows[0].source)) {
+        throw Object.assign(new Error('自动工作记录直接进入日志，无需手动完成或恢复'), { statusCode: 409 })
+      }
+      if (existing.rows[0].source === 'zentao' && existing.rows[0].zentao?.type === 'bug') {
+        throw Object.assign(new Error('禅道 Bug 状态由禅道系统驱动，无需手动修改完成状态'), { statusCode: 409 })
+      }
     }
     const { rows } = await this.pool.query(`UPDATE workbench.tasks SET completed_at=CASE WHEN $2 THEN coalesce(completed_at,now()) ELSE NULL END,
       status_origin='manual',updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *`, [id, completed])
     return rows[0] ? taskFromRow(rows[0]) : null
+  }
+  async zentaoTrackedItems(instance: string, account: string): Promise<ZentaoTrackedItem[]> {
+    // 兼容旧版误归档、误删除的数据；已确认完成或转派的事项无需每轮补查。
+    const { rows } = await this.pool.query(`SELECT zentao->>'type' AS type,zentao->>'id' AS id FROM workbench.tasks
+      WHERE source='zentao' AND zentao->>'instance'=$1 AND zentao->>'account'=$2
+        AND ((deleted_at IS NULL AND completed_at IS NULL) OR zentao->>'syncState'='pending'
+          OR (NOT (zentao ? 'syncState') AND zentao->>'status' IN ('active','resolved','wait','doing','pause')))`, [instance, account])
+    return rows as ZentaoTrackedItem[]
   }
   async applyZentaoSnapshot(snapshot: ZentaoSnapshot) {
     return this.transaction(async (client) => {
@@ -99,26 +112,33 @@ export class Store {
       for (const item of snapshot.items) {
         // 首次只导入待处理事项，避免历史已完成任务突然进入今天的日志。
         if (item.state !== 'pending' && !existing.has(item.id)) continue
+        const metadata = JSON.stringify({ ...item.zentao, syncState: item.state })
         if (item.state === 'removed') {
-          updated += (await client.query(`UPDATE workbench.tasks SET deleted_at=now(),zentao=$2,updated_at=now()
-            WHERE id=$1 AND completed_at IS NULL AND deleted_at IS NULL`, [item.id, JSON.stringify(item.zentao)])).rowCount ?? 0
+          updated += (await client.query(`UPDATE workbench.tasks SET
+            deleted_at=CASE WHEN completed_at IS NULL OR zentao->>'type'='bug' THEN coalesce(deleted_at,now()) ELSE deleted_at END,
+            zentao=$2::jsonb,updated_at=now()
+            WHERE id=$1 AND (zentao IS DISTINCT FROM $2::jsonb
+              OR (deleted_at IS NULL AND (completed_at IS NULL OR zentao->>'type'='bug')))`, [item.id, metadata])).rowCount ?? 0
           continue
         }
         const result = await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,status_origin,zentao)
           VALUES($1,$2,'zentao',$3,$4,$5,'zentao',$6::jsonb)
           ON CONFLICT(id) DO UPDATE SET title=excluded.title,zentao=excluded.zentao,deleted_at=NULL,updated_at=now(),
-            completed_at=CASE WHEN workbench.tasks.status_origin='manual' THEN workbench.tasks.completed_at
-              WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END
+            completed_at=CASE
+              WHEN (excluded.zentao->>'type')='bug' THEN (CASE WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END)
+              WHEN workbench.tasks.status_origin='manual' THEN workbench.tasks.completed_at
+              WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END,
+            status_origin=CASE WHEN (excluded.zentao->>'type')='bug' THEN 'zentao' ELSE workbench.tasks.status_origin END
           WHERE (workbench.tasks.title,workbench.tasks.zentao,workbench.tasks.deleted_at) IS DISTINCT FROM (excluded.title,excluded.zentao,NULL::timestamptz)
-            OR (workbench.tasks.status_origin<>'manual' AND workbench.tasks.completed_at IS DISTINCT FROM
-              CASE WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END)
-          RETURNING id`, [item.id, item.reference, item.title, item.createdAt, item.state === 'pending' ? null : item.completedAt, JSON.stringify(item.zentao), item.state === 'pending'])
+            OR workbench.tasks.completed_at IS DISTINCT FROM
+              CASE
+                WHEN (excluded.zentao->>'type')='bug' THEN (CASE WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END)
+                WHEN workbench.tasks.status_origin='manual' THEN workbench.tasks.completed_at
+                WHEN $7 THEN NULL ELSE coalesce(excluded.completed_at,workbench.tasks.completed_at,now()) END
+          RETURNING id`, [item.id, item.reference, item.title, item.createdAt, item.state === 'pending' ? null : item.completedAt, metadata, item.state === 'pending'])
         if (result.rowCount) { if (existing.has(item.id)) updated++; else created++ }
       }
-      // 只有完整快照提交后才移除不再指派给自己的待办，不把转派或删除伪装成完成。
-      updated += (await client.query(`UPDATE workbench.tasks SET deleted_at=now(),updated_at=now()
-        WHERE source='zentao' AND zentao->>'instance'=$1 AND zentao->>'account'=$2
-          AND id<>ALL($3::text[]) AND completed_at IS NULL AND deleted_at IS NULL`, [snapshot.instance, snapshot.account, snapshot.items.map((item) => item.id)])).rowCount ?? 0
+      // 只依据详情确认的转派、取消或删除移除待办；个人列表缺席本身不代表删除。
       return { created, updated }
     })
   }
@@ -404,5 +424,13 @@ export class Store {
   }
   async sourceCounts() {
     return (await this.pool.query('SELECT source,count(*)::int AS count FROM workbench.source_sessions GROUP BY source')).rows as { source: Source; count: number }[]
+  }
+  async zentaoPendingCount(instance?: string, account?: string): Promise<number> {
+    const params = [instance ?? null, account ?? null]
+    const { rows } = await this.pool.query(`SELECT count(*)::int AS count FROM workbench.tasks
+      WHERE source='zentao' AND deleted_at IS NULL AND completed_at IS NULL
+        AND ($1::text IS NULL OR zentao->>'instance'=$1)
+        AND ($2::text IS NULL OR zentao->>'account'=$2)`, params)
+    return rows[0]?.count ?? 0
   }
 }

@@ -18,7 +18,7 @@ import { DailyReportService } from './dailyReport.js'
 import { PeriodicReportScheduler } from './periodicReportScheduler.js'
 import { PeriodicReportService } from './periodicReport.js'
 import { isRecordInReport } from '../shared/dailyReports.js'
-import type { ZentaoSnapshot, ZentaoWorkItem } from './zentao.js'
+import { ZentaoV2Client, type ZentaoSnapshot, type ZentaoWorkItem } from './zentao.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
 let pool: Pool, store: Store, sync: SyncService, app: FastifyInstance, directory: string
@@ -494,7 +494,7 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     const instance = `https://zentao-${randomUUID()}.example`, account = 'fixture'
     const item = (type: 'bug' | 'task', id: string, state: ZentaoWorkItem['state'] = 'pending'): ZentaoWorkItem => ({
       id: `zentao-fixture-${type}-${id}`, reference: `${type.toUpperCase()}-${id}`, title: `禅道测试${type}${id}`, createdAt: '2026-09-20T01:00:00Z', completedAt: null, state,
-      zentao: { instance, account, type, id, status: type === 'bug' ? 'resolved' : 'doing', url: `${instance}/${type}-view-${id}.html`, priority: 2, project: '测试项目', deadline: null },
+      zentao: { instance, account, type, id, status: type === 'bug' ? 'active' : 'doing', url: `${instance}/${type}-view-${id}.html`, priority: 2, project: '测试项目', deadline: null },
     })
     const bug = item('bug', randomUUID()), task = item('task', randomUUID()), history = item('task', randomUUID(), 'completed')
     const snapshot = (items: ZentaoWorkItem[]): ZentaoSnapshot => ({ instance, account, items, bugs: 1, tasks: 1 })
@@ -508,16 +508,19 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect(await store.applyZentaoSnapshot(snapshot([edited, task]))).toEqual({ created: 0, updated: 1 })
     expect(await store.dataVersion()).not.toBe(beforeVersion)
     expect((await store.tasks()).find((row) => row.id === bug.id)).toMatchObject({ title: edited.title, createdAt: bug.createdAt.replace('Z', '.000Z'), zentao: bug.zentao })
-    const local = await store.setCompleted(bug.id, true)
+    await expect(store.setCompleted(bug.id, true)).rejects.toThrow('禅道 Bug 状态由禅道系统驱动')
+    const local = await store.setCompleted(task.id, true)
     await store.applyZentaoSnapshot(snapshot([edited, task]))
-    expect((await store.tasks()).find((row) => row.id === bug.id)?.completedAt).toBe(local?.completedAt)
+    expect((await store.tasks()).find((row) => row.id === task.id)?.completedAt).toBe(local?.completedAt)
+    const closedBug = { ...edited, state: 'completed' as const, completedAt: '2026-10-06T09:30:00Z', zentao: { ...edited.zentao, status: 'closed' } }
     const done = { ...task, state: 'completed' as const, completedAt: '2026-10-05T08:20:00Z', zentao: { ...task.zentao, status: 'done' } }
-    expect(await store.applyZentaoSnapshot(snapshot([edited, done]))).toEqual({ created: 0, updated: 1 })
-    expect((await store.recordPage({ startDate: '2026-10-05', endDate: '2026-10-05' })).tasks.find((row) => row.id === task.id)).toMatchObject({ completedAt: '2026-10-05T08:20:00.000Z', zentao: done.zentao })
-    expect(await store.applyZentaoSnapshot(snapshot([edited, done]))).toEqual({ created: 0, updated: 0 })
-    await store.setCompleted(bug.id, false)
-    expect(await store.applyZentaoSnapshot(snapshot([]))).toEqual({ created: 0, updated: 1 })
-    expect((await store.tasks()).some((row) => row.id === bug.id)).toBe(false)
+    expect(await store.applyZentaoSnapshot(snapshot([closedBug, done]))).toEqual({ created: 0, updated: 2 })
+    expect((await store.recordPage({ startDate: '2026-10-06', endDate: '2026-10-06' })).tasks.find((row) => row.id === bug.id)).toMatchObject({ completedAt: '2026-10-06T09:30:00.000Z', zentao: closedBug.zentao })
+    expect((await store.tasks()).find((row) => row.id === task.id)).toMatchObject({ completedAt: local!.completedAt, zentao: done.zentao })
+    expect(await store.applyZentaoSnapshot(snapshot([closedBug, done]))).toEqual({ created: 0, updated: 0 })
+    await store.setCompleted(task.id, false)
+    expect(await store.applyZentaoSnapshot(snapshot([]))).toEqual({ created: 0, updated: 0 })
+    expect((await store.tasks()).some((row) => row.id === bug.id)).toBe(true)
     expect((await store.tasks()).some((row) => row.id === task.id)).toBe(true)
     // 重新指派给本人后恢复原编号；取消的待办不形成完成日志。
     await store.applyZentaoSnapshot(snapshot([edited, task]))
@@ -530,5 +533,49 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await store.tasks()).find((row) => row.id === bug.id)?.title).toBe(edited.title)
     // 源为禅道的事项不作为会话模型可修改的既有任务。
     expect((await store.projectTasks('')).some((row) => row.source === 'zentao')).toBe(false)
+  })
+  it('三条待验证 Bug 关闭一条后保留两个待办，并恢复旧版误归档及误删除到关闭当日日志', async () => {
+    const connection = { baseUrl: `https://zentao-${randomUUID()}.example`, account: 'fixture', password: '隔离测试密码' }
+    const remoteBug = (id: number) => ({ id, title: `待验证 Bug ${id}`, status: 'resolved', assignedTo: connection.account,
+      openedDate: '2026-09-20 17:39:38', resolvedDate: '2026-09-24 16:59:00', resolvedBy: '开发人员', deleted: '0' })
+    const response = (data: unknown) => new Response(JSON.stringify(data))
+    const mockApi = (ids: number[]) => {
+      const fetch = vi.fn().mockResolvedValueOnce(response({ status: 'success', token: '隔离测试令牌' }))
+        .mockResolvedValueOnce(response({ status: 'success', bugs: ids.map(remoteBug), pager: { recTotal: ids.length, recPerPage: 100, pageID: 1 } }))
+        .mockResolvedValueOnce(response({ status: 'success', tasks: [], pager: { recTotal: 0, recPerPage: 100, pageID: 1 } }))
+      vi.stubGlobal('fetch', fetch); return fetch
+    }
+    try {
+      mockApi([1, 2, 3])
+      const first = await new ZentaoV2Client(connection).readWork()
+      expect(await store.applyZentaoSnapshot(first)).toEqual({ created: 3, updated: 0 })
+      const ids = first.items.map((item) => item.id)
+      // 重现旧版把他人的解决日期当成本人完成、把关闭后移出列表当作删除。
+      await pool.query("UPDATE workbench.tasks SET zentao=zentao-'syncState',completed_at='2026-09-24T08:59:00Z' WHERE id=ANY($1::text[])", [ids.slice(0, 2)])
+      await pool.query("UPDATE workbench.tasks SET zentao=zentao-'syncState',deleted_at=now() WHERE id=$1", [ids[2]])
+      const tracked = await store.zentaoTrackedItems(connection.baseUrl, connection.account)
+      expect(tracked).toHaveLength(3)
+      const fetch = mockApi([1, 2])
+      fetch.mockResolvedValueOnce(response({ status: 'success', bug: { ...remoteBug(3), status: 'closed', assignedTo: 'closed', closedBy: connection.account, closedDate: '2026-10-06 14:05:25' } }))
+      const snapshot = await new ZentaoV2Client(connection).readWork(tracked)
+      expect(await store.applyZentaoSnapshot(snapshot)).toEqual({ created: 0, updated: 3 })
+      const own = (await store.snapshotTasks('2026-10-06')).filter((item) => item.zentao?.instance === connection.baseUrl)
+      expect(own).toHaveLength(3)
+      expect(own.filter((item) => !item.completedAt).map((item) => item.reference).sort()).toEqual(['BUG-1', 'BUG-2'])
+      expect(own.find((item) => item.reference === 'BUG-3')).toMatchObject({ id: ids[2], completedAt: '2026-10-06T06:05:25.000Z' })
+      expect((await store.reportRecords('2026-10-06')).filter((item) => ids.includes(item.id)).map((item) => item.reference)).toEqual(['BUG-3'])
+      expect((await store.reportRecords('2026-09-24')).some((item) => ids.includes(item.id))).toBe(false)
+      expect(await store.zentaoPendingCount(connection.baseUrl, connection.account)).toBe(2)
+      expect(await store.applyZentaoSnapshot(snapshot)).toEqual({ created: 0, updated: 0 })
+      expect(await store.zentaoTrackedItems(connection.baseUrl, connection.account)).toHaveLength(2)
+      // 后续完整个人列表只有两个待办，不应移除已经归档的那条日志。
+      mockApi([1, 2])
+      expect(await store.applyZentaoSnapshot(await new ZentaoV2Client(connection).readWork(await store.zentaoTrackedItems(connection.baseUrl, connection.account)))).toEqual({ created: 0, updated: 0 })
+      expect((await store.snapshotTasks('2026-10-06')).some((item) => item.id === ids[2])).toBe(true)
+      const reassigned = { ...snapshot.items[0], state: 'removed' as const, zentao: { ...snapshot.items[0].zentao, status: 'active' } }
+      await store.applyZentaoSnapshot({ ...snapshot, items: [reassigned] })
+      expect(await store.zentaoTrackedItems(connection.baseUrl, connection.account)).toEqual([{ type: 'bug', id: '2' }])
+      expect(await store.applyZentaoSnapshot({ ...snapshot, items: [reassigned] })).toEqual({ created: 0, updated: 0 })
+    } finally { vi.unstubAllGlobals() }
   })
 })

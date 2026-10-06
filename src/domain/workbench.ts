@@ -33,6 +33,7 @@ export interface Task {
   zentao?: {
     instance: string; account: string; type: 'bug' | 'task'; id: string
     status: string; url: string; priority: number | null; project: string; deadline: string | null
+    syncState?: 'pending' | 'completed' | 'removed'
   } | null
   evidenceCount?: number
   evidenceStale?: boolean
@@ -71,8 +72,19 @@ export function recordsForDate(state: WorkbenchState, day: string): Task[] {
     .sort((a, b) => recordTimestamp(b)!.localeCompare(recordTimestamp(a)!))
 }
 
+export function isZentaoBug(task: Task): boolean {
+  if (task.source !== 'zentao') return false
+  if (task.zentao?.type === 'bug') return true
+  return !task.zentao && task.reference.startsWith('BUG-')
+}
+
 export function requiresManualCompletion(source: SourceId): boolean {
   return source === 'manual' || source === 'zentao'
+}
+
+export function canManualComplete(task: Task): boolean {
+  if (isZentaoBug(task)) return false
+  return requiresManualCompletion(task.source)
 }
 
 // 自动工作记录归到来源日期；归档时间与真实完成状态分开保存。
@@ -83,7 +95,7 @@ export function recordTimestamp(task: Task): string | null {
 
 export function completeTask(state: WorkbenchState, id: string, now: Date): WorkbenchState {
   const task = state.tasks.find((item) => item.id === id)
-  if (!task || task.completedAt || !requiresManualCompletion(task.source)) return state
+  if (!task || task.completedAt || !canManualComplete(task)) return state
   return {
     ...state,
     tasks: state.tasks.map((item) => item.id === id ? { ...item, completedAt: now.toISOString() } : item),
@@ -113,7 +125,8 @@ export function createDemoState(today: Date): WorkbenchState {
     return new Date(`${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`).toISOString()
   }
   const pending: Array<[SourceId, string, string]> = [
-    ['zentao', 'BUG-20489', '核心支付通道偶发超时及分布式事务一致性复验'],
+    ['zentao', 'TASK-20489', '核心支付通道偶发超时及分布式事务一致性复验'],
+    ['zentao', 'BUG-92363', '【模型切换】主模型M3-->M27对话未隔离'],
     ['claude', 'SESSION-9104', '审核 Claude 自动编写的 28 个核心接口契约测试脚本'],
     ['codex', 'HEAL-710', '确认 UI 自动化测试回归中失败元素选择器的自愈结果'],
     ['workbuddy', 'WF-8392', '压测环境 16 节点压测机弹性扩容与权限签收确认'],
@@ -132,6 +145,16 @@ export function createDemoState(today: Date): WorkbenchState {
       ...pending.map(([source, reference, title], index) => ({
         id: `demo-pending-${index}`, source, reference, title,
         createdAt: at(days[0], 8), completedAt: null,
+        ...(source === 'zentao' ? {
+          zentao: {
+            instance: 'https://demo.zentao.example', account: 'demo',
+            type: reference.startsWith('BUG-') ? 'bug' as const : 'task' as const,
+            id: reference.split('-')[1] ?? String(index),
+            status: reference.startsWith('BUG-') ? 'active' : 'doing',
+            url: `https://demo.zentao.example/${reference.startsWith('BUG-') ? 'bug' : 'task'}-view-${reference.split('-')[1]}.html`,
+            priority: 2, project: '示例项目', deadline: null,
+          },
+        } : {}),
       })),
       ...logs.map(([day, source, reference, title, hour, minute], index) => ({
         id: `demo-log-${index}`, source, reference, title,

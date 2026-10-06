@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import type { FormEvent, RefObject } from 'react'
-import { sourceInfo } from '../domain/workbench'
+import { canManualComplete, sourceInfo } from '../domain/workbench'
 import type { Task } from '../domain/workbench'
 import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
@@ -49,20 +49,24 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
             <ZentaoTaskDetails task={task} />
-            <div className="daily-log-actions">
-              <TaskEvidence task={task} />
-              <div className="task-action-buttons">
-                {task.source === 'manual' && <button className="delete-task" disabled={busy} onClick={() => onDelete(task)} aria-label={`删除待办：${task.title}`}><Icon name="trash" /><span>{deletingId === task.id ? '删除中' : '删除'}</span></button>}
-                <button
-                  className="reopen-task complete-task"
-                  disabled={busy}
-                  onClick={(event) => onComplete(task, event.currentTarget)}
-                  aria-label={`完成任务：${task.title}`}
-                >
-                  <span>{activeId === task.id ? '传输中' : '完成'}</span>
-                </button>
+            {(task.source === 'manual' || canManualComplete(task) || task.projectPath || task.evidenceCount || task.evidence?.length || task.evidenceStale) && (
+              <div className="daily-log-actions">
+                <TaskEvidence task={task} />
+                <div className="task-action-buttons">
+                  {task.source === 'manual' && <button className="delete-task" disabled={busy} onClick={() => onDelete(task)} aria-label={`删除待办：${task.title}`}><Icon name="trash" /><span>{deletingId === task.id ? '删除中' : '删除'}</span></button>}
+                  {canManualComplete(task) && (
+                    <button
+                      className="reopen-task complete-task"
+                      disabled={busy}
+                      onClick={(event) => onComplete(task, event.currentTarget)}
+                      aria-label={`完成任务：${task.title}`}
+                    >
+                      <span>{activeId === task.id ? '传输中' : '完成'}</span>
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </article>
         ))}
         {tasks.length === 0 && (

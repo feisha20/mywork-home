@@ -22,7 +22,7 @@ async function prepare() {
   const applyZentaoSnapshot = vi.fn(async () => ({ created: 1, updated: 2 })), pendingMessages = vi.fn(async () => [])
   const store = { pool: { connect: async () => ({ query: async () => ({ rows: [{ locked: true }] }), release: () => {} }) },
     latestRun: async () => run, interruptRuns: async () => {}, saveRun: async (value: SyncRun) => { run = structuredClone(value) },
-    cutoff: async () => new Date().toISOString(), applyZentaoSnapshot, sourceCounts: async () => [], pendingMessages,
+    cutoff: async () => new Date().toISOString(), zentaoTrackedItems: vi.fn(async () => []), applyZentaoSnapshot, sourceCounts: async () => [], pendingMessages,
     snapshotTasks: async () => [], dailyReports: async () => [], recordedDays: async () => [], dataVersion: async () => 'fixture',
   } as unknown as Store
   const extract = vi.fn(async () => []), sync = new SyncService(store, config, { extract, close: async () => {} }, settings)
@@ -46,9 +46,28 @@ describe('禅道接入同步流程', () => {
       await sync.start(); await sync.trigger('zentao'); await sync.waitForIdle()
       expect(await store.latestRun()).toMatchObject({ status: 'succeeded', newTasks: 1, updatedTasks: 2, newMessages: 0, activeSource: null })
       expect(applyZentaoSnapshot).toHaveBeenCalledOnce(); expect(extract).not.toHaveBeenCalled()
+      expect(store.zentaoTrackedItems).toHaveBeenCalledWith('https://pm.example/zentao', 'linjt')
       expect(pendingMessages.mock.calls[0][0]).toEqual([])
       expect((await sync.snapshot()).sources.zentao).toMatchObject({ available: true, sessionCount: 1, error: null, collector: 'zentao', enabled: true })
       expect((await sync.snapshot()).sources.codex).toMatchObject({ available: true, sessionCount: 88, error: null, enabled: true })
+    } finally { await sync.close() }
+  })
+  it('个人列表缺少已关闭 Bug 时补查已采集事项，再保存两个待办和一条完成记录', async () => {
+    const { sync, store, applyZentaoSnapshot, extract } = await prepare()
+    store.zentaoTrackedItems = vi.fn(async () => [{ type: 'bug', id: '3' }])
+    const fetch = vi.fn().mockResolvedValueOnce(json({ status: 'success', token: '同步测试令牌' }))
+      .mockResolvedValueOnce(json({ status: 'success', bugs: [1, 2].map((id) => ({ id, title: `待验证 Bug ${id}`, status: 'resolved', assignedTo: 'linjt', resolvedBy: '开发人员' })), pager: { recTotal: 2, recPerPage: 100, pageID: 1 } }))
+      .mockResolvedValueOnce(json({ status: 'success', tasks: [], pager: { recTotal: 0, recPerPage: 100, pageID: 1 } }))
+      .mockResolvedValueOnce(json({ status: 'success', bug: { id: 3, title: '今天已验证 Bug', status: 'closed', assignedTo: 'closed', resolvedDate: '2026-09-24 16:59:00', closedDate: '2026-10-06 14:05:25' } }))
+    vi.stubGlobal('fetch', fetch)
+    try {
+      await sync.trigger('zentao'); await sync.waitForIdle()
+      expect((await store.latestRun())?.status).toBe('succeeded')
+      expect(applyZentaoSnapshot).toHaveBeenCalledWith(expect.objectContaining({ bugs: 2, tasks: 0,
+        items: expect.arrayContaining([expect.objectContaining({ reference: 'BUG-3', state: 'completed', completedAt: '2026-10-06T06:05:25.000Z' })]) }))
+      expect((await sync.snapshot()).sources.zentao?.sessionCount).toBe(2)
+      expect(fetch.mock.calls.at(-1)?.[0]).toBe('https://pm.example/zentao/api.php/v2/bugs/3')
+      expect(extract).not.toHaveBeenCalled()
     } finally { await sync.close() }
   })
   it('完成状态已保存但锁尚未释放时，新同步等待清理后启动，不误返回上轮结果', async () => {

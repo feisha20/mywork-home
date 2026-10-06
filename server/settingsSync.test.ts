@@ -84,6 +84,21 @@ describe('设置驱动采集', () => {
     expect(ingest).not.toHaveBeenCalled(); expect(extract).not.toHaveBeenCalled()
     expect(messages.size).toBe(0); expect(cursors.size).toBe(0)
   })
+  it('关闭自动采集时禅道已配置连接也能恢复已接入和待办数量，无需等待全量同步', async () => {
+    const { config, settings } = await prepare(), draft = settingsDraft(settings.view())
+    const zentao = draft.channels.find((channel) => channel.id === 'zentao')!
+    zentao.enabled = true
+    zentao.zentao = { baseUrl: 'https://pm.example/zentao', account: 'linjt', password: '测试密码' }
+    await settings.save(draft)
+    const { store } = memoryStore()
+    store.zentaoPendingCount = vi.fn(async () => 3)
+    const sync = new SyncService(store, config, { extract: vi.fn(), close: async () => {} }, settings)
+    try {
+      await sync.start()
+      const snapshot = await sync.snapshot()
+      expect(snapshot.sources.zentao).toMatchObject({ available: true, sessionCount: 3, error: null, enabled: true })
+    } finally { await sync.close() }
+  })
   it('目录配置改变后重查，空目录可接入，缺失路径和缺失 Zcode 数据库不误显示已接入', async () => {
     const { config, settings } = await prepare(), draft = settingsDraft(settings.view())
     const codex = draft.channels.find((channel) => channel.id === 'codex')!

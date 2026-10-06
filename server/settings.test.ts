@@ -232,7 +232,7 @@ describe('设置接口', () => {
   it('禅道连接测试检查草稿的个人待办权限，不保存草稿或密码，不回传令牌', async () => {
     const { app, sync } = await appForTest(), before = settings.view()
     const fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', token: '私密禅道令牌' })))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', bugs: [{ id: '10', title: '验证 Bug', status: 'resolved', assignedTo: 'linjt' }], pager: { recTotal: 1, recPerPage: 100, pageID: 1 } })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', bugs: [{ id: '10', title: '待处理 Bug', status: 'active', assignedTo: 'linjt' }], pager: { recTotal: 1, recPerPage: 100, pageID: 1 } })))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: 'success', tasks: [], pager: { recTotal: 0, recPerPage: 100, pageID: 1 } })))
     vi.stubGlobal('fetch', fetch)
     const payload = { baseUrl: 'https://pm.example/zentao', account: 'linjt', password: '草稿禅道密码' }
