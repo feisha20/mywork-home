@@ -214,6 +214,12 @@ body {
 .management-evidence summary { cursor: pointer; font-size: 11px; }
 .management-evidence ul { padding-left: 18px; margin: 6px 0; }
 .management-evidence a { color: #8c633c; }
+.management-evidence-toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.management-evidence-toggle { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.management-evidence-toggle::before { content: '▸'; margin-right: 4px; }
+.management-evidence-toggle[aria-expanded=true]::before { content: '▾'; }
+.management-evidence-toggle:focus-visible { outline: 2px solid #d4955e; outline-offset: 3px; border-radius: 3px; }
+.management-evidence-toolbar .reopen-task { margin: 0; padding: 5px 9px; font-size: 10px; line-height: 1.2; white-space: nowrap; }
 .settings-management { border: 1px solid #e2e8f1; border-radius: 10px; padding: 14px; margin: 20px 0 0; min-width: 0; }
 .settings-management legend { padding: 0 6px; font-size: 12px; color: #66748a; }
 .management-field-preview { margin-top: 12px; font-size: 11px; color: #728095; line-height: 1.8; overflow-wrap: anywhere; }
@@ -1110,6 +1116,8 @@ button:focus-visible, input:focus-visible {
 .daily-log-actions .zentao-task-details { flex: 1; min-width: 0; margin: 0; }
 .daily-log-actions .task-evidence summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .daily-log-actions .reopen-task { flex: 0 0 auto; margin: 0; padding: 5px 9px; font-size: 10px; line-height: 1.2; white-space: nowrap; }
+.daily-log-action-buttons { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
+.daily-log-action-buttons .daily-log-report-state { margin-left: 0; }
 .task-action-buttons { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
 .delete-task { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 10px; line-height: 1.2; color: #7c899c; background: #fff; cursor: pointer; }
 .delete-task svg { width: 12px; height: 12px; }
