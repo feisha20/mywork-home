@@ -16,6 +16,8 @@ const environment = z.object({
   CODEX_ARCHIVE_DIR: z.string().default(join(homedir(), '.codex/archived_sessions')),
   CLAUDE_PROJECTS_DIR: z.string().default(join(homedir(), '.claude/projects')),
   WORKBUDDY_PROJECTS_DIR: z.string().default(join(homedir(), '.workbuddy/projects')),
+  ZCODE_DB_DIR: z.string().default(join(homedir(), '.zcode/cli/db')),
+  GEMINI_SESSIONS_DIR: z.string().default(join(homedir(), '.gemini/tmp')),
   WORKBENCH_RUNTIME_DIR: z.string().default(resolve('.runtime')),
   WORKBENCH_BATCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(180_000),
   WORKBENCH_SYNC_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
@@ -30,6 +32,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   try { database = new URL(config.DATABASE_URL) } catch { throw new Error('数据库连接地址格式无效') }
   if (!['postgres:', 'postgresql:'].includes(database.protocol) || !database.password) throw new Error('请配置有效的 PostgreSQL 专属连接及密码')
   if (database.username === 'postgres') throw new Error('运行服务必须使用工作台专属数据库用户')
-  return config
+  return { ...config, sourceSecrets: [] as string[] }
 }
 export type Config = ReturnType<typeof loadConfig>

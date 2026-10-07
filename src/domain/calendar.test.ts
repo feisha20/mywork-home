@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calendarDays, shiftMonth } from './calendar'
+import { calendarDays, shiftMonth, shiftYear } from './calendar'
 
 describe('日志日历日期', () => {
   it('按周一开始并补齐六周，覆盖跨月日期', () => {
@@ -14,5 +14,9 @@ describe('日志日历日期', () => {
     expect(shiftMonth('2026-12', 1)).toBe('2027-01')
     expect(calendarDays('2024-02')).toContain('2024-02-29')
     expect(calendarDays('2026-02')).not.toContain('2026-02-29')
+  })
+  it('支持年份快速切换', () => {
+    expect(shiftYear('2026-10', 1)).toBe('2027-10')
+    expect(shiftYear('2026-10', -1)).toBe('2025-10')
   })
 })

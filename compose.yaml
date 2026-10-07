@@ -18,6 +18,8 @@ services:
       CODEX_ARCHIVE_DIR: /records/codex/archived_sessions
       CLAUDE_PROJECTS_DIR: /records/claude/projects
       WORKBUDDY_PROJECTS_DIR: /records/workbuddy/projects
+      ZCODE_DB_DIR: /records/zcode/db
+      GEMINI_SESSIONS_DIR: /records/gemini/tmp
       WORKBENCH_RUNTIME_DIR: /app/.runtime
       WORKBENCH_SYNC_CONCURRENCY: ${WORKBENCH_SYNC_CONCURRENCY:-3}
     extra_hosts:
@@ -45,7 +47,17 @@ services:
         target: /records/workbuddy/projects
         read_only: true
         bind: { create_host_path: false }
+      - type: bind
+        source: ${ZCODE_DB_DIR:-${HOME}/.zcode/cli/db}
+        target: /records/zcode/db
+        read_only: true
+        bind: { create_host_path: false }
       - harness-runtime:/app/.runtime
+      - type: bind
+        source: ${GEMINI_SESSIONS_DIR:-${HOME}/.gemini/tmp}
+        target: /records/gemini/tmp
+        read_only: true
+        bind: { create_host_path: false }
     healthcheck:
       test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s

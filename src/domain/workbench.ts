@@ -1,23 +1,47 @@
 export const SOURCES = {
-  zentao: { label: '禅道 Zentao', className: 'src-zentao' },
-  claude: { label: 'Claude Code', className: 'src-claude' },
-  codex: { label: 'Codex', className: 'src-codex' },
-  workbuddy: { label: 'WorkBuddy', className: 'src-workbuddy' },
+  zentao: { label: '禅道 Zentao', shortLabel: '禅道', logo: '/channels/zentao.png', className: 'src-zentao' },
+  claude: { label: 'Claude Code', shortLabel: 'Claude', logo: '/channels/claude.png', className: 'src-claude' },
+  codex: { label: 'Codex', shortLabel: 'Codex', logo: '/channels/codex.png', className: 'src-codex' },
+  workbuddy: { label: 'WorkBuddy', shortLabel: 'WorkBuddy', logo: '/channels/workbuddy.png', className: 'src-workbuddy' },
+  zcode: { label: 'Zcode', shortLabel: 'Zcode', logo: '/channels/zcode.png', className: 'src-zcode' },
+  gemini: { label: 'Gemini CLI', shortLabel: 'Gemini', logo: '/channels/gemini.svg', className: 'src-gemini' },
   manual: { label: '手动添加', className: 'src-manual' },
 } as const
 
-export type SourceId = keyof typeof SOURCES
+export type SourceId = keyof typeof SOURCES | `custom-${string}`
+export const CAPTURE_SOURCES = ['zentao', 'claude', 'codex', 'workbuddy', 'zcode', 'gemini'] as const
+
+export function sourceInfo(source: SourceId, channels?: readonly import('../../shared/settings.js').ChannelSummary[]) {
+  const configured = channels?.find((channel) => channel.id === source)
+  const builtin = Object.hasOwn(SOURCES, source) ? SOURCES[source as keyof typeof SOURCES] : null
+  return { label: configured?.name ?? builtin?.label ?? '自定义渠道',
+    shortLabel: configured?.name ?? (builtin && 'shortLabel' in builtin ? builtin.shortLabel : '自定义'),
+    logo: configured?.logo ?? (builtin && 'logo' in builtin ? builtin.logo : '') }
+}
 
 export interface Task {
   id: string
   reference: string
   source: SourceId
+  scheduledPlan?: { id: string; scheduledAt: string } | null
+  sourceLabel?: string
   title: string
   createdAt: string
   completedAt: string | null
+  management?: import('../../shared/zentaoManagement.js').ManagementTask | null
   recordedAt?: string | null
   projectPath?: string
-  statusOrigin?: 'manual' | 'ai'
+  statusOrigin?: 'manual' | 'ai' | 'zentao'
+  isPinned?: boolean
+  isPersonal?: boolean
+  personalOrigin?: 'manual' | 'ai'
+  zentao?: {
+    instance: string; account: string; type: 'bug' | 'task'; id: string
+    status: string; url: string; priority: number | null; project: string; deadline: string | null
+    syncState?: 'pending' | 'completed' | 'removed'
+  } | null
+  evidenceCount?: number
+  evidenceStale?: boolean
   evidence?: import('../../shared/contracts.js').Evidence[]
 }
 
@@ -53,8 +77,33 @@ export function recordsForDate(state: WorkbenchState, day: string): Task[] {
     .sort((a, b) => recordTimestamp(b)!.localeCompare(recordTimestamp(a)!))
 }
 
+export function isZentaoBug(task: Task): boolean {
+  if (task.source !== 'zentao') return false
+  if (task.zentao?.type === 'bug') return true
+  return !task.zentao && task.reference.startsWith('BUG-')
+}
+
 export function requiresManualCompletion(source: SourceId): boolean {
   return source === 'manual' || source === 'zentao'
+}
+
+export function canManualComplete(task: Task): boolean {
+  if (task.management?.riskState === 'resolved') return false
+  if (isZentaoBug(task)) return false
+  return requiresManualCompletion(task.source)
+}
+
+export function isPendingTask(task: Task): boolean {
+  return requiresManualCompletion(task.source) && !task.completedAt && (!task.management ||
+    task.management.riskState === 'active' && task.management.handlingState === 'pending')
+}
+
+// 置顶仅改变待办展示顺序；组内仍按创建时间倒序，编号用于稳定排序。
+export function pendingTasks(tasks: readonly Task[]): Task[] {
+  return tasks.filter(isPendingTask).sort((a, b) =>
+    Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned))
+    || Date.parse(b.createdAt) - Date.parse(a.createdAt)
+    || a.id.localeCompare(b.id))
 }
 
 // 自动工作记录归到来源日期；归档时间与真实完成状态分开保存。
@@ -65,7 +114,7 @@ export function recordTimestamp(task: Task): string | null {
 
 export function completeTask(state: WorkbenchState, id: string, now: Date): WorkbenchState {
   const task = state.tasks.find((item) => item.id === id)
-  if (!task || task.completedAt || !requiresManualCompletion(task.source)) return state
+  if (!task || task.completedAt || !canManualComplete(task)) return state
   return {
     ...state,
     tasks: state.tasks.map((item) => item.id === id ? { ...item, completedAt: now.toISOString() } : item),
@@ -95,7 +144,8 @@ export function createDemoState(today: Date): WorkbenchState {
     return new Date(`${day}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+08:00`).toISOString()
   }
   const pending: Array<[SourceId, string, string]> = [
-    ['zentao', 'BUG-20489', '核心支付通道偶发超时及分布式事务一致性复验'],
+    ['zentao', 'TASK-20489', '核心支付通道偶发超时及分布式事务一致性复验'],
+    ['zentao', 'BUG-92363', '【模型切换】主模型M3-->M27对话未隔离'],
     ['claude', 'SESSION-9104', '审核 Claude 自动编写的 28 个核心接口契约测试脚本'],
     ['codex', 'HEAL-710', '确认 UI 自动化测试回归中失败元素选择器的自愈结果'],
     ['workbuddy', 'WF-8392', '压测环境 16 节点压测机弹性扩容与权限签收确认'],
@@ -114,6 +164,16 @@ export function createDemoState(today: Date): WorkbenchState {
       ...pending.map(([source, reference, title], index) => ({
         id: `demo-pending-${index}`, source, reference, title,
         createdAt: at(days[0], 8), completedAt: null,
+        ...(source === 'zentao' ? {
+          zentao: {
+            instance: 'https://demo.zentao.example', account: 'demo',
+            type: reference.startsWith('BUG-') ? 'bug' as const : 'task' as const,
+            id: reference.split('-')[1] ?? String(index),
+            status: reference.startsWith('BUG-') ? 'active' : 'doing',
+            url: `https://demo.zentao.example/${reference.startsWith('BUG-') ? 'bug' : 'task'}-view-${reference.split('-')[1]}.html`,
+            priority: 2, project: '示例项目', deadline: null,
+          },
+        } : {}),
       })),
       ...logs.map(([day, source, reference, title, hour, minute], index) => ({
         id: `demo-log-${index}`, source, reference, title,
@@ -141,10 +201,13 @@ export function decodeSnapshot(raw: string): WorkbenchState | null {
       if (!isRecord(task)
         || typeof task.id !== 'string' || !task.id || ids.has(task.id)
         || typeof task.reference !== 'string'
-        || typeof task.source !== 'string' || !Object.hasOwn(SOURCES, task.source)
+        || typeof task.source !== 'string' || (!Object.hasOwn(SOURCES, task.source) && !/^custom-[a-z0-9-]{1,64}$/.test(task.source))
         || typeof task.title !== 'string' || !task.title.trim() || task.title.length > 300
         || !validTimestamp(task.createdAt)
         || (task.completedAt !== null && !validTimestamp(task.completedAt))
+        || (task.isPinned !== undefined && typeof task.isPinned !== 'boolean')
+        || (task.isPersonal !== undefined && typeof task.isPersonal !== 'boolean')
+        || (task.personalOrigin !== undefined && !['manual', 'ai'].includes(task.personalOrigin as string))
         || (task.recordedAt != null && !validTimestamp(task.recordedAt))) return null
       ids.add(task.id)
     }

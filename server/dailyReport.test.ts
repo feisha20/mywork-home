@@ -4,12 +4,15 @@ import { recordsForDate } from '../src/domain/workbench.js'
 import type { DailyReport, DailyReportItem } from '../shared/contracts.js'
 import { dailyReportInput, parseDailyReport, parseDailyReportGroups, parseDailyReportSummaries, dailyReportSummaryInput,
   parseDailyReportSummaryDrafts, dailyReportSummaryRepairInput, parseDailyReportCompactSummaries, DailyReportService } from './dailyReport.js'
-import { isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
+import { excludePersonalReportItems, isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 import type { DailyReportGenerator } from './dailyReport.js'
 import { createApp } from './app.js'
 import { loadConfig } from './config.js'
 import type { Store } from './store.js'
 import type { SyncService } from './sync.js'
+import { managementBatch } from './zentaoManagement.fixtures.js'
+import { evaluateManagement } from './zentaoManagement.js'
+import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
 
 const day = '2026-10-01'
 const records: Task[] = [
@@ -34,6 +37,58 @@ const generator = (): DailyReportGenerator => ({ generateDailyReport: vi.fn(asyn
   taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...input.map((task) => task.id)])].sort() }]), close: vi.fn(async () => {}) })
 
 describe('工作日报的汇总范围与完整性', () => {
+  it('禅道管理工作使用本地模板，初次及追加不向模型发送管理事实或历史摘要', async () => {
+    const batch = managementBatch()
+    const risk = evaluateManagement(batch, defaultZentaoManagement).risks[0]
+    const managerTask: Task = { ...records[1], id: 'management-1', reference: 'RISK-1', source: 'zentao', title: '敏感需求的跟进记录',
+      management: { ...risk, riskState: 'active', handlingState: 'completed', occurrence: 1,
+        firstSeenAt: records[1].createdAt, lastVerifiedAt: records[1].createdAt, handledAt: records[1].completedAt,
+        resolvedAt: null, resolutionReason: null } }
+    const store = inputStore([managerTask]), model = generator(), service = new DailyReportService(store, model)
+    const first = await service.generate(day)
+    expect(model.generateDailyReport).not.toHaveBeenCalled()
+    expect(first.items[0]).toMatchObject({ localTemplate: 'zentao-management', taskIds: [managerTask.id] })
+    expect(first.items[0].text).not.toContain('敏感需求')
+    store.reportRecords.mockResolvedValue([managerTask, ...records])
+    const next = await service.generate(day, 'append')
+    const call = vi.mocked(model.generateDailyReport).mock.calls[0]
+    expect(call[1].map((task) => task.id)).toEqual(records.map((task) => task.id))
+    expect(JSON.stringify(call[2])).not.toContain('management-1')
+    expect(JSON.stringify(call[2])).not.toContain('测试管理跟进')
+    expect(next.recordCount).toBe(3)
+    expect(next.items.filter((item) => item.localTemplate)).toHaveLength(1)
+    await service.close()
+  })
+  it('个人日志保留归档，初次及补充日报均不向模型发送个人事项', async () => {
+    const privateTask = { ...records[0], id: 'private', title: '安排家庭出行', projectPath: '/私人/家庭', isPersonal: true }
+    const store = inputStore([...records, privateTask]), model = generator(), service = new DailyReportService(store, model)
+    expect(recordsForDate({ version: 1, tasks: [privateTask] }, day)).toHaveLength(1)
+    expect(dailyReportInput(day, [...records, privateTask]).records.map((task) => task.taskId)).toEqual(records.map((task) => task.id))
+    const report = await service.generate(day)
+    expect(report.recordCount).toBe(2)
+    expect(vi.mocked(model.generateDailyReport).mock.calls[0][1].some((task) => task.isPersonal)).toBe(false)
+    expect(isRecordInReport(privateTask, report)).toBe(false)
+    await service.generate(day, 'append')
+    expect(model.generateDailyReport).toHaveBeenCalledOnce()
+    await service.close()
+    const privateModel = generator(), privateService = new DailyReportService(inputStore([privateTask]), privateModel)
+    await expect(privateService.generate(day)).rejects.toMatchObject({ statusCode: 400 })
+    expect(privateModel.generateDailyReport).not.toHaveBeenCalled()
+    await privateService.close()
+  })
+  it('移除含个人事项的整条混合摘要，释放其中工作记录的整理标记，保留其他摘要', () => {
+    const report: DailyReport = { day, generatedAt: records[0].createdAt, revision: 2, recordCount: 3,
+      recordVersions: { work: '原工作', private: '原私人', other: '其他工作' }, items: [
+        { text: '工作交付与家庭旅行的混合摘要', taskIds: ['work', 'private'] },
+        { text: '其他项目成果', taskIds: ['other'] },
+      ] }
+    const cleaned = excludePersonalReportItems(report, new Set(['private']))
+    expect(cleaned.items).toEqual([report.items[1]])
+    expect(cleaned.recordVersions).toEqual({ other: '其他工作' })
+    expect(cleaned.recordCount).toBe(1)
+    expect(report.items).toHaveLength(2)
+    expect(excludePersonalReportItems(cleaned, new Set(['private']))).toBe(cleaned)
+  })
   it('接受跨来源的同一任务合并，保留来源记录关联', () => {
     expect(parseDailyReport(`\`\`\`json\n${JSON.stringify({ items: grouped })}\n\`\`\``, records)).toEqual(grouped)
   })

@@ -1,6 +1,6 @@
 export interface PollActivity { running: boolean }
 
-// 请求结束后再安排下一轮；后台页面停止轮询，恢复可见后由调用方立即刷新。
+// 请求结束后再安排下一轮；调用方决定是否允许后台轮询（例如开启待办通知时）。
 export function createAdaptivePolling(refresh: () => Promise<PollActivity | null>, isVisible: () => boolean) {
   let timer: ReturnType<typeof setTimeout> | undefined
   let stopped = false, inFlight = false, pending = false

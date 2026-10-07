@@ -41,6 +41,7 @@ export interface DailyReportGroup {
 }
 
 export function dailyReportGroupLimit(records: Task[], previous?: DailyReport): number {
+  records = records.filter((task) => !task.isPersonal)
   // 独立项目较多时保留汇报空间；通常最多六项，防止再生成逐条日志清单。
   const projects = new Set(records.map((task) => task.projectPath?.trim()).filter(Boolean))
   for (const item of previous?.items ?? []) for (const path of item.projectPaths ?? []) if (path) projects.add(path)
@@ -48,6 +49,8 @@ export function dailyReportGroupLimit(records: Task[], previous?: DailyReport): 
 }
 
 export function dailyReportInput(day: string, records: Task[], secrets: string[] = [], previous?: DailyReport) {
+  records = records.filter((task) => !task.isPersonal && !task.management)
+  if (previous) previous = { ...previous, items: previous.items.filter((item) => !item.localTemplate) }
   return {
     day,
     maxGroups: dailyReportGroupLimit(records, previous),
@@ -57,7 +60,8 @@ export function dailyReportInput(day: string, records: Task[], secrets: string[]
       taskId: task.id,
       // 模型只需要项目名来归类，本机完整路径保留在数据库中。
       project: redact(task.projectPath?.split(/[\\/]/).filter(Boolean).at(-1) ?? '', secrets),
-      title: redact(task.title, secrets),
+      title: redact(`${task.evidenceStale ? '来源已修改或撤回，需重新核对：' : ''}${task.title}`, secrets),
+      sourceChanged: Boolean(task.evidenceStale),
       completed: task.completedAt !== null,
       recordedAt: recordTimestamp(task),
       // 日志简介已经概括工作内容，不再引入包含实现和验证过程的长篇会话证据。
@@ -200,9 +204,9 @@ export class DailyReportService {
     const previous = await this.store.dailyReport(day)
     // 已有日报的普通打开请求只读取，不因新日志出现而自动触发模型。
     if (previous && mode === 'initial') return previous
-    const records = await this.store.reportRecords(day)
+    const records = (await this.store.reportRecords(day)).filter((task) => !task.isPersonal)
     if (this.stopped) throw new DailyReportError('日报服务正在关闭，请稍后重试', 503)
-    if (!records.length) throw new DailyReportError('这一天还没有工作日志，添加记录后即可生成日报', 400)
+    if (!records.length) throw new DailyReportError('这一天还没有工作日志可整理，个人事项不参与日报', 400)
     const pending = records.filter((task) => !isRecordInReport(task, previous))
     if (previous && !pending.length) return previous
     const key = JSON.stringify([day, previous?.revision ?? 0, pending])
@@ -216,15 +220,33 @@ export class DailyReportService {
     finally { if (this.active?.promise === promise) this.active = null }
   }
 
+  // 自动汇总串行等待正在生成的日报，保证同一时间点的周月报读取完整结果。
+  async generateQueued(day: string): Promise<DailyReport> {
+    while (true) {
+      await this.active?.promise.catch(() => {})
+      try { return await this.generate(day, 'append') }
+      catch (error) { if (error instanceof DailyReportError && error.statusCode === 409 && this.active) continue; throw error }
+    }
+  }
+
   private async run(day: string, records: Task[], previous?: DailyReport): Promise<DailyReport> {
     try {
-      const items = await this.generator.generateDailyReport(day, records, previous)
+      const localPrevious = previous?.items.filter((item) => item.localTemplate === 'zentao-management') ?? []
+      const localRecords = records.filter((task) => !!task.management)
+      const localIds = new Set([...localPrevious.flatMap((item) => item.taskIds), ...localRecords.map((task) => task.id)])
+      const modelPrevious = previous ? { ...previous, items: previous.items.filter((item) => !item.localTemplate),
+        recordCount: Object.keys(previous.recordVersions).filter((id) => !localIds.has(id)).length,
+        recordVersions: Object.fromEntries(Object.entries(previous.recordVersions).filter(([id]) => !localIds.has(id))) } : undefined
+      const modelRecords = records.filter((task) => !task.management)
+      const items = modelRecords.length ? await this.generator.generateDailyReport(day, modelRecords, modelPrevious) : modelPrevious?.items ?? []
+      if (localIds.size) items.push({ topic: '测试管理跟进', text: '处理禅道测试管理关注事项，并记录相关风险的跟进结果。',
+        taskIds: [...localIds], localTemplate: 'zentao-management' })
       const recordVersions = { ...previous?.recordVersions, ...Object.fromEntries(records.map((task) => [task.id, reportRecordVersion(task)])) }
       validateCoverage(items, Object.keys(recordVersions).map((id) => ({ id })))
       const report = { day, generatedAt: new Date().toISOString(), recordCount: Object.keys(recordVersions).length, items,
         revision: (previous?.revision ?? 0) + 1, recordVersions }
       const saved = await this.store.saveDailyReport(report, previous?.revision ?? 0)
-      if (!saved) throw new DailyReportError('日报已被其他请求更新，请重新打开后补充整理', 409)
+      if (!saved) throw new DailyReportError('日报或事项分类已更新，请重新打开后补充整理', 409)
       return saved
     } catch (error) {
       if (error instanceof DailyReportError) throw error

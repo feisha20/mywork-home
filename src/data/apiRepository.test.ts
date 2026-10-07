@@ -1,9 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDemoState } from '../domain/workbench'
-import { migrateLegacyTasks, createTask, generateDailyReport, loadOrCreateDailyReport } from './apiRepository'
+import { migrateLegacyTasks, createTask, updateTaskPersonal, generateDailyReport, loadOrCreateDailyReport } from './apiRepository'
 
 afterEach(() => { vi.unstubAllGlobals() })
 describe('旧缓存迁移与请求失败', () => {
+  it('新建个人待办与修改分类独立于完成状态', async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ isPersonal: true }) })
+    vi.stubGlobal('fetch', fetch)
+    await createTask('安排家庭出行', true)
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toEqual({ title: '安排家庭出行', isPersonal: true })
+    await updateTaskPersonal('id/one', false)
+    expect(fetch.mock.calls[1][0]).toBe('/api/tasks/id%2Fone/personal')
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({ isPersonal: false })
+  })
   it('仅迁移手工事项，保留原日期；成功前不写迁移标记', async () => {
     const state = createDemoState(new Date())
     state.tasks.push({ id: 'b65c0ac8-bf3e-4ae5-b50c-3c41ee212ef0', reference: 'TASK-old', source: 'manual', title: '原手工事项', createdAt: '2026-09-26T01:00:00Z', completedAt: '2026-09-27T01:00:00Z' })

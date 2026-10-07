@@ -1,10 +1,11 @@
-import { createRef, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { dateKey, recordsForDate, requiresManualCompletion } from './domain/workbench'
+import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { dateKey, recordsForDate, pendingTasks } from './domain/workbench'
 import type { Task, WorkbenchState } from './domain/workbench'
 import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
 import { mergeDailyReports } from '../shared/dailyReports'
-import { createTask, deleteTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask } from './data/apiRepository'
+import { createTask, deleteTask, fetchWorkbench, handleManagementTask, migrateLegacyTasks, startSync, updateTask, updateTaskPersonal, updateTaskPinned } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
+import { useTaskNotifications } from './data/useTaskNotifications'
 import { changedCaptureDestinations } from './domain/captureFlow'
 import { CaptureOutput } from './components/CaptureOutput'
 import type { CaptureOutputEvent } from './components/CaptureOutput'
@@ -15,14 +16,24 @@ import { DailyLogBook } from './components/DailyLogBook'
 import { createTransferJob, TransferLayer } from './components/TransferLayer'
 import type { TransferJob } from './components/TransferLayer'
 import { Icon } from './components/Icon'
+import { SettingsDialog } from './components/SettingsDialog'
+import { PerpetualCalendar } from './components/PerpetualCalendar'
+import { UserMenu } from './components/UserMenu'
+import type { WorkbenchSettings } from '../shared/settings'
+
+const ScheduledTasksDialog = lazy(() => import('./components/ScheduledTasksDialog').then((module) => ({ default: module.ScheduledTasksDialog })))
+const PersonalSpace = lazy(() => import('./components/PersonalSpace').then((module) => ({ default: module.PersonalSpace })))
 
 const busPaths = ['M 100 240 L 460 240 L 520 280 L 700 280', 'M 100 420 L 480 420 L 540 320 L 700 320', 'M 700 280 L 880 280 L 940 240 L 1300 240', 'M 700 320 L 860 320 L 920 420 L 1300 420']
-const dateFormatter = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'long' })
 const phaseLabels = { inbound: '待办正在汇入核心', orbit: '核心正在处理 · 环轨加速', outbound: '正在收进今天的日报', idle: '工作流就绪，等待下一次推进' }
 
 export default function App() {
+  const { enabled: notificationsEnabled, active: notificationsActive, requesting: requestingNotifications,
+    description: notificationDescription, toggle: toggleNotifications, notify, canNotify } = useTaskNotifications()
+  const previousNotificationsActive = useRef(notificationsActive)
   const [state, setState] = useState<WorkbenchState>({ version: 1, tasks: [] })
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot | null>(null)
+  const [scheduledTasksOpen, setScheduledTasksOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [connected, setConnected] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -34,7 +45,11 @@ export default function App() {
   const [recentId, setRecentId] = useState<string | null>(null)
   const [changingId, setChangingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [pinningId, setPinningId] = useState<string | null>(null)
+  const [classifyingId, setClassifyingId] = useState<string | null>(null)
   const [syncRequested, setSyncRequested] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [spaceOpen, setSpaceOpen] = useState(false)
   const [pageVisible, setPageVisible] = useState(() => !document.hidden)
   const [captureOutputs, setCaptureOutputs] = useState<CaptureOutputEvent[]>([])
   const captureBaseline = useRef<Task[] | null>(null)
@@ -55,6 +70,7 @@ export default function App() {
     const version = mutationVersion.current
     try {
       const result = await fetchWorkbench()
+      notify(result.tasks)
       setSnapshot((current) => {
         const next = { ...result, dailyReports: mergeDailyReports(current?.dailyReports ?? [], result.dailyReports ?? []) }
         return JSON.stringify(current) === JSON.stringify(next) ? current : next
@@ -74,9 +90,9 @@ export default function App() {
       return result
     } catch (cause) { connectionError.current = true; setConnected(false); setError(cause instanceof Error ? cause.message : '工作台加载失败'); return null }
     finally { refreshing.current = false }
-  }, [])
+  }, [notify])
   const handleReportSaved = useCallback((report: DailyReport) => {
-    setSnapshot((current) => current ? { ...current, dailyReports: mergeDailyReports(current.dailyReports ?? [], [report]) } : current)
+    setSnapshot((current) => current ? { ...current, dailyReports: mergeDailyReports(current.dailyReports ?? [], [report]).filter((entry) => entry.day === dateKey(new Date())) } : current)
   }, [])
   useEffect(() => {
     let disposed = false, ready = false
@@ -89,13 +105,13 @@ export default function App() {
         setClock((current) => dateKey(current) === dateKey(now) ? current : now)
       }
       return result ? { running: result.harness.run?.status === 'running' } : null
-    }, () => !document.hidden)
+    }, () => !document.hidden || canNotify())
     pollerRef.current = poller
     const resume = () => { if (ready) void poller.refreshNow() }
     const visibilityChanged = () => {
       setPageVisible(!document.hidden)
       if (document.hidden) setCaptureOutputs([])
-      if (document.hidden) poller.pause()
+      if (document.hidden && !canNotify()) poller.pause()
       else resume()
     }
     document.addEventListener('visibilitychange', visibilityChanged)
@@ -110,13 +126,19 @@ export default function App() {
       document.removeEventListener('visibilitychange', visibilityChanged)
       window.removeEventListener('focus', resume)
     }
-  }, [refresh])
+  }, [refresh, canNotify])
+  useEffect(() => {
+    if (previousNotificationsActive.current === notificationsActive) return
+    previousNotificationsActive.current = notificationsActive
+    if (document.hidden && !notificationsActive) pollerRef.current?.pause()
+    else void pollerRef.current?.refreshNow()
+  }, [notificationsActive])
   useEffect(() => {
     if (!recentId) return
     const timer = window.setTimeout(() => setRecentId(null), 2500)
     return () => window.clearTimeout(timer)
   }, [recentId])
-  const pending = useMemo(() => state.tasks.filter((task) => requiresManualCompletion(task.source) && !task.completedAt), [state.tasks])
+  const pending = useMemo(() => pendingTasks(state.tasks), [state.tasks])
   const completedCount = useMemo(() => recordsForDate(state, today).length, [state, today])
   const finishTransfer = useCallback((taskId: string) => {
     const saved = completedTask.current
@@ -139,23 +161,57 @@ export default function App() {
       setPhase('inbound'); setJob(nextJob)
     } catch (cause) { busy.current = false; setChangingId(null); setError(cause instanceof Error ? cause.message : '完成操作失败') }
   }, [finishTransfer, processorRefs])
-  const handleAdd = useCallback(async (title: string) => {
+  const handleAdd = useCallback(async (title: string, isPersonal: boolean) => {
     mutationVersion.current++
     setError(null)
-    try { const task = await createTask(title); setState((current) => ({ ...current, tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)] })) }
+    try { const task = await createTask(title, isPersonal); setState((current) => ({ ...current, tasks: [task, ...current.tasks.filter((item) => item.id !== task.id)] })) }
     catch (cause) { setError(cause instanceof Error ? cause.message : '添加失败'); throw cause }
     finally { mutationVersion.current++ }
+  }, [])
+  const handleTogglePinned = useCallback(async (task: Task) => {
+    if (busy.current) return
+    busy.current = true; mutationVersion.current++; setPinningId(task.id); setError(null)
+    try {
+      const saved = await updateTaskPinned(task.id, !task.isPinned)
+      setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === saved.id ? saved : item) }))
+      captureBaseline.current = captureBaseline.current?.map((item) => item.id === saved.id ? saved : item) ?? null
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '置顶状态保存失败，请重试') }
+    finally { mutationVersion.current++; busy.current = false; setPinningId(null); void pollerRef.current?.refreshNow() }
+  }, [])
+  const handleTogglePersonal = useCallback(async (task: Task): Promise<Task> => {
+    if (busy.current) throw new Error('正在保存其他事项，请稍后重试')
+    busy.current = true; mutationVersion.current++; setClassifyingId(task.id); setError(null)
+    try {
+      const saved = await updateTaskPersonal(task.id, !task.isPersonal)
+      setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === saved.id ? saved : item) }))
+      captureBaseline.current = captureBaseline.current?.map((item) => item.id === saved.id ? saved : item) ?? null
+      return saved
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '事项分类保存失败，请重试')
+      throw cause
+    } finally { mutationVersion.current++; busy.current = false; setClassifyingId(null); void pollerRef.current?.refreshNow() }
   }, [])
   const handleReopen = useCallback(async (task: Task) => {
     if (busy.current) return
     busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
     try {
       const saved = await updateTask(task.id, false)
-      setState((current) => ({ ...current, tasks: current.tasks.map((item) => item.id === task.id ? saved : item) }))
+      setState((current) => ({ ...current, tasks: [saved, ...current.tasks.filter((item) => item.id !== task.id)] }))
       captureBaseline.current = captureBaseline.current?.map((item) => item.id === task.id ? saved : item) ?? null
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '恢复操作失败') }
-    finally { mutationVersion.current++; busy.current = false; setChangingId(null) }
+    finally { mutationVersion.current++; busy.current = false; setChangingId(null); void pollerRef.current?.refreshNow() }
+  }, [])
+  const handleManagementAction = useCallback(async (task: Task, action: 'complete' | 'ignore' | 'restore') => {
+    if (busy.current) throw new Error('正在保存其他事项，请稍后重试')
+    busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
+    try {
+      const saved = await handleManagementTask(task.id, action)
+      setState((current) => ({ ...current, tasks: [saved, ...current.tasks.filter((item) => item.id !== saved.id)] }))
+      captureBaseline.current = captureBaseline.current?.map((item) => item.id === saved.id ? saved : item) ?? null
+      return saved
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '处理操作失败'); throw cause }
+    finally { mutationVersion.current++; busy.current = false; setChangingId(null); void pollerRef.current?.refreshNow() }
   }, [])
   const finishCaptureOutput = useCallback((id: number) => {
     setCaptureOutputs((current) => current.filter((event) => event.id !== id))
@@ -175,24 +231,53 @@ export default function App() {
     catch (cause) { setError(cause instanceof Error ? cause.message : '同步启动失败') }
     finally { setSyncRequested(false) }
   }, [])
+  const handleSettingsSaved = useCallback((settings: WorkbenchSettings) => {
+    setSnapshot((current) => current && { ...current, channels: settings.channels.map(({ paths: _paths, pathMode: _mode, ...channel }) => channel),
+      harness: { ...current.harness, model: settings.model.name, intervalMs: settings.sync.intervalMs, autoSyncEnabled: settings.sync.enabled } })
+    void pollerRef.current?.refreshNow()
+  }, [])
   const status = job ? phaseLabels[phase] : recentId ? '✓ 已收进今天的日报' : loading ? '正在连接工作台服务' : phaseLabels.idle
   const routing = pageVisible && captureOutputs.length > 0
   const working = snapshot?.harness?.run?.status === 'running' || phase !== 'idle' || routing
+
+  if (spaceOpen) {
+    return (
+      <div className={`app-shell is-space-mode${pageVisible ? '' : ' is-background'}`}>
+        <Suspense fallback={<p role="status">正在打开个人空间…</p>}><PersonalSpace
+          clock={clock}
+          onClose={() => setSpaceOpen(false)}
+          onOpenSettings={() => setSettingsOpen(true)}
+        /></Suspense>
+        {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
+      {settingsOpen && <SettingsDialog notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+      </div>
+    )
+  }
+
   return (
     <div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
       <header className="top-bar">
-        <div className="brand-section"><div className="brand-badge" aria-hidden="true">QA</div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className="live-indicator"><span className="live-dot" />{connected ? '本机工作台' : '服务未连接'}</span></div>
-        <div className="top-meta"><time className="header-date" dateTime={today}>{dateFormatter.format(clock)}</time><div className="user-pill"><span>个人工作空间</span><span className="user-avatar" aria-hidden="true">我</span></div></div>
+        <div className="brand-section"><div className="brand-badge" aria-hidden="true"><img src="/icons/workbench-192.png" alt="" width="40" height="40" /></div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className={`live-indicator${connected ? '' : ' is-disconnected'}`} role="status"><span className="live-dot" aria-hidden="true" />{connected ? '本机工作台' : '服务未连接'}</span></div>
+        <div className="top-meta">
+          <PerpetualCalendar today={today} clock={clock} />
+          <UserMenu
+            onOpenScheduledTasks={() => setScheduledTasksOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onEnterSpace={() => setSpaceOpen(true)}
+          />
+        </div>
       </header>
       {notice && <p className="storage-notice" role="status">{notice}</p>}
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
       <main className={`stage-container${working ? ' is-working' : ''}`}>
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
-        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null} onAdd={handleAdd} onComplete={handleComplete} onDelete={handleDelete} />
-        <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} disabled={!connected || changingId !== null || deletingId !== null} />
+        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null || classifyingId !== null || pinningId !== null} pinningId={pinningId} onTogglePinned={handleTogglePinned} onAdd={handleAdd} onTogglePersonal={handleTogglePersonal} onComplete={handleComplete} onDelete={handleDelete} onIgnore={(task) => { void handleManagementAction(task, 'ignore').catch(() => {}) }} />
+        <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} channels={snapshot?.channels} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
+        <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} onTogglePersonal={handleTogglePersonal} disabled={!connected || changingId !== null || deletingId !== null || classifyingId !== null} />
       </main>
-      <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>Codex · Claude Code · 每 10 分钟同步</span></footer>
+      <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
+      {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
+      {settingsOpen && <SettingsDialog notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
     </div>

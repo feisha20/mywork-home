@@ -32,11 +32,22 @@ dist/
 dist-server/
 # 会话抽取和工作日报模型的本机运行数据
 .runtime/
+# 设置密钥与本机路径备份（运行目录之外的手工备份也不入库）
+workbench-settings*.json
+# 禅道连接草稿和接口调试响应包含本机账号或业务数据
+zentao-connection*.json
+zentao-debug*.json
+zentao-management*.json
 # 本机会话副本与抽取调试记录
 records/
 sessions/
 archived_sessions/
 *.jsonl
+# 本机会话 SQLite 数据库及其临时写入文件
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
 coverage/
 *.tsbuildinfo
 .vite/
@@ -45,3 +56,16 @@ coverage/
 .env.*
 .env.tmp.*
 !.env.example
+.gemini/
+GEMINI.md
+# 生图过程文件仅保留在本机；public 中的正式图标正常入库
+/garden-gpt-image-2/
+tmp/imagegen/
+*.iconset/
+# Gemini 会话历史及本机项目映射副本
+gemini-records/
+
+# 隔离数据库测试与本机性能诊断产物
+/test-artifacts/
+*.heapsnapshot
+*.cpuprofile

@@ -1,4 +1,4 @@
-import { recordTimestamp } from './workbench'
+import { recordTimestamp, isPendingTask } from './workbench'
 import type { Task } from './workbench'
 
 export type CaptureDestination = 'tasks' | 'logs'
@@ -14,6 +14,7 @@ export function changedCaptureDestinations(previous: Task[] | null, next: Task[]
   const destinations = new Set<CaptureDestination>()
   for (const task of next) {
     if (task.source === 'manual' || before.get(task.id) === captureSignature(task)) continue
+    if (task.management && !recordTimestamp(task) && !isPendingTask(task)) continue
     destinations.add(recordTimestamp(task) ? 'logs' : 'tasks')
   }
   return [...destinations]

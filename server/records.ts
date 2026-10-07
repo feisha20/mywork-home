@@ -3,13 +3,15 @@ import { createReadStream } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { redact } from './redact.js'
+import type { SessionSource } from '../shared/contracts.js'
 
-export type Source = 'codex' | 'claude' | 'workbuddy'
-export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string }
+export type Source = SessionSource
+export type JsonlSource = 'codex' | 'claude' | 'workbuddy'
+export interface RecordContext { sessionId: string; projectPath: string; parentSessionId: string | null; turnId: string; readerSignature?: string; readerFormat?: string; readerMode?: string }
 export interface Cursor { path: string; source: Source; inode: string; offset: number; context: RecordContext; modifiedAt: number }
 export interface SourceMessage {
   id: string; source: Source; sessionId: string; rootSessionId: string;
-  projectPath: string; role: 'user' | 'assistant'; timestamp: string; text: string
+  projectPath: string; role: 'user' | 'assistant'; timestamp: string; text: string; originKey?: string; bodyRevision?: number
 }
 type Json = Record<string, any>
 export function digest(input: string) { return createHash('sha256').update(input).digest('hex') }
@@ -20,7 +22,7 @@ function textContent(content: unknown): string {
   return content.filter((block) => block && ['text', 'input_text', 'output_text'].includes(block.type)).map((block) => block.text ?? '').join('\n')
 }
 
-export function initialContext(path: string, source: Source): RecordContext {
+export function initialContext(path: string, source: JsonlSource): RecordContext {
   const ids = basename(path).match(/[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/gi)
   return {
     sessionId: source === 'codex' ? ids?.[0] ?? basename(path, '.jsonl') : basename(path, '.jsonl'),
@@ -31,7 +33,7 @@ export function initialContext(path: string, source: Source): RecordContext {
 }
 
 // 仅提取用户与助手文字，不把工具返回值当作用户要求。
-export function normalizeRecord(row: Json, source: Source, context: RecordContext, secrets: string[] = []): SourceMessage | null {
+export function normalizeRecord(row: Json, source: JsonlSource, context: RecordContext, secrets: string[] = []): SourceMessage | null {
   const payload = row.payload ?? {}
   if (source === 'codex') {
     if (row.type === 'session_meta') {
@@ -83,6 +85,7 @@ export function normalizeRecord(row: Json, source: Source, context: RecordContex
   text = text.trim()
   if (!text) return null
   const safe = redact(text, secrets)
+  if (!safe.trim()) return null
   return {
     id: digest(`${source}:${context.sessionId}:${eventId}`), source, sessionId: context.sessionId,
     rootSessionId: context.parentSessionId ?? context.sessionId, projectPath: context.projectPath,
@@ -90,7 +93,7 @@ export function normalizeRecord(row: Json, source: Source, context: RecordContex
   }
 }
 
-export function isSkippableRecordLine(line: Buffer, source: Source): boolean {
+export function isSkippableRecordLine(line: Buffer, source: JsonlSource): boolean {
   if (source === 'workbuddy') {
     return line.includes('"type":"function_call') || line.includes('"type": "function_call')
       || line.includes('"type":"reasoning"') || line.includes('"type": "reasoning"')
@@ -115,12 +118,20 @@ export async function listRecordFiles(root: string): Promise<string[]> {
 }
 
 // 字节游标只越过完整行；末尾半行留到下次，不会截断 UTF-8 字符。
-export async function readDelta(path: string, source: Source, previous: Cursor | null, cutoff: string, secrets: string[]) {
+export async function readDelta(path: string, source: JsonlSource, previous: Cursor | null, cutoff: string, secrets: string[]) {
+  return readJsonlDelta(path, source, previous, cutoff, () => initialContext(path, source), (row, context) => {
+    const message = normalizeRecord(row as Json, source, context, secrets)
+    return { messages: message ? [message] : [], invalid: 0 }
+  }, (line) => isSkippableRecordLine(line, source))
+}
+
+export async function readJsonlDelta(path: string, source: Source, previous: Cursor | null, cutoff: string,
+  createContext: () => RecordContext, normalize: (row: unknown, context: RecordContext) => { messages: SourceMessage[]; invalid: number }, skip?: (line: Buffer) => boolean, consumeFinal = false) {
   const info = await stat(path)
   const inode = String(info.ino)
   const reset = !previous || previous.inode !== inode || info.size < previous.offset || (previous.modifiedAt !== Math.trunc(info.mtimeMs) && info.size === previous.offset)
   let offset = reset ? 0 : previous.offset
-  const context = reset ? initialContext(path, source) : { ...previous.context }
+  const context = reset ? createContext() : { ...previous.context }
   const messages: SourceMessage[] = []
   let pending: Buffer = Buffer.alloc(0), consumed = 0, lines = 0, invalid = 0, dropping = false, droppedBytes = 0
   const stream = createReadStream(path, { start: offset, highWaterMark: 64 * 1024 })
@@ -135,10 +146,10 @@ export async function readDelta(path: string, source: Source, previous: Cursor |
         droppedBytes = 0
         if (dropping) { dropping = false; continue }
         if (!line.length) continue
-        if (isSkippableRecordLine(line, source)) continue
+        if (skip?.(line)) continue
         try {
-          const message = normalizeRecord(JSON.parse(line.toString('utf8')), source, context, secrets)
-          if (message && message.timestamp >= cutoff) messages.push(message)
+          const result = normalize(JSON.parse(line.toString('utf8')), context)
+          messages.push(...result.messages.filter((message) => message.timestamp >= cutoff)); invalid += result.invalid
         } catch { invalid++ }
       }
       if (pending.length > 4 * 1024 * 1024) {
@@ -151,6 +162,24 @@ export async function readDelta(path: string, source: Source, previous: Cursor |
       if (!dropping && (consumed >= 2 * 1024 * 1024 || lines >= 2000)) break
     }
   } finally { stream.destroy() }
+  // 通用导出允许最后一条完整 JSON 没有换行；正在写入的半行继续等待。
+  if (consumeFinal && pending.length && !dropping && offset + pending.length === info.size) {
+    try {
+      const row: unknown = JSON.parse(pending.toString('utf8'))
+      const current = await stat(path)
+      if (current.size === info.size && current.mtimeMs === info.mtimeMs) {
+        const result = normalize(row, context)
+        messages.push(...result.messages.filter((message) => message.timestamp >= cutoff)); invalid += result.invalid
+        offset += pending.length
+      }
+    } catch { /* 不提交未写完的正文。 */ }
+  }
   const cursor: Cursor = { path, source, inode, offset, context, modifiedAt: Math.trunc(info.mtimeMs) }
-  return { messages, cursor, invalid, more: !dropping && offset < info.size && lines > 0 && (consumed >= 2 * 1024 * 1024 || lines >= 2000) }
+  return { messages, cursor, invalid, blocked: dropping, more: !dropping && offset < info.size && lines > 0 && (consumed >= 2 * 1024 * 1024 || lines >= 2000) }
+}
+
+// 内容无法入库可按坏日志限次重试；连接、事务及数据库故障仍保留原进度。
+export function isRecordDataError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error) || typeof error.code !== 'string') return false
+  return /^22[A-Z0-9]{3}$/.test(error.code) || error.code === '23502'
 }

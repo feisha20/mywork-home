@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, writeFile, appendFile, rename } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { initialContext, isSkippableRecordLine, normalizeRecord, readDelta } from './records.js'
+import { initialContext, isRecordDataError, isSkippableRecordLine, normalizeRecord, readDelta } from './records.js'
 import { redact } from './redact.js'
 import { messageBatches } from './sync.js'
 
@@ -13,6 +13,16 @@ function claude(text: string, id = 'message-1') { return { type: 'user', uuid: i
 async function file(content: string) { const dir = await mkdtemp(join(tmpdir(), 'workbench-records-')); directories.push(dir); const path = join(dir, 'session-1.jsonl'); await writeFile(path, content); return path }
 
 describe('会话记录适配与脱敏', () => {
+  it('清理 Codex 正文中的空字符，保留中文、换行和原消息 ID', async () => {
+    const row = { timestamp: time, type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '已完成\u0000日志修复\n继续验证' }] } }
+    const path = await file(`${JSON.stringify(row)}\n`)
+    const first = await readDelta(path, 'codex', null, cutoff, [])
+    expect(first.messages[0].text).toBe('已完成日志修复\n继续验证')
+    expect(first.messages[0].id).toBe(normalizeRecord(row, 'codex', initialContext(path, 'codex'))!.id)
+    expect(first.invalid).toBe(0)
+    expect(first.cursor.offset).toBe(Buffer.byteLength(`${JSON.stringify(row)}\n`))
+    expect(normalizeRecord({ ...row, payload: { ...row.payload, content: [{ type: 'output_text', text: '\u0000' }] } }, 'codex', initialContext(path, 'codex'))).toBeNull()
+  })
   it('从Codex元信息保留原项目路径并关联父会话', () => {
     const ctx = initialContext('rollout-test.jsonl', 'codex')
     normalizeRecord({ type: 'session_meta', payload: { id: 'child', cwd: '/Users/项目', source: { subagent: { thread_spawn: { parent_thread_id: 'root' } } } } }, 'codex', ctx)
@@ -120,6 +130,19 @@ describe('会话记录适配与脱敏', () => {
     const second = await readDelta(path, 'claude', first.cursor, cutoff, [])
     expect([...first.messages, ...second.messages].map((entry) => entry.text)).toEqual(['有效消息'])
     expect(first.invalid).toBe(1)
+  })
+  it('超大末尾半行明确标记阻塞，正常半行仍等待追加且不算读取失败', async () => {
+    const path = await file(JSON.stringify(claude('有效消息')) + '\n' + 'x'.repeat(5 * 1024 * 1024))
+    const delta = await readDelta(path, 'claude', null, cutoff, [])
+    expect(delta.blocked).toBe(true); expect(delta.invalid).toBe(1)
+    expect(delta.messages).toHaveLength(1)
+    expect(delta.cursor.offset).toBe(Buffer.byteLength(JSON.stringify(claude('有效消息')) + '\n'))
+    expect((await readDelta(await file('{"type":'), 'claude', null, cutoff, [])).blocked).toBe(false)
+  })
+  it('坏内容允许限次忽略，数据库连接、事务及未知故障不忽略', () => {
+    for (const code of ['22021', '22P05', '23502']) expect(isRecordDataError({ code })).toBe(true)
+    for (const code of ['08006', '40001', '42P01', '23505']) expect(isRecordDataError({ code })).toBe(false)
+    expect(isRecordDataError(new Error('数据库不可用'))).toBe(false)
   })
   it('隐藏已知凭证、表格密码、API密钥及连接口令', () => {
     const input = '│ 密码 │ abcdef1234567890 │\nAPI_KEY="sk-abcdefghijklmnopqrstuv"\nAuthorization: Bearer token012345678\npostgresql://user:dbpassword@localhost/db\n秘密 known-secret-value'
