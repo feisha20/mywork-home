@@ -6,6 +6,7 @@ import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
 import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 import { PersonalTaskToggle } from './PersonalTaskToggle'
+import { ManagementDetails } from './ManagementDetails'
 
 interface TaskPanelProps {
   tasks: Task[]
@@ -17,9 +18,10 @@ interface TaskPanelProps {
   onTogglePersonal: (task: Task) => Promise<Task>
   onComplete: (task: Task, button: HTMLButtonElement) => void
   onDelete: (task: Task) => void
+  onIgnore: (task: Task) => void
 }
 
-export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, disabled, onAdd, onTogglePersonal, onComplete, onDelete }: TaskPanelProps) {
+export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, disabled, onAdd, onTogglePersonal, onComplete, onDelete, onIgnore }: TaskPanelProps) {
   const [title, setTitle] = useState('')
   const [isPersonal, setIsPersonal] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -37,7 +39,6 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
       <div className="panel-header">
         <h2 id="tasks-heading"><Icon name="list" />待办事项</h2>
       </div>
-
       <div className="task-container" aria-label="待办事项">
         {tasks.map((task) => (
           <article
@@ -46,16 +47,18 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
           >
             <div className="daily-log-top">
               <div className="daily-log-source-group">
-                <span className="daily-log-source">{task.sourceLabel ?? sourceInfo(task.source).label}</span>
+                <span className="daily-log-source">{task.management ? '禅道 · 测试管理' : task.sourceLabel ?? sourceInfo(task.source).label}</span>
                 <TaskReference task={task} />
               </div>
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
             <ZentaoTaskDetails task={task} />
+            <ManagementDetails task={task} />
             <div className="daily-log-actions">
               <TaskEvidence task={task} />
               <div className="task-action-buttons">
                 <PersonalTaskToggle task={task} disabled={busy} onToggle={onTogglePersonal} />
+                {task.management && <button className="reopen-task" disabled={busy} onClick={() => onIgnore(task)} aria-label={`忽略事项：${task.title}`}>忽略</button>}
                 {task.source === 'manual' && <button className="delete-task" disabled={busy} onClick={() => onDelete(task)} aria-label={`删除待办：${task.title}`}><Icon name="trash" /><span>{deletingId === task.id ? '删除中' : '删除'}</span></button>}
                 {canManualComplete(task) && (
                   <button
@@ -75,7 +78,7 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
           <div className="empty-state">
             <span className="empty-icon"><Icon name="check" /></span>
             <h3>待办清空了</h3>
-            <p>完成的工作已收进日报。<br />也可以在下方记下下一件事。</p>
+            <p>完成的工作已收进日报。也可以记下下一件事。</p>
           </div>
         )}
       </div>
@@ -96,7 +99,7 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
           onClick={() => setIsPersonal((current) => !current)}><Icon name="user" /><span>个人</span></button>
         <button className="quick-add-btn" disabled={busy || !title.trim()} type="submit">{adding ? '保存中' : '添加'}</button>
       </form>
-      <span className="panel-footnote">待办完成后进入日志，个人事项不参与工作汇报</span>
+      <span className="panel-footnote">完成后进入日志，忽略事项不计入工作成果</span>
     </section>
   )
 })

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { SourceId } from '../src/domain/workbench.js'
+import { defaultZentaoManagement, type ZentaoManagementSettings } from './zentaoManagement.js'
 
 export const COLLECTORS = {
   auto: '自动识别（推荐）', generic: '通用 JSON / JSONL',
@@ -19,9 +20,9 @@ export interface RecordMapping {
   projectPath: string
 }
 export const EMPTY_RECORD_MAPPING: RecordMapping = { messages: '', role: '', text: '', timestamp: '', sessionId: '', messageId: '', projectPath: '' }
-export interface ZentaoSettings { baseUrl: string; account: string; hasPassword: boolean }
+export interface ZentaoSettings { baseUrl: string; account: string; hasPassword: boolean; management?: ZentaoManagementSettings }
 export interface ZentaoConnection { baseUrl: string; account: string; password: string }
-export const EMPTY_ZENTAO_SETTINGS = { baseUrl: '', account: '', password: '', clearPassword: false }
+export const EMPTY_ZENTAO_SETTINGS = { baseUrl: '', account: '', password: '', clearPassword: false, management: defaultZentaoManagement }
 export interface ChannelConfig {
   id: ChannelId
   name: string
@@ -96,6 +97,17 @@ const logo = z.string().max(349_551, 'Logo 不能超过 256 KB').refine((value) 
   || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(value), '请上传 PNG、JPEG 或 WebP 图片')
 export const sourcePathSchema = z.string().trim().min(1).max(4096).refine((path) => (path.startsWith('/') || path.startsWith('~/')) && !/[\r\n\0]/.test(path), '请填写绝对目录或 ~/ 开头的目录')
 export const collectorSchema = z.enum(['auto', 'generic', 'codex', 'claude', 'workbuddy', 'zcode', 'gemini', 'zentao', 'none'])
+const managementField = z.string().trim().max(160).refine((path) => !path ||
+  /^[\p{L}\p{N}_$-]+(?:\.[\p{L}\p{N}_$-]+)*$/u.test(path) && !path.split('.').some((part) => ['__proto__', 'prototype', 'constructor'].includes(part)),
+  '请填写接口字段名或点分隔的字段路径')
+export const zentaoManagementSchema = z.object({
+  enabled: z.boolean().default(true),
+  plannedReleaseField: managementField.default(''), actualReleaseField: managementField.default(''),
+  warningDays: z.number().int().min(1).max(30).default(3),
+  reviewDays: z.number().int().min(1).max(30).default(3),
+  coverageGraceDays: z.number().int().min(0).max(30).default(3),
+}).refine((value) => !value.plannedReleaseField || !value.actualReleaseField || value.plannedReleaseField !== value.actualReleaseField,
+  '计划上线时间与实际上线时间不能使用同一字段路径')
 export const zentaoSettingsSchema = z.object({
   baseUrl: z.string().trim().max(2048).refine((value) => {
     if (!value) return true
@@ -105,6 +117,7 @@ export const zentaoSettingsSchema = z.object({
   account: z.string().trim().max(100).refine((value) => !/[\r\n\0]/.test(value), '禅道账号格式无效'),
   password: z.string().max(4096).optional(),
   clearPassword: z.boolean().optional(),
+  management: zentaoManagementSchema.default(defaultZentaoManagement),
 }).refine((value) => !(value.clearPassword && value.password), '清除密码时不能同时填写新密码')
 const fieldPath = z.string().trim().max(160, '字段名不能超过 160 个字符').refine((path) => !path || /^[\p{L}\p{N}_$-]+(?:\.[\p{L}\p{N}_$-]+)*$/u.test(path) && !path.split('.').some((part) => ['__proto__', 'prototype', 'constructor'].includes(part)), '请填写字段名或点分隔的嵌套字段，例如 message.content')
 export const recordMappingSchema = z.object({ messages: fieldPath, role: fieldPath, text: fieldPath, timestamp: fieldPath,

@@ -46,6 +46,19 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     catch { return reply.code(503).send({ status: 'unavailable' }) }
   })
   app.get('/api/workbench', () => sync.snapshot())
+  app.get('/api/tasks/management', async (request) => {
+    const query = z.object({ state: z.enum(['pending', 'completed', 'ignored', 'resolved']).default('pending'),
+      projectId: z.string().max(100).optional(), executionId: z.string().max(100).optional(), severity: z.enum(['red', 'yellow', 'gray']).optional(),
+      offset: z.coerce.number().int().min(0).max(1_000_000).default(0), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query)
+    const connection = sync.settings?.zentaoConnection()
+    return store.management.page(query, connection ? { instance: connection.baseUrl.replace(/\/+$/, ''), account: connection.account } : undefined)
+  })
+  app.get('/api/zentao/management', async () => {
+    const connection = sync.settings?.zentaoConnection()
+    if (!connection) return { metrics: [], members: [], history: [], issues: ['请先配置禅道连接'], enabled: false, lastUpdatedAt: null }
+    const enabled = !!sync.settings?.channels().find((entry) => entry.id === 'zentao')?.enabled && !!sync.settings?.zentaoManagementSettings().enabled
+    return store.management.overview(connection.baseUrl.replace(/\/+$/, ''), connection.account, enabled)
+  })
   app.get('/api/records', async (request) => {
     const query = z.object({ startDate: z.iso.date().optional(), endDate: z.iso.date().optional(), offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
       limit: z.coerce.number().int().min(1).max(100).default(50), onlyRecords: z.enum(['true','false']).optional().transform((value) => value === 'true') }).parse(request.query)
@@ -111,6 +124,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     app.post('/api/settings/preview-records', (request) => settings.previewRecords(request.body))
     app.post('/api/settings/test-model', (request) => settings.testModel(request.body))
     app.post('/api/settings/test-zentao', (request) => settings.testZentao(request.body))
+    app.post('/api/settings/inspect-zentao-fields', (request) => settings.inspectZentaoManagement(request.body))
   }
   app.get('/api/daily-reports/:day', async (request) => {
     const { day } = z.object({ day: z.iso.date() }).parse(request.params)
@@ -141,8 +155,9 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
   })
   app.patch('/api/tasks/:id', async (request, reply) => {
     const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
-    const { completed } = z.object({ completed: z.boolean() }).parse(request.body)
-    const task = await store.setCompleted(id, completed)
+    const input = z.union([z.object({ completed: z.boolean() }).strict(),
+      z.object({ action: z.enum(['complete', 'ignore', 'restore']) }).strict()]).parse(request.body)
+    const task = 'action' in input ? await store.management.setAction(id, input.action) : await store.setCompleted(id, input.completed)
     return task ?? reply.code(404).send({ error: '事项不存在' })
   })
   app.delete('/api/tasks/:id', async (request, reply) => {

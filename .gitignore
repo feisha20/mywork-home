@@ -37,6 +37,7 @@ workbench-settings*.json
 # 禅道连接草稿和接口调试响应包含本机账号或业务数据
 zentao-connection*.json
 zentao-debug*.json
+zentao-management*.json
 # 本机会话副本与抽取调试记录
 records/
 sessions/

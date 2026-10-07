@@ -1,4 +1,5 @@
 import { defaultPeriodicReportSchedule, type SettingsUpdate, type WorkbenchSettings } from '../../shared/settings'
+import { defaultZentaoManagement } from '../../shared/zentaoManagement'
 
 export type SettingsTab = 'model' | 'channels' | 'automation'
 
@@ -9,8 +10,9 @@ export function settingsDraft(settings: WorkbenchSettings): SettingsUpdate {
     periodicReportSchedule: settings.periodicReportSchedule
       ? { ...settings.periodicReportSchedule }
       : { ...defaultPeriodicReportSchedule },
-    channels: settings.channels.map((channel) => ({ ...structuredClone(channel), ...(channel.collector === 'zentao' ? {
-      zentao: { baseUrl: channel.zentao?.baseUrl ?? '', account: channel.zentao?.account ?? '', password: '', clearPassword: false },
+    channels: settings.channels.map(({ zentao, ...channel }) => ({ ...structuredClone(channel), ...(channel.collector === 'zentao' ? {
+      zentao: { baseUrl: zentao?.baseUrl ?? '', account: zentao?.account ?? '', password: '', clearPassword: false,
+        management: { ...defaultZentaoManagement, ...zentao?.management } },
     } : {}) })) }
 }
 

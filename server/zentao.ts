@@ -2,6 +2,8 @@ import type { ZentaoConnection } from '../shared/settings.js'
 import type { Task } from '../src/domain/workbench.js'
 import { digest } from './records.js'
 import { redact } from './redact.js'
+import { mappedReleaseDate, readManagementBatch } from './zentaoManagementReader.js'
+import type { ManagementFieldPreview, ZentaoManagementSettings } from '../shared/zentaoManagement.js'
 
 type JsonObject = Record<string, unknown>
 type WorkType = 'bug' | 'task'
@@ -89,6 +91,43 @@ export class ZentaoV2Client {
       || object(result.user) && accountOf(result.user) && accountOf(result.user) !== this.connection.account) throw new ZentaoError('禅道 V2 登录响应格式不兼容')
     this.token = result.token
   }
+  async inspectManagementFields(settings: ZentaoManagementSettings): Promise<ManagementFieldPreview> {
+    this.signal = AbortSignal.timeout(60_000)
+    await this.login()
+    const executions = await this.request('/executions?status=all&recPerPage=100&pageID=1')
+    const rows = Array.isArray(executions.executions) ? executions.executions : object(executions.executions) ? Object.values(executions.executions) : []
+    for (const execution of rows.slice(0, 10)) {
+      if (!object(execution) || !integer(execution.id)) continue
+      const result = await this.request('/executions/' + execution.id + '/stories')
+      const stories = Array.isArray(result.stories) ? result.stories : object(result.stories) ? Object.values(result.stories) : []
+      const story = stories.find((row) => object(row) && integer(row.story ?? row.id))
+      if (!object(story)) continue
+      const storyId = String(story.story ?? story.id), response = await this.request('/stories/' + storyId)
+      if (!object(response.story) || String(response.story.id) !== storyId) throw new ZentaoError('需求详情编号不匹配')
+      const detail = response.story, candidates: ManagementFieldPreview['candidates'] = []
+      const visit = (value: unknown, prefix = '', depth = 0) => {
+        if (depth > 4 || (!object(value) && !Array.isArray(value))) return
+        for (const [key, field] of Object.entries(value)) {
+          if (['__proto__', 'prototype', 'constructor'].includes(key)) continue
+          const path = prefix ? prefix + '.' + key : key
+          if ((object(field) || Array.isArray(field)) && (depth === 0 || prefix.startsWith('customFields'))) visit(field, path, depth + 1)
+          else if (typeof field === 'string' || field === null) {
+            const label = object(value) ? String(value.label ?? value.name ?? key) : key
+            if (/date|time|release|online|上线|时间|日期/i.test(key) || prefix.startsWith('customFields') || /上线/.test(label)) {
+              if (prefix.startsWith('customFields') && ['label', 'name', 'type', 'field'].includes(key)) continue
+              candidates.push({ path, label: redact(label, [this.connection.password, this.token]).slice(0, 100) })
+            }
+          }
+        }
+      }
+      visit(detail)
+      const planned = mappedReleaseDate(detail, settings.plannedReleaseField, '计划上线时间').state
+      const actual = mappedReleaseDate(detail, settings.actualReleaseField, '实际上线时间').state
+      return { storyId, planned, actual, candidates: candidates.slice(0, 100),
+        message: '已核对一个账号可见需求的接口字段。请根据自定义字段标识配置；字段未返回时需检查禅道接口权限或扩展。' }
+    }
+    throw new ZentaoError('前10个可见冲刺中没有可核对的需求，请先配置字段路径或检查读取权限')
+  }
   private async list(type: WorkType): Promise<ZentaoWorkItem[]> {
     const items: ZentaoWorkItem[] = [], seen = new Set<string>()
     const key = type === 'bug' ? 'bugs' : 'tasks'
@@ -139,5 +178,11 @@ export class ZentaoV2Client {
     return { instance: this.connection.baseUrl.replace(/\/+$/, ''), account: this.connection.account, items,
       bugs: items.filter((item) => item.zentao.type === 'bug' && item.state === 'pending').length,
       tasks: items.filter((item) => item.zentao.type === 'task' && item.state === 'pending').length }
+  }
+  async readManagement(settings: ZentaoManagementSettings, trackedIds: string[] = []) {
+    this.signal = AbortSignal.timeout(600_000)
+    if (!this.token) await this.login()
+    return readManagementBatch(this.connection, settings, trackedIds, (path) => this.request(path),
+      (value) => redact(value, [this.connection.password, this.token]))
   }
 }

@@ -1,9 +1,9 @@
 import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { dateKey, recordsForDate, requiresManualCompletion } from './domain/workbench'
+import { dateKey, recordsForDate, isPendingTask } from './domain/workbench'
 import type { Task, WorkbenchState } from './domain/workbench'
 import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
 import { mergeDailyReports } from '../shared/dailyReports'
-import { createTask, deleteTask, fetchWorkbench, migrateLegacyTasks, startSync, updateTask, updateTaskPersonal } from './data/apiRepository'
+import { createTask, deleteTask, fetchWorkbench, handleManagementTask, migrateLegacyTasks, startSync, updateTask, updateTaskPersonal } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
 import { changedCaptureDestinations } from './domain/captureFlow'
 import { CaptureOutput } from './components/CaptureOutput'
@@ -124,7 +124,7 @@ export default function App() {
     const timer = window.setTimeout(() => setRecentId(null), 2500)
     return () => window.clearTimeout(timer)
   }, [recentId])
-  const pending = useMemo(() => state.tasks.filter((task) => requiresManualCompletion(task.source) && !task.completedAt), [state.tasks])
+  const pending = useMemo(() => state.tasks.filter(isPendingTask), [state.tasks])
   const completedCount = useMemo(() => recordsForDate(state, today).length, [state, today])
   const finishTransfer = useCallback((taskId: string) => {
     const saved = completedTask.current
@@ -176,6 +176,17 @@ export default function App() {
       captureBaseline.current = captureBaseline.current?.map((item) => item.id === task.id ? saved : item) ?? null
     }
     catch (cause) { setError(cause instanceof Error ? cause.message : '恢复操作失败') }
+    finally { mutationVersion.current++; busy.current = false; setChangingId(null); void pollerRef.current?.refreshNow() }
+  }, [])
+  const handleManagementAction = useCallback(async (task: Task, action: 'complete' | 'ignore' | 'restore') => {
+    if (busy.current) throw new Error('正在保存其他事项，请稍后重试')
+    busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
+    try {
+      const saved = await handleManagementTask(task.id, action)
+      setState((current) => ({ ...current, tasks: [saved, ...current.tasks.filter((item) => item.id !== saved.id)] }))
+      captureBaseline.current = captureBaseline.current?.map((item) => item.id === saved.id ? saved : item) ?? null
+      return saved
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '处理操作失败'); throw cause }
     finally { mutationVersion.current++; busy.current = false; setChangingId(null); void pollerRef.current?.refreshNow() }
   }, [])
   const finishCaptureOutput = useCallback((id: number) => {
@@ -234,7 +245,7 @@ export default function App() {
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
       <main className={`stage-container${working ? ' is-working' : ''}`}>
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
-        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null || classifyingId !== null} onAdd={handleAdd} onTogglePersonal={handleTogglePersonal} onComplete={handleComplete} onDelete={handleDelete} />
+        <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null || classifyingId !== null} onAdd={handleAdd} onTogglePersonal={handleTogglePersonal} onComplete={handleComplete} onDelete={handleDelete} onIgnore={(task) => { void handleManagementAction(task, 'ignore').catch(() => {}) }} />
         <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} channels={snapshot?.channels} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
         <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} onTogglePersonal={handleTogglePersonal} disabled={!connected || changingId !== null || deletingId !== null || classifyingId !== null} />
       </main>

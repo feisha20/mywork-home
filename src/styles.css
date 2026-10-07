@@ -198,6 +198,32 @@ body {
   flex: 1;
 }
 
+/* 禅道关注事项沿用工作台卡片。 */
+.management-details { font-size: 11px; line-height: 1.65; color: #66748a; overflow-wrap: anywhere; }
+.management-context { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+.management-level { display: inline-block; border-radius: 5px; padding: 2px 7px; font-size: 10px; white-space: nowrap; }
+.management-level.is-red { background: #fff0ed; color: #b34537; }
+.management-level.is-yellow { background: #fff7df; color: #997016; }
+.management-level.is-gray { background: #eef1f6; color: #69768b; }
+.management-level.is-green { background: #eaf7ef; color: #2f8059; }
+.management-reason { margin-top: 6px; }
+.management-dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
+.management-dates dt { color: #8b97a8; font-size: 10px; }
+.management-dates dd { margin: 0; color: #58667b; }
+.management-dates small { display: block; color: #8b97a8; font-size: 10px; }
+.management-evidence summary { cursor: pointer; font-size: 11px; }
+.management-evidence ul { padding-left: 18px; margin: 6px 0; }
+.management-evidence a { color: #8c633c; }
+.settings-management { border: 1px solid #e2e8f1; border-radius: 10px; padding: 14px; margin: 20px 0 0; min-width: 0; }
+.settings-management legend { padding: 0 6px; font-size: 12px; color: #66748a; }
+.management-field-preview { margin-top: 12px; font-size: 11px; color: #728095; line-height: 1.8; overflow-wrap: anywhere; }
+.management-field-preview ul { padding-left: 18px; max-height: 180px; overflow: auto; }
+.management-field-preview small { margin-left: 8px; color: #96a2b2; }
+.settings-management-thresholds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 700px) {
+  .settings-management-thresholds { grid-template-columns: minmax(0, 1fr); }
+}
+
 .task-card {
   background: var(--card-sub);
   border-radius: 14px;

@@ -10,6 +10,7 @@ import type { Config } from './config.js'
 import { SourcePaths } from './sourcePaths.js'
 import { previewCompatibleRecords } from './compatibleRecords.js'
 import { ZentaoError, ZentaoV2Client } from './zentao.js'
+import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
 
 interface SavedSettings extends Omit<SettingsUpdate, 'channels'> { channels: ChannelConfig[]; apiKey: string; zentaoPassword: string }
 export class SettingsError extends Error {
@@ -24,7 +25,7 @@ export function initialChannels(config: Config): ChannelConfig[] {
   }
   return CAPTURE_SOURCES.map((id) => ({ id, name: SOURCES[id].shortLabel, logo: SOURCES[id].logo,
     collector: builtinCollectors[id], enabled: id !== 'zentao', pathMode: 'scan', paths: [...new Set(roots[builtinCollectors[id]].map(expanded))],
-    ...(id === 'zentao' ? { zentao: { baseUrl: '', account: '', hasPassword: false } } : {}) }))
+    ...(id === 'zentao' ? { zentao: { baseUrl: '', account: '', hasPassword: false, management: { ...defaultZentaoManagement } } } : {}) }))
 }
 function expanded(path: string) { return path.startsWith('~/') ? join(homedir(), path.slice(2)) : resolve(path) }
 
@@ -60,7 +61,8 @@ export class SettingsService {
       const apiKey = z.string().max(4096).parse(parsed.apiKey)
       const zentaoPassword = z.string().max(4096).parse(parsed.zentaoPassword ?? '')
       const channels = input.channels.map(({ zentao, ...channel }) => ({ ...channel, id: channel.id as ChannelConfig['id'],
-        ...(channel.collector === 'zentao' ? { zentao: { baseUrl: zentao?.baseUrl ?? '', account: zentao?.account ?? '', hasPassword: !!zentaoPassword } } : {}) }))
+        ...(channel.collector === 'zentao' ? { zentao: { baseUrl: zentao?.baseUrl ?? '', account: zentao?.account ?? '', hasPassword: !!zentaoPassword,
+          management: zentao?.management ?? defaultZentaoManagement } } : {}) }))
       await chmod(file, 0o600)
       const service = new SettingsService(config, { ...input, channels, apiKey, zentaoPassword }, sourcePaths)
       if (legacy) await service.persist(service.data)
@@ -90,6 +92,9 @@ export class SettingsService {
       ? { baseUrl: connection.baseUrl, account: connection.account, password: this.data.zentaoPassword } : null
   }
   dailyReportSchedule() { return structuredClone(this.data.dailyReportSchedule) }
+  zentaoManagementSettings() {
+    return structuredClone(this.data.channels.find((channel) => channel.id === 'zentao')?.zentao?.management ?? defaultZentaoManagement)
+  }
   periodicReportSchedule() { return structuredClone(this.data.periodicReportSchedule) }
   // 首页轮询只传图片地址，避免每次刷新重复传输所有上传的图片。
   summaries(): ChannelSummary[] {
@@ -121,7 +126,7 @@ export class SettingsService {
         if (next.collector !== current.collector && current.collector !== 'none' && !compatible) throw new SettingsError('已接入渠道的记录格式不可更改，请新增渠道')
       }
       const zentao = input.channels.find((channel) => channel.id === 'zentao')!
-      const connection = zentao.zentao ?? { baseUrl: '', account: '' }
+      const connection = zentao.zentao ?? { baseUrl: '', account: '', password: '', clearPassword: false, management: defaultZentaoManagement }
       const previous = this.data.channels.find((channel) => channel.id === 'zentao')?.zentao
       const baseUrl = connection.baseUrl.replace(/\/+$/, '')
       const sameIdentity = previous?.baseUrl === baseUrl && previous.account === connection.account
@@ -131,7 +136,8 @@ export class SettingsService {
         model: { baseUrl: input.model.baseUrl.replace(/\/+$/, ''), name: input.model.name },
         apiKey: input.model.clearApiKey ? '' : input.model.apiKey || this.data.apiKey, zentaoPassword,
         sync: input.sync, dailyReportSchedule: input.dailyReportSchedule, periodicReportSchedule: input.periodicReportSchedule, channels: input.channels.map(({ zentao: _connection, ...channel }) => ({ ...channel, id: channel.id as ChannelConfig['id'],
-          ...(channel.collector === 'zentao' ? { zentao: { baseUrl, account: connection.account, hasPassword: !!zentaoPassword } } : {}),
+          ...(channel.collector === 'zentao' ? { zentao: { baseUrl, account: connection.account, hasPassword: !!zentaoPassword,
+            management: connection.management ?? defaultZentaoManagement } } : {}),
           paths: channel.collector === 'zentao' ? [] : [...new Set(channel.paths.map((path) => {
           const location = this.sourcePaths.resolve(path)
           const existing = this.data.channels.find((entry) => entry.id === channel.id)?.paths.includes(path)
@@ -226,5 +232,14 @@ export class SettingsService {
       const snapshot = await new ZentaoV2Client({ baseUrl, account: input.account, password }).readWork()
       return { message: `连接成功，发现 ${snapshot.bugs} 个待处理 Bug、${snapshot.tasks} 个待处理任务；保存后开始采集`, bugs: snapshot.bugs, tasks: snapshot.tasks }
     } catch (error) { throw new SettingsError(error instanceof ZentaoError ? error.message : '禅道连接测试失败，请检查配置', 502) }
+  }
+  async inspectZentaoManagement(raw: unknown) {
+    const input = zentaoSettingsSchema.parse(raw)
+    const saved = this.zentaoConnection(), baseUrl = input.baseUrl.replace(/\/+$/, '')
+    const sameIdentity = saved?.baseUrl === baseUrl && saved.account === input.account
+    const password = input.clearPassword ? '' : input.password || (sameIdentity ? saved!.password : '')
+    if (!baseUrl || !input.account || !password) throw new SettingsError('请填写禅道地址、账号和密码')
+    try { return await new ZentaoV2Client({ baseUrl, account: input.account, password }).inspectManagementFields(input.management) }
+    catch (error) { throw new SettingsError(error instanceof ZentaoError ? error.message : '需求字段核对失败，请检查连接和读取权限', 502) }
   }
 }

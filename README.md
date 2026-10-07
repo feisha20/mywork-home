@@ -228,6 +228,8 @@ docker compose up -d workbench
 
 ## 验证
 
+禅道测试经理待办的规则、字段配置、处理状态和接口详见[禅道测试管理说明](docs/禅道测试管理.md)。
+
 ```bash
 npm test
 npm run build

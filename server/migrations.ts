@@ -88,6 +88,51 @@ CREATE INDEX tasks_zentao_identity_idx ON workbench.tasks((zentao->>'instance'),
 ALTER TABLE workbench.tasks ADD COLUMN is_personal boolean NOT NULL DEFAULT false;
 ALTER TABLE workbench.tasks ADD COLUMN personal_origin text NOT NULL DEFAULT 'ai' CHECK (personal_origin IN ('ai','manual'));
 UPDATE workbench.tasks SET personal_origin='manual' WHERE source IN ('manual','zentao');
+` }, { version: 9, sql: `
+ALTER TABLE workbench.tasks ADD COLUMN management jsonb;
+CREATE INDEX tasks_management_pending_idx ON workbench.tasks((management->>'handlingState'),(management->>'riskState')) WHERE management IS NOT NULL;
+CREATE INDEX tasks_management_identity_idx ON workbench.tasks((management->>'instance'),(management->>'account'),(management->>'executionId'),(management->>'riskState')) WHERE management IS NOT NULL;
+CREATE TABLE workbench.zentao_management_scopes (
+ instance text NOT NULL, account text NOT NULL, execution_id text NOT NULL, data jsonb NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(instance,account,execution_id)
+);
+CREATE TABLE workbench.zentao_management_daily (
+ instance text NOT NULL, account text NOT NULL, execution_id text NOT NULL, day date NOT NULL, data jsonb NOT NULL,
+ PRIMARY KEY(instance,account,execution_id,day)
+);
+CREATE TABLE workbench.zentao_risk_registry (
+ instance text NOT NULL, account text NOT NULL, risk_key text NOT NULL, task_id text REFERENCES workbench.tasks(id),
+ occurrence integer NOT NULL DEFAULT 0, PRIMARY KEY(instance,account,risk_key)
+);
+CREATE TABLE workbench.zentao_management_status (
+ instance text NOT NULL, account text NOT NULL, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(instance,account)
+);
+` }, { version: 10, sql: `
+-- 测试单 done 即已关闭，修正旧规则误报；保留人工处理状态和原核实时间。
+WITH corrected AS (
+ SELECT id, coalesce((SELECT jsonb_agg(entity) FROM jsonb_array_elements(management->'entities') entity
+   WHERE entity->>'status' NOT IN ('done','closed') AND coalesce(entity->>'removed','false') <> 'true'), '[]'::jsonb) entities
+ FROM workbench.tasks WHERE management->>'ruleId'='close-testtasks' AND management->>'riskState'='active'
+)
+UPDATE workbench.tasks t SET management=t.management || jsonb_build_object(
+ 'entities',c.entities,
+ 'statusCorrection',jsonb_build_object('at',now(),'previousEntities',t.management->'entities','reason','测试单 done 表示已关闭'),
+ 'riskState',CASE WHEN jsonb_array_length(c.entities)=0 THEN 'resolved' ELSE 'active' END,
+ 'resolutionReason',CASE WHEN jsonb_array_length(c.entities)=0 THEN '已修正测试单状态口径：done 表示已关闭' ELSE NULL END,
+ 'resolvedAt',CASE WHEN jsonb_array_length(c.entities)=0 THEN to_jsonb(now()) ELSE 'null'::jsonb END,
+ 'reason',CASE WHEN jsonb_array_length(c.entities)=0 THEN '测试单已关闭，原提醒为状态口径误报。'
+   ELSE '冲刺已关闭，仍有 ' || jsonb_array_length(c.entities) || ' 张测试单未关闭。' END
+),updated_at=now() FROM corrected c WHERE t.id=c.id;
+UPDATE workbench.zentao_management_scopes SET data=jsonb_set(data,'{metrics,openTesttasks}',to_jsonb(
+ (SELECT count(*) FROM jsonb_array_elements(data->'scope'->'testtasks') entity
+ WHERE entity->>'status' NOT IN ('done','closed') AND coalesce(entity->>'removed','false') <> 'true')
+)),updated_at=now();
+` }, { version: 11, sql: `
+-- 用户停用补充用例提醒，收起既有风险并保留证据和人工处理状态。
+UPDATE workbench.tasks SET management=management || jsonb_build_object(
+ 'riskState','resolved','resolvedAt',now(),'resolutionReason','已停用用例覆盖缺口待办'
+),updated_at=now() WHERE management->>'ruleId'='coverage' AND management->>'riskState'='active';
 ` }]
 
 export async function migrate(pool: Pool) {

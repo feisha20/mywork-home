@@ -27,6 +27,7 @@ export interface Task {
   title: string
   createdAt: string
   completedAt: string | null
+  management?: import('../../shared/zentaoManagement.js').ManagementTask | null
   recordedAt?: string | null
   projectPath?: string
   statusOrigin?: 'manual' | 'ai' | 'zentao'
@@ -85,8 +86,14 @@ export function requiresManualCompletion(source: SourceId): boolean {
 }
 
 export function canManualComplete(task: Task): boolean {
+  if (task.management?.riskState === 'resolved') return false
   if (isZentaoBug(task)) return false
   return requiresManualCompletion(task.source)
+}
+
+export function isPendingTask(task: Task): boolean {
+  return requiresManualCompletion(task.source) && !task.completedAt && (!task.management ||
+    task.management.riskState === 'active' && task.management.handlingState === 'pending')
 }
 
 // 自动工作记录归到来源日期；归档时间与真实完成状态分开保存。

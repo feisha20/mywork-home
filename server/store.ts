@@ -7,9 +7,10 @@ import type { Cursor, Source, SourceMessage } from './records.js'
 import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
 import { digest } from './records.js'
 import type { ZentaoSnapshot, ZentaoTrackedItem } from './zentao.js'
+import { ZentaoManagementStore, visibleManagementSql } from './zentaoManagementStore.js'
 
 const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
-const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,zentao,jsonb_array_length(evidence) AS evidence_count'
+const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,zentao,management,jsonb_array_length(evidence) AS evidence_count'
 function jobFromRow(row: any): ReportJob {
   return { id: row.id, kind: row.kind, day: new Date(row.day).toISOString().slice(0,10), periodKey: row.period_key,
     scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
@@ -20,14 +21,15 @@ function taskFromRow(row: any): Task {
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
     projectPath: row.project_path, statusOrigin: row.status_origin, isPersonal: Boolean(row.is_personal), personalOrigin: row.personal_origin,
-    evidence: row.evidence, zentao: row.zentao,
+    evidence: row.evidence, zentao: row.zentao, management: row.management,
     evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count), evidenceStale: Boolean(row.evidence_stale) }
 }
 
 export interface ExtractedItem { taskId?: string; title: string; status: 'todo' | 'completed'; isPersonal?: boolean; evidenceIds: string[] }
 
 export class Store {
-  constructor(readonly pool: Pool) {}
+  readonly management: ZentaoManagementStore
+  constructor(readonly pool: Pool) { this.management = new ZentaoManagementStore(pool, taskFromRow) }
   async transaction<T>(action: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect()
     try { await client.query('BEGIN'); const result = await action(client); await client.query('COMMIT'); return result }
@@ -40,7 +42,7 @@ export class Store {
   }
   async reportRecords(day: string): Promise<Task[]> {
     // 日报只读取简介与归档信息，不查询会话证据内容。
-    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale
+    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,management
       FROM workbench.tasks WHERE deleted_at IS NULL AND NOT is_personal AND
       ((CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END)
         AT TIME ZONE 'Asia/Shanghai')::date=$1::date
@@ -60,8 +62,8 @@ export class Store {
     return this.transaction(async (client) => {
       const ids = [...new Set([...Object.keys(report.recordVersions), ...report.items.flatMap((item) => item.taskIds)])]
       // 生成期间被标为个人的记录不能写回报告；行锁覆盖检查到保存之间的窗口。
-      const { rows } = await client.query('SELECT is_personal FROM workbench.tasks WHERE id=ANY($1::text[]) ORDER BY id FOR SHARE', [ids])
-      if (rows.some((row) => row.is_personal)) return null
+      const { rows } = await client.query('SELECT is_personal,management,completed_at FROM workbench.tasks WHERE id=ANY($1::text[]) ORDER BY id FOR SHARE', [ids])
+      if (rows.some((row) => row.is_personal || row.management && (row.management.handlingState !== 'completed' || !row.completed_at))) return null
       const result = expectedRevision === 0
         ? await client.query(`INSERT INTO workbench.daily_reports(day,data,revision) VALUES($1,$2,1)
             ON CONFLICT(day) DO NOTHING RETURNING data`, [report.day, JSON.stringify(report)])
@@ -127,7 +129,8 @@ export class Store {
         WHERE data->>'endDate'>=changed.day AND (changed.pending OR data->>'startDate'<=changed.day))`, [JSON.stringify(changes)])
   }
   async setCompleted(id: string, completed: boolean) {
-    const existing = await this.pool.query('SELECT source, zentao FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
+    const existing = await this.pool.query('SELECT source, zentao, management FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL', [id])
+    if (existing.rows[0]?.management) return this.management.setAction(id, completed ? 'complete' : 'restore')
     if (existing.rows[0]) {
       if (!['manual', 'zentao'].includes(existing.rows[0].source)) {
         throw Object.assign(new Error('自动工作记录直接进入日志，无需手动完成或恢复'), { statusCode: 409 })
@@ -382,7 +385,7 @@ export class Store {
   }
   async snapshotTasks(day: string) {
     const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns} FROM workbench.tasks WHERE deleted_at IS NULL
-      AND ((source IN ('manual','zentao') AND completed_at IS NULL) OR (${recordDateSql})=$1::date)
+      AND (${visibleManagementSql}) AND ((source IN ('manual','zentao') AND completed_at IS NULL) OR (${recordDateSql})=$1::date)
       ORDER BY created_at DESC,id`, [day])
     return rows.map(taskFromRow)
   }
@@ -393,13 +396,13 @@ export class Store {
   async dataVersion(): Promise<string> {
     const { rows } = await this.pool.query(`SELECT greatest(
       (SELECT max(updated_at) FROM workbench.tasks),(SELECT max(updated_at) FROM workbench.daily_reports),
-      (SELECT max(updated_at) FROM workbench.periodic_reports))::text AS version`)
+      (SELECT max(updated_at) FROM workbench.periodic_reports),(SELECT max(updated_at) FROM workbench.zentao_management_status))::text AS version`)
     return rows[0].version ?? 'empty'
   }
   async recordPage(input: RecordQuery): Promise<RecordPage> {
     const limit = input.limit ?? 50, offset = input.offset ?? 0
     const params = [input.startDate ?? null, input.endDate ?? null, input.onlyRecords ?? false]
-    const where = `deleted_at IS NULL
+    const where = `deleted_at IS NULL AND (${visibleManagementSql})
       AND ($1::date IS NULL OR coalesce(${recordDateSql},(created_at AT TIME ZONE 'Asia/Shanghai')::date)>=$1)
       AND ($2::date IS NULL OR coalesce(${recordDateSql},(created_at AT TIME ZONE 'Asia/Shanghai')::date)<=$2) AND (NOT $3::boolean OR ${recordDateSql} IS NOT NULL)`
     const count = await this.pool.query(`SELECT count(*)::int AS count FROM workbench.tasks WHERE ${where}`, params)
@@ -413,7 +416,7 @@ export class Store {
   }
   async periodTasks(_startDate: string, _endDate: string): Promise<Task[]> {
     // 原版聚合包含周期结束前的未完成事项与全局项目统计，由领域逻辑筛选。
-    const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns} FROM workbench.tasks WHERE deleted_at IS NULL ORDER BY created_at DESC,id`)
+    const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns} FROM workbench.tasks WHERE deleted_at IS NULL AND ${visibleManagementSql} ORDER BY created_at DESC,id`)
     return rows.map(taskFromRow)
   }
   async periodicReports(): Promise<PeriodicReportModel[]> {
@@ -482,9 +485,9 @@ export class Store {
   async zentaoPendingCount(instance?: string, account?: string): Promise<number> {
     const params = [instance ?? null, account ?? null]
     const { rows } = await this.pool.query(`SELECT count(*)::int AS count FROM workbench.tasks
-      WHERE source='zentao' AND deleted_at IS NULL AND completed_at IS NULL
-        AND ($1::text IS NULL OR zentao->>'instance'=$1)
-        AND ($2::text IS NULL OR zentao->>'account'=$2)`, params)
+      WHERE source='zentao' AND deleted_at IS NULL AND completed_at IS NULL AND (${visibleManagementSql})
+        AND ($1::text IS NULL OR zentao->>'instance'=$1 OR management->>'instance'=$1)
+        AND ($2::text IS NULL OR zentao->>'account'=$2 OR management->>'account'=$2)`, params)
     return rows[0]?.count ?? 0
   }
 }

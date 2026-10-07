@@ -19,6 +19,8 @@ import { PeriodicReportScheduler } from './periodicReportScheduler.js'
 import { PeriodicReportService } from './periodicReport.js'
 import { isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 import { ZentaoV2Client, type ZentaoSnapshot, type ZentaoWorkItem } from './zentao.js'
+import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
+import { managementBatch, managementCase, valueDate } from './zentaoManagement.fixtures.js'
 
 const enabled = process.env.RUN_DATABASE_TESTS === 'true'
 let pool: Pool, store: Store, sync: SyncService, app: FastifyInstance, directory: string
@@ -654,6 +656,210 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     })
     await expect(periodic.generate('monthly', '2026-04', 0)).rejects.toMatchObject({ statusCode: 409 })
     expect(await store.periodicReport('monthly', '2026-04')).toBeNull()
+  })
+  it('管理待办重复同步不增项，人工完成跨重启和风险升级保留，解除后复发创建新一轮', async () => {
+    const batch = managementBatch(undefined, { plannedReleaseAt: valueDate('2026-10-07') }, { end: valueDate('2026-10-12') })
+    batch.instance = 'https://management-' + randomUUID() + '.example'
+    const own = async () => (await store.tasks()).filter((task) => task.management?.instance === batch.instance)
+    expect((await store.management.apply(batch, defaultZentaoManagement)).created).toBe(1)
+    expect((await store.management.apply(batch, defaultZentaoManagement)).created).toBe(0)
+    const first = (await own())[0]
+    const complete = await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { completed: true } })
+    expect(complete.statusCode).toBe(200)
+    const completedAt = complete.json().completedAt
+    const reopenedStore = new Store(pool)
+    batch.collectedAt = '2026-10-08T04:00:00Z'
+    expect((await reopenedStore.management.apply(batch, defaultZentaoManagement)).created).toBe(0)
+    expect((await own())[0]).toMatchObject({ id: first.id, completedAt, management: { handlingState: 'completed', riskState: 'active', severity: 'red' } })
+    expect((await store.management.page({ state: 'pending' }, { instance: batch.instance, account: batch.account })).total).toBe(0)
+    batch.scopes[0].stories[0].plannedReleaseAt = valueDate('2026-10-20')
+    await store.management.apply(batch, defaultZentaoManagement)
+    expect((await own())[0].management).toMatchObject({ handlingState: 'completed', riskState: 'resolved', resolutionReason: '计划或关联范围已调整' })
+    batch.scopes[0].stories[0].plannedReleaseAt = valueDate('2026-10-07')
+    expect((await store.management.apply(batch, defaultZentaoManagement)).created).toBe(1)
+    const fresh = (await own()).find((task) => task.management?.riskState === 'active')!
+    expect(fresh.id).not.toBe(first.id)
+    expect(fresh.management).toMatchObject({ occurrence: 2, handlingState: 'pending' })
+    expect((await store.management.page({ state: 'completed' }, { instance: batch.instance, account: batch.account })).tasks[0].id).toBe(first.id)
+    const donePage = await app.inject({ url: '/api/tasks/management?state=completed&limit=1' })
+    expect(donePage.statusCode).toBe(200)
+    expect(donePage.json()).toMatchObject({ limit: 1, offset: 0 })
+    expect((await app.inject({ url: '/api/tasks/management?limit=0' })).statusCode).toBe(400)
+  })
+  it('忽略不进入日志或待办，重启和同步不能覆盖选择；恢复与并发人工操作受事务保护', async () => {
+    const batch = managementBatch(undefined, { plannedReleaseAt: valueDate('2026-10-07') }, { end: valueDate('2026-10-12') })
+    batch.instance = 'https://ignored-' + randomUUID() + '.example'
+    await store.management.apply(batch, defaultZentaoManagement)
+    const first = (await store.tasks()).find((task) => task.management?.instance === batch.instance)!
+    const ignored = await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { action: 'ignore' } })
+    expect(ignored.statusCode).toBe(200)
+    expect(ignored.json()).toMatchObject({ completedAt: null, management: { handlingState: 'ignored' } })
+    await new Store(pool).management.apply(batch, defaultZentaoManagement)
+    expect((await store.snapshotTasks('2026-10-06')).some((task) => task.id === first.id)).toBe(false)
+    expect((await store.reportRecords('2026-10-06')).some((task) => task.id === first.id)).toBe(false)
+    expect((await store.periodTasks('2026-10-01', '2026-10-31')).some((task) => task.id === first.id)).toBe(false)
+    expect((await store.management.page({ state: 'ignored' }, { instance: batch.instance, account: batch.account })).total).toBe(1)
+    expect((await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { action: 'restore' } })).json().management.handlingState).toBe('pending')
+    await Promise.all([store.management.apply(batch, defaultZentaoManagement), store.management.setAction(first.id, 'complete')])
+    const saved = (await store.tasks()).find((task) => task.id === first.id)!
+    expect(saved.management?.handlingState).toBe('completed')
+    expect(saved.completedAt).not.toBeNull()
+    expect(saved.title).toContain('已处理')
+    expect((await store.reportRecords(dateKey(new Date(saved.completedAt!)))).some((task) => task.id === saved.id)).toBe(true)
+    expect((await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { completed: true, action: 'ignore' } })).statusCode).toBe(400)
+    const manual = await store.createTask('兼容原有个人待办')
+    expect((await app.inject({ method: 'PATCH', url: '/api/tasks/' + manual.id, payload: { action: 'ignore' } })).statusCode).toBe(409)
+  })
+  it('停用补充用例待办并收起旧记录，人工状态不变且后续同步不再生成', async () => {
+    const batch = managementBatch(undefined, {}, { begin: valueDate('2026-10-01') })
+    batch.instance = 'https://coverage-disabled-' + randomUUID() + '.example'
+    batch.scopes[0].cases = []
+    const task = await store.createTask('旧补充用例提醒')
+    await pool.query('UPDATE workbench.tasks SET management=$2 WHERE id=$1', [task.id, JSON.stringify({
+      instance: batch.instance, account: batch.account, ruleId: 'coverage', key: 'coverage:101',
+      executionId: batch.scopes[0].execution.id, scopeIds: [batch.scopes[0].execution.id],
+      riskState: 'active', handlingState: 'ignored', entities: [batch.scopes[0].stories[0]],
+    })])
+    await pool.query('DELETE FROM workbench.schema_migrations WHERE version=11')
+    await migrate(pool)
+    const saved = (await store.tasks()).find((entry) => entry.id === task.id)!
+    expect(saved.management).toMatchObject({ riskState: 'resolved', handlingState: 'ignored', resolutionReason: '已停用用例覆盖缺口待办' })
+    expect(saved.management?.entities).toHaveLength(1)
+    expect(saved.completedAt).toBeNull()
+    await store.management.apply(batch, defaultZentaoManagement)
+    const page = await store.management.page({ state: 'pending' }, { instance: batch.instance, account: batch.account })
+    expect(page.tasks.some((entry) => entry.management?.ruleId === 'coverage')).toBe(false)
+    await store.deleteTask(task.id)
+  })
+  it('修正旧测试单 done 误报，保留人工选择并保留真实未关闭项', async () => {
+    const batch = managementBatch(undefined, {}, { status: 'closed', realEnd: valueDate('2026-10-05') })
+    batch.instance = 'https://testtask-status-' + randomUUID() + '.example'
+    batch.scopes[0].testtasks = [{ type: 'testtask', id: '401', title: '已关闭测试单', owner: '', url: '', status: 'doing', removed: false }]
+    await store.management.apply(batch, defaultZentaoManagement)
+    const task = (await store.tasks()).find((entry) => entry.management?.instance === batch.instance && entry.management.ruleId === 'close-testtasks')!
+    await store.management.setAction(task.id, 'ignore')
+    // 模拟旧版本已经把接口 done 保存为仍需关闭的风险。
+    await pool.query("UPDATE workbench.tasks SET management=jsonb_set(management,'{entities,0,status}', '\"done\"') WHERE id=$1", [task.id])
+    const mixed = await store.createTask('混合状态修正验证')
+    await pool.query('UPDATE workbench.tasks SET management=$2 WHERE id=$1', [mixed.id, JSON.stringify({ ...task.management,
+      entities: [{ ...batch.scopes[0].testtasks[0], status: 'done' }, { ...batch.scopes[0].testtasks[0], id: '402', status: 'wait' }] })])
+    await pool.query('DELETE FROM workbench.schema_migrations WHERE version=10')
+    await migrate(pool)
+    const resolved = (await store.tasks()).find((entry) => entry.id === task.id)!
+    expect(resolved.management).toMatchObject({ riskState: 'resolved', handlingState: 'ignored', entities: [] })
+    expect(resolved.completedAt).toBeNull()
+    const remaining = (await store.tasks()).find((entry) => entry.id === mixed.id)!
+    expect(remaining.management).toMatchObject({ riskState: 'active', entities: [{ id: '402', status: 'wait' }] })
+    expect(remaining.management?.reason).toContain('1 张')
+    batch.scopes[0].testtasks[0].status = 'done'
+    await store.management.apply(batch, defaultZentaoManagement)
+    expect((await store.management.overview(batch.instance, batch.account, true)).metrics[0].openTesttasks).toBe(0)
+    await store.deleteTask(mixed.id)
+  })
+  it('数据缺口保留事实和快照，完整同步取得上线节点自动收起并保存日期变化', async () => {
+    const batch = managementBatch(undefined, { plannedReleaseAt: valueDate('2026-10-05') }, { end: valueDate('2026-10-12') })
+    batch.instance = 'https://partial-' + randomUUID() + '.example'
+    await store.management.apply(batch, defaultZentaoManagement)
+    const first = (await store.tasks()).find((task) => task.management?.instance === batch.instance)!
+    const partial = structuredClone(batch)
+    partial.scopes[0].stories[0].actualReleaseAt = { state: 'unavailable', value: '' }
+    partial.scopes[0].readable.cases = false; partial.scopes[0].cases = []; partial.scopes[0].issues = ['用例读取失败']
+    await store.management.apply(partial, defaultZentaoManagement)
+    expect((await store.tasks()).find((task) => task.id === first.id)?.management).toMatchObject({ riskState: 'active', stale: true })
+    const overview = await store.management.overview(batch.instance, batch.account)
+    expect(overview.metrics[0]).toMatchObject({ health: 'red', incomplete: true, overdue: 1, covered: 1 })
+    expect(overview.history).toHaveLength(1)
+    batch.collectedAt = '2026-10-07T04:00:00Z'; batch.scopes[0].collectedAt = batch.collectedAt
+    batch.scopes[0].stories[0].actualReleaseAt = valueDate('2026-10-06')
+    await store.management.apply(batch, defaultZentaoManagement)
+    const resolved = (await store.tasks()).find((task) => task.id === first.id)!
+    expect(resolved).toMatchObject({ completedAt: null, management: { handlingState: 'pending', riskState: 'resolved', resolutionReason: '已取得上线节点', stale: false } })
+    expect(resolved.management?.history?.length).toBeGreaterThan(0)
+    const savedScope = (await pool.query('SELECT data FROM workbench.zentao_management_scopes WHERE instance=$1 AND account=$2', [batch.instance, batch.account])).rows[0].data.scope
+    expect(savedScope.stories[0].releaseDates).toMatchObject({ planned: { source: 'story', fieldPath: '计划上线时间' }, actual: { source: 'story' }, fallbackExecutionId: '10' })
+    expect(savedScope.stories[0].dateHistory.length).toBeGreaterThan(0)
+    expect((await store.snapshotTasks('2026-10-07')).some((task) => task.id === first.id)).toBe(false)
+    expect((await store.management.overview(batch.instance, batch.account)).metrics[0]).toMatchObject({ released: 1, datedReleased: 1, onTimeReleased: 0 })
+    expect((await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { action: 'restore' } })).statusCode).toBe(409)
+    await store.management.markFailed(batch.instance, batch.account, '本次同步无法连接')
+    expect((await store.management.overview(batch.instance, batch.account)).lastUpdatedAt).toBe(batch.collectedAt)
+  })
+  it('评审首次观察时间持久化，版本变化重新计时；汇总对象增加不重新打开忽略事项', async () => {
+    const batch = managementBatch('2026-10-01T04:00:00Z', { plannedReleaseAt: valueDate('2026-11-01') }, { end: valueDate('2026-11-01') })
+    batch.instance = 'https://review-' + randomUUID() + '.example'
+    batch.scopes[0].cases = [managementCase({ status: 'wait' })]
+    await store.management.apply(batch, defaultZentaoManagement)
+    batch.collectedAt = '2026-10-04T04:00:00Z'
+    await new Store(pool).management.apply(batch, defaultZentaoManagement)
+    let own = (await store.tasks()).filter((task) => task.management?.instance === batch.instance)
+    expect(own.find((task) => task.management?.ruleId === 'review')?.management?.occurrence).toBe(1)
+    batch.scopes[0].cases[0].version = '2'
+    await store.management.apply(batch, defaultZentaoManagement)
+    own = (await store.tasks()).filter((task) => task.management?.instance === batch.instance)
+    expect(own.find((task) => task.management?.ruleId === 'review')?.management?.riskState).toBe('resolved')
+    batch.collectedAt = '2026-10-07T04:00:00Z'; batch.scopes[0].execution.status = 'closed'
+    await store.management.apply(batch, defaultZentaoManagement)
+    own = (await store.tasks()).filter((task) => task.management?.instance === batch.instance)
+    const closure = own.find((task) => task.management?.ruleId === 'close-stories')!
+    await store.management.setAction(closure.id, 'ignore')
+    batch.scopes[0].stories.push({ ...batch.scopes[0].stories[0], id: '102' })
+    batch.associations['102'] = ['10']
+    await store.management.apply(batch, defaultZentaoManagement)
+    own = (await store.tasks()).filter((task) => task.management?.instance === batch.instance)
+    expect(own.filter((task) => task.management?.ruleId === 'close-stories')).toHaveLength(1)
+    expect(own.find((task) => task.id === closure.id)?.management).toMatchObject({ handlingState: 'ignored', entities: expect.arrayContaining([expect.objectContaining({ id: '102' })]) })
+  })
+  it('已完成管理事项恢复或忽略后，清理对应日报摘要与工作成果标记', async () => {
+    const batch = managementBatch()
+    batch.instance = 'https://report-state-' + randomUUID() + '.example'
+    await store.management.apply(batch, defaultZentaoManagement)
+    const task = (await store.management.page({}, { instance: batch.instance, account: batch.account })).tasks[0]
+    await store.management.setAction(task.id, 'complete')
+    const report = { day: '2050-01-01', generatedAt: new Date().toISOString(), revision: 1, recordCount: 1,
+      recordVersions: { [task.id]: '隔离记录版本' }, items: [{ topic: '测试管理跟进', text: '已处理管理关注事项', taskIds: [task.id], localTemplate: 'zentao-management' }] }
+    await pool.query('INSERT INTO workbench.daily_reports(day,data,revision) VALUES($1,$2,1)', [report.day, JSON.stringify(report)])
+    await store.management.setAction(task.id, 'restore')
+    expect(await store.dailyReport(report.day)).toMatchObject({ items: [], recordVersions: {}, recordCount: 0, revision: 2 })
+    expect(await store.saveDailyReport({ ...report, day: '2050-01-02' }, 0)).toBeNull()
+  })
+  it('完整同步确认需求移除或冲刺取消后，收起相应上线和用例事项', async () => {
+    const batch = managementBatch()
+    batch.instance = 'https://removed-' + randomUUID() + '.example'
+    batch.scopes[0].cases = [managementCase({ status: 'wait', reviewSubmittedAt: '2026-10-01T04:00:00Z' })]
+    await store.management.apply(batch, defaultZentaoManagement)
+    const ids = (await store.tasks()).filter((task) => task.management?.instance === batch.instance).map((task) => task.id)
+    expect(ids).toHaveLength(2)
+    batch.scopes[0].stories = []; batch.scopes[0].cases = []; batch.associations = {}
+    await store.management.apply(batch, defaultZentaoManagement)
+    expect((await store.tasks()).filter((task) => ids.includes(task.id)).every((task) => task.management?.riskState === 'resolved')).toBe(true)
+    const cancelled = managementBatch()
+    cancelled.instance = batch.instance
+    await store.management.apply(cancelled, defaultZentaoManagement)
+    cancelled.scopes[0].execution.removed = true; cancelled.scopes[0].execution.status = 'cancel'
+    await store.management.apply(cancelled, defaultZentaoManagement)
+    expect((await store.management.page({}, { instance: batch.instance, account: batch.account })).total).toBe(0)
+    expect((await store.management.overview(batch.instance, batch.account)).metrics).toHaveLength(0)
+  })
+  it('每个冲刺独立提交，单个冲刺数据库保存失败不会回滚其他冲刺', async () => {
+    const batch = managementBatch(undefined, { plannedReleaseAt: valueDate('2026-10-07') }, { end: valueDate('2026-10-12') })
+    batch.instance = 'https://isolated-' + randomUUID() + '.example'
+    const second = structuredClone(batch.scopes[0])
+    second.execution.id = '11'; second.stories[0].id = '102'; second.cases[0].storyId = '102'
+    batch.scopes.push(second); batch.executions.push(second.execution); batch.associations['102'] = ['11']
+    // 故障注入只作用于本次隔离库和唯一测试实例。
+    await pool.query(`CREATE FUNCTION workbench.management_test_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.instance='${batch.instance}' AND NEW.execution_id='10' THEN RAISE EXCEPTION '隔离测试故障'; END IF; RETURN NEW; END $$`)
+    await pool.query('CREATE TRIGGER management_test_failure BEFORE INSERT ON workbench.zentao_management_scopes FOR EACH ROW EXECUTE FUNCTION workbench.management_test_failure()')
+    try {
+      const result = await store.management.apply(batch, defaultZentaoManagement)
+      expect(result.issues).toContain('冲刺 10 保存失败，保留上次判断')
+      expect(result.created).toBe(1)
+      expect((await store.management.overview(batch.instance, batch.account)).metrics.map((entry) => entry.executionId)).toEqual(['11'])
+      expect((await store.management.page({}, { instance: batch.instance, account: batch.account })).tasks[0].management?.executionId).toBe('11')
+    } finally {
+      await pool.query('DROP TRIGGER management_test_failure ON workbench.zentao_management_scopes')
+      await pool.query('DROP FUNCTION workbench.management_test_failure()')
+    }
   })
   it('三条待验证 Bug 关闭一条后保留两个待办，并恢复旧版误归档及误删除到关闭当日日志', async () => {
     const connection = { baseUrl: `https://zentao-${randomUUID()}.example`, account: 'fixture', password: '隔离测试密码' }

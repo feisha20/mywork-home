@@ -6,6 +6,7 @@ import { loadConfig } from './config.js'
 import { SettingsService } from './settings.js'
 import { SourcePaths } from './sourcePaths.js'
 import { settingsDraft } from '../src/domain/settings.js'
+import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
 import { createApp } from './app.js'
 import { SyncService } from './sync.js'
 import { DailyReportService } from './dailyReport.js'
@@ -30,7 +31,7 @@ describe('设置持久化与密钥边界', () => {
     const input = settingsDraft(settings.view()), channel = input.channels.find((entry) => entry.id === 'zentao')!
     channel.enabled = true; channel.zentao = { baseUrl: 'https://pm.example/zentao/', account: 'linjt', password: '禅道测试专用密码' }
     const saved = await settings.save(input)
-    expect(saved.channels.find((entry) => entry.id === 'zentao')?.zentao).toEqual({ baseUrl: 'https://pm.example/zentao', account: 'linjt', hasPassword: true })
+    expect(saved.channels.find((entry) => entry.id === 'zentao')?.zentao).toEqual({ baseUrl: 'https://pm.example/zentao', account: 'linjt', hasPassword: true, management: defaultZentaoManagement })
     expect(JSON.stringify(saved)).not.toContain('禅道测试专用密码')
     expect(JSON.stringify(settings.summaries())).not.toContain('pm.example')
     const reopened = await SettingsService.open(config)

@@ -10,6 +10,9 @@ import { createApp } from './app.js'
 import { loadConfig } from './config.js'
 import type { Store } from './store.js'
 import type { SyncService } from './sync.js'
+import { managementBatch } from './zentaoManagement.fixtures.js'
+import { evaluateManagement } from './zentaoManagement.js'
+import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
 
 const day = '2026-10-01'
 const records: Task[] = [
@@ -34,6 +37,28 @@ const generator = (): DailyReportGenerator => ({ generateDailyReport: vi.fn(asyn
   taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...input.map((task) => task.id)])].sort() }]), close: vi.fn(async () => {}) })
 
 describe('工作日报的汇总范围与完整性', () => {
+  it('禅道管理工作使用本地模板，初次及追加不向模型发送管理事实或历史摘要', async () => {
+    const batch = managementBatch()
+    const risk = evaluateManagement(batch, defaultZentaoManagement).risks[0]
+    const managerTask: Task = { ...records[1], id: 'management-1', reference: 'RISK-1', source: 'zentao', title: '敏感需求的跟进记录',
+      management: { ...risk, riskState: 'active', handlingState: 'completed', occurrence: 1,
+        firstSeenAt: records[1].createdAt, lastVerifiedAt: records[1].createdAt, handledAt: records[1].completedAt,
+        resolvedAt: null, resolutionReason: null } }
+    const store = inputStore([managerTask]), model = generator(), service = new DailyReportService(store, model)
+    const first = await service.generate(day)
+    expect(model.generateDailyReport).not.toHaveBeenCalled()
+    expect(first.items[0]).toMatchObject({ localTemplate: 'zentao-management', taskIds: [managerTask.id] })
+    expect(first.items[0].text).not.toContain('敏感需求')
+    store.reportRecords.mockResolvedValue([managerTask, ...records])
+    const next = await service.generate(day, 'append')
+    const call = vi.mocked(model.generateDailyReport).mock.calls[0]
+    expect(call[1].map((task) => task.id)).toEqual(records.map((task) => task.id))
+    expect(JSON.stringify(call[2])).not.toContain('management-1')
+    expect(JSON.stringify(call[2])).not.toContain('测试管理跟进')
+    expect(next.recordCount).toBe(3)
+    expect(next.items.filter((item) => item.localTemplate)).toHaveLength(1)
+    await service.close()
+  })
   it('个人日志保留归档，初次及补充日报均不向模型发送个人事项', async () => {
     const privateTask = { ...records[0], id: 'private', title: '安排家庭出行', projectPath: '/私人/家庭', isPersonal: true }
     const store = inputStore([...records, privateTask]), model = generator(), service = new DailyReportService(store, model)

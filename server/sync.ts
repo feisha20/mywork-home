@@ -197,6 +197,7 @@ export class SyncService {
       const cutoff = await this.store.cutoff()
       const secrets = [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password), ...config.sourceSecrets]
       const zentaoConnection = this.settings?.zentaoConnection()
+      const managementSettings = this.settings?.zentaoManagementSettings()
       for (const channel of channels) {
         if (this.stopping) break
         // 轮到该来源时才刷新状态，排队中的其他渠道保留已验证的连接。
@@ -219,6 +220,25 @@ export class SyncService {
             this.sources.zentao = { available: false, sessionCount: 0, error: reason }
             this.sourceChecks.set(channel.id, { key: this.sourceKey(channel), status: Promise.resolve(this.sources.zentao) })
             this.error(run, `zentao：${reason}`)
+          }
+          if (zentaoConnection && managementSettings?.enabled && this.store.management) {
+            const instance = zentaoConnection.baseUrl.replace(/\/+$/, '')
+            try {
+              const trackedIds = await this.store.management.trackedIds(instance, zentaoConnection.account)
+              run.phase = 'scanning'; await this.saveRunProgress(run)
+              const managementBatch = await new ZentaoV2Client(zentaoConnection).readManagement(managementSettings, trackedIds)
+              if (this.stopping) break
+              run.phase = 'saving'; await this.saveRunProgress(run)
+              const counts = await this.store.management.apply(managementBatch, managementSettings)
+              run.newTasks += counts.created; run.updatedTasks += counts.updated
+              for (const issue of counts.issues) this.error(run, 'zentao：管理采集 · ' + issue)
+              const pending = await this.store.zentaoPendingCount(instance, zentaoConnection.account)
+              this.sources.zentao = { ...this.sources.zentao!, sessionCount: pending }
+            } catch (error) {
+              const reason = error instanceof ZentaoError ? error.message : '管理数据读取或保存失败，本轮保留已有事项'
+              await this.store.management.markFailed(instance, zentaoConnection.account, reason)
+              this.error(run, 'zentao：管理采集 · ' + reason)
+            }
           }
           run.phase = 'scanning'; await this.saveRunProgress(run)
           continue

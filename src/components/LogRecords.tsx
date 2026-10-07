@@ -6,6 +6,7 @@ import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 import type { DailyReport } from '../../shared/contracts'
 import { isRecordInReport } from '../../shared/dailyReports'
 import { PersonalTaskToggle } from './PersonalTaskToggle'
+import { ManagementDetails } from './ManagementDetails'
 
 const logTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
 export interface LogRecordsProps {
@@ -28,6 +29,7 @@ export function LogRecords({ records, dailyReport, recentId, onReopen, onToggleP
         <time className="daily-log-time" dateTime={recordTimestamp(task)!}>{logTime.format(new Date(recordTimestamp(task)!))}</time>
       </div>
       <p className="daily-log-text" title={task.title}>{task.title}</p>
+      {task.management && <ManagementDetails task={task} />}
       <div className="daily-log-actions">
         <ZentaoTaskDetails task={task} />
         <TaskEvidence task={task} />

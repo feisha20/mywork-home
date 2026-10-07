@@ -49,7 +49,8 @@ export function dailyReportGroupLimit(records: Task[], previous?: DailyReport): 
 }
 
 export function dailyReportInput(day: string, records: Task[], secrets: string[] = [], previous?: DailyReport) {
-  records = records.filter((task) => !task.isPersonal)
+  records = records.filter((task) => !task.isPersonal && !task.management)
+  if (previous) previous = { ...previous, items: previous.items.filter((item) => !item.localTemplate) }
   return {
     day,
     maxGroups: dailyReportGroupLimit(records, previous),
@@ -230,7 +231,16 @@ export class DailyReportService {
 
   private async run(day: string, records: Task[], previous?: DailyReport): Promise<DailyReport> {
     try {
-      const items = await this.generator.generateDailyReport(day, records, previous)
+      const localPrevious = previous?.items.filter((item) => item.localTemplate === 'zentao-management') ?? []
+      const localRecords = records.filter((task) => !!task.management)
+      const localIds = new Set([...localPrevious.flatMap((item) => item.taskIds), ...localRecords.map((task) => task.id)])
+      const modelPrevious = previous ? { ...previous, items: previous.items.filter((item) => !item.localTemplate),
+        recordCount: Object.keys(previous.recordVersions).filter((id) => !localIds.has(id)).length,
+        recordVersions: Object.fromEntries(Object.entries(previous.recordVersions).filter(([id]) => !localIds.has(id))) } : undefined
+      const modelRecords = records.filter((task) => !task.management)
+      const items = modelRecords.length ? await this.generator.generateDailyReport(day, modelRecords, modelPrevious) : modelPrevious?.items ?? []
+      if (localIds.size) items.push({ topic: '测试管理跟进', text: '处理禅道测试管理关注事项，并记录相关风险的跟进结果。',
+        taskIds: [...localIds], localTemplate: 'zentao-management' })
       const recordVersions = { ...previous?.recordVersions, ...Object.fromEntries(records.map((task) => [task.id, reportRecordVersion(task)])) }
       validateCoverage(items, Object.keys(recordVersions).map((id) => ({ id })))
       const report = { day, generatedAt: new Date().toISOString(), recordCount: Object.keys(recordVersions).length, items,

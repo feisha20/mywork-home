@@ -19,6 +19,7 @@ export interface DailyReportItem {
   taskIds: string[]
   topic?: string
   projectPaths?: string[]
+  localTemplate?: 'zentao-management'
 }
 
 export interface DailyReport {

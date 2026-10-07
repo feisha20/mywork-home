@@ -3,6 +3,7 @@ import { decodeSnapshot } from '../domain/workbench'
 import type { DailyReport, SyncRun, WorkbenchSnapshot, RecordPage, RecordQuery, Evidence, ReportJob } from '../../shared/contracts'
 import type { PeriodicReportModel } from '../domain/periodicReport'
 import type { CollectorKind, PathCheckResult, PathScanResult, RecordMapping, RecordPreview, SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
+import type { ManagementFieldPreview } from '../../shared/zentaoManagement'
 
 const storageKey = 'mywork-home.workbench.v1'
 const migrationKey = `${storageKey}.migrated`
@@ -27,6 +28,8 @@ export async function fetchWorkbench() {
 }
 export const createTask = (title: string, isPersonal?: boolean) => request<Task>('/tasks', { method: 'POST', body: JSON.stringify({ title, isPersonal }) })
 export const updateTask = (id: string, completed: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ completed }) })
+export const handleManagementTask = (id: string, action: 'complete' | 'ignore' | 'restore') =>
+  request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action }) })
 export const updateTaskPersonal = (id: string, isPersonal: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}/personal`, { method: 'PATCH', body: JSON.stringify({ isPersonal }) })
 export const deleteTask = (id: string) => request<{ deleted: boolean }>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
 export const startSync = () => request<SyncRun>('/sync', { method: 'POST', body: '{}' })
@@ -38,6 +41,8 @@ export const previewChannelRecords = (collector: 'auto' | 'generic', paths: stri
   { method: 'POST', body: JSON.stringify({ collector, paths, mapping }), signal, cache: 'no-store' }, 20000)
 export const testModelConnection = (model: SettingsUpdate['model']) => request<{ message: string }>('/settings/test-model', { method: 'POST', body: JSON.stringify(model) }, 20000)
 export const testZentaoConnection = (connection: NonNullable<SettingsUpdate['channels'][number]['zentao']>) => request<{ message: string; bugs: number; tasks: number }>('/settings/test-zentao', { method: 'POST', body: JSON.stringify(connection) }, 70000)
+export const inspectZentaoFields = (connection: NonNullable<SettingsUpdate['channels'][number]['zentao']>) => request<ManagementFieldPreview>(
+  '/settings/inspect-zentao-fields', { method: 'POST', body: JSON.stringify(connection) }, 70000)
 // 模型总结需要比普通数据请求更长的等待时间；关闭预览时可取消前端等待。
 export const generateDailyReport = (day: string, signal?: AbortSignal, mode: 'initial' | 'append' = 'initial') => request<DailyReport>('/daily-reports',
   { method: 'POST', body: JSON.stringify(mode === 'initial' ? { day } : { day, mode }), signal }, 240000)
