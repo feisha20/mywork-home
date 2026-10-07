@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addTask, canManualComplete, completeTask, createDemoState, dateKey, decodeSnapshot, recentWorkdays, recordsForDate, recordTimestamp, requiresManualCompletion } from './workbench'
+import { addTask, pendingTasks, canManualComplete, completeTask, createDemoState, dateKey, decodeSnapshot, recentWorkdays, recordsForDate, recordTimestamp, requiresManualCompletion } from './workbench'
 
 const today = new Date('2026-09-30T14:00:00+08:00')
 const fixture = () => {
@@ -8,6 +8,21 @@ const fixture = () => {
 }
 
 describe('工作台记录', () => {
+  it('多个禅道和自定义待办可置顶，取消后回到时间顺序，已完成和自动记录不进入待办', () => {
+    const base = fixture().tasks[0]
+    const manual = { ...base, id: 'manual-pin', source: 'manual' as const, createdAt: '2026-09-20T01:00:00Z', isPinned: true }
+    const bug = { ...base, id: 'bug-pin', reference: 'BUG-1', createdAt: '2026-09-21T01:00:00Z', isPinned: true }
+    const recent = { ...manual, id: 'recent', createdAt: '2026-09-30T01:00:00Z', isPinned: false }
+    const older = { ...manual, id: 'older', createdAt: '2026-09-19T01:00:00Z', isPinned: undefined }
+    const tasks = [recent, manual, older, bug, { ...bug, id: 'done', completedAt: today.toISOString() }, { ...manual, id: 'auto', source: 'codex' as const }]
+    expect(pendingTasks(tasks).map((task) => task.id)).toEqual(['bug-pin', 'manual-pin', 'recent', 'older'])
+    expect(tasks[0]).toBe(recent)
+    expect(pendingTasks(tasks.map((task) => task.id === manual.id ? { ...task, isPinned: false } : task)).map((task) => task.id)).toEqual(['bug-pin', 'recent', 'manual-pin', 'older'])
+    const pinned = { version: 1 as const, tasks: [manual, bug] }
+    expect(decodeSnapshot(JSON.stringify(pinned))).toEqual(pinned)
+    expect(decodeSnapshot(JSON.stringify({ ...pinned, tasks: [{ ...manual, isPinned: 'true' }] }))).toBeNull()
+  })
+
   it('跨周末与月界仍能生成最近工作日', () => {
     expect(recentWorkdays(new Date('2026-09-01T00:00:00+08:00'))).toEqual(['2026-09-01', '2026-08-31', '2026-08-28', '2026-08-27'])
   })

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Pool, type PoolClient } from 'pg'
-import { dateKey, recordTimestamp, requiresManualCompletion, type Task } from '../src/domain/workbench.js'
+import { isPendingTask, dateKey, recordTimestamp, requiresManualCompletion, type Task } from '../src/domain/workbench.js'
 import { excludePersonalReportItems } from '../shared/dailyReports.js'
 import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob } from '../shared/contracts.js'
 import type { Cursor, Source, SourceMessage } from './records.js'
@@ -10,7 +10,7 @@ import type { ZentaoSnapshot, ZentaoTrackedItem } from './zentao.js'
 import { ZentaoManagementStore, visibleManagementSql } from './zentaoManagementStore.js'
 
 const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
-const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,zentao,management,jsonb_array_length(evidence) AS evidence_count'
+const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_pinned,is_personal,personal_origin,evidence_stale,zentao,management,jsonb_array_length(evidence) AS evidence_count'
 function jobFromRow(row: any): ReportJob {
   return { id: row.id, kind: row.kind, day: new Date(row.day).toISOString().slice(0,10), periodKey: row.period_key,
     scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
@@ -20,7 +20,7 @@ function taskFromRow(row: any): Task {
   return { id: row.id, reference: row.reference, source: row.source, title: row.title,
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
-    projectPath: row.project_path, statusOrigin: row.status_origin, isPersonal: Boolean(row.is_personal), personalOrigin: row.personal_origin,
+    projectPath: row.project_path, statusOrigin: row.status_origin, isPinned: Boolean(row.is_pinned), isPersonal: Boolean(row.is_personal), personalOrigin: row.personal_origin,
     evidence: row.evidence, zentao: row.zentao, management: row.management,
     evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count), evidenceStale: Boolean(row.evidence_stale) }
 }
@@ -92,6 +92,18 @@ export class Store {
     const { rows } = await this.pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,status_origin,is_personal,personal_origin)
       VALUES($1,$2,'manual',$3,now(),'manual',$4,'manual') RETURNING *`, [id, `TASK-${id.slice(0, 8).toUpperCase()}`, title, isPersonal])
     return taskFromRow(rows[0])
+  }
+  async setPinned(id: string, isPinned: boolean): Promise<Task | null> {
+    return this.transaction(async (client) => {
+      const existing = await client.query('SELECT * FROM workbench.tasks WHERE id=$1 AND deleted_at IS NULL FOR UPDATE', [id])
+      if (!existing.rows[0]) return null
+      if (!isPendingTask(taskFromRow(existing.rows[0]))) {
+        throw Object.assign(new Error('仅可置顶或取消置顶尚未完成的禅道和自定义待办'), { statusCode: 409 })
+      }
+      const { rows } = await client.query(`UPDATE workbench.tasks SET is_pinned=$2,updated_at=now()
+        WHERE id=$1 RETURNING *`, [id, isPinned])
+      return taskFromRow(rows[0])
+    })
   }
   async setPersonal(id: string, isPersonal: boolean): Promise<Task | null> {
     return this.transaction(async (client) => {

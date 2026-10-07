@@ -30,6 +30,7 @@ export const createTask = (title: string, isPersonal?: boolean) => request<Task>
 export const updateTask = (id: string, completed: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ completed }) })
 export const handleManagementTask = (id: string, action: 'complete' | 'ignore' | 'restore') =>
   request<Task>(`/tasks/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ action }) })
+export const updateTaskPinned = (id: string, isPinned: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}/pin`, { method: 'PATCH', body: JSON.stringify({ isPinned }) })
 export const updateTaskPersonal = (id: string, isPersonal: boolean) => request<Task>(`/tasks/${encodeURIComponent(id)}/personal`, { method: 'PATCH', body: JSON.stringify({ isPersonal }) })
 export const deleteTask = (id: string) => request<{ deleted: boolean }>(`/tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
 export const startSync = () => request<SyncRun>('/sync', { method: 'POST', body: '{}' })

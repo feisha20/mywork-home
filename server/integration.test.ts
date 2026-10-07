@@ -13,7 +13,7 @@ import { SyncService } from './sync.js'
 import { createApp } from './app.js'
 import type { Extractor } from './harness.js'
 import type { SourceMessage, Cursor } from './records.js'
-import { dateKey, recordsForDate } from '../src/domain/workbench.js'
+import { dateKey, pendingTasks, recordsForDate } from '../src/domain/workbench.js'
 import { DailyReportService } from './dailyReport.js'
 import { PeriodicReportScheduler } from './periodicReportScheduler.js'
 import { PeriodicReportService } from './periodicReport.js'
@@ -88,6 +88,54 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     const reopened = (await app.inject({ method: 'PATCH', url: `/api/tasks/${id}`, payload: { completed: false } })).json()
     expect(reopened.completedAt).toBeNull(); expect(reopened.statusOrigin).toBe('manual')
     const other = new Store(pool); expect((await other.tasks()).some((task) => task.id === id)).toBe(true)
+  })
+  it('多个禅道和自定义待办独立置顶，刷新和同步保留，取消后恢复正常排序', async () => {
+    const manual = await store.createTask('置顶自定义待办')
+    const other = await store.createTask('另一个置顶自定义待办')
+    const instance = `https://pin-${randomUUID()}.example`, account = 'fixture'
+    const items: ZentaoWorkItem[] = (['bug', 'task'] as const).map((type) => {
+      const id = randomUUID()
+      return { id, reference: `${type.toUpperCase()}-${id}`, title: `置顶禅道${type}`, createdAt: '2026-09-20T01:00:00Z', completedAt: null, state: 'pending',
+        zentao: { instance, account, type, id, status: type === 'bug' ? 'active' : 'doing', url: `${instance}/${type}-view-${id}.html`, priority: 2, project: '测试项目', deadline: null } }
+    })
+    const snapshot: ZentaoSnapshot = { instance, account, items, bugs: 1, tasks: 1 }
+    await store.applyZentaoSnapshot(snapshot)
+    const ids = [manual.id, other.id, ...items.map((item) => item.id)]
+    const pin = (id: string, isPinned: boolean) => app.inject({ method: 'PATCH', url: `/api/tasks/${id}/pin`, payload: { isPinned } })
+    for (const id of ids) {
+      const response = await pin(id, true)
+      expect(response.statusCode).toBe(200)
+      expect(response.json()).toMatchObject({ id, isPinned: true, completedAt: null })
+    }
+    expect((await pin(manual.id, true)).json()).toMatchObject({ isPinned: true })
+    snapshot.items = items.map((item) => ({ ...item, title: item.title + '已更新' }))
+    await new Store(pool).applyZentaoSnapshot(snapshot)
+    const refreshed = (await app.inject({ url: '/api/workbench' })).json().tasks
+    for (const id of ids) expect(refreshed.find((task: { id: string }) => task.id === id)).toMatchObject({ isPinned: true })
+    const before = (await store.tasks()).find((task) => task.id === manual.id)!
+    expect((await pin(manual.id, false)).json()).toMatchObject({ isPinned: false, title: before.title, createdAt: before.createdAt, completedAt: null, statusOrigin: before.statusOrigin })
+    const reopened = await new Store(pool).tasks()
+    const own = reopened.filter((task) => ids.includes(task.id))
+    expect(pendingTasks(own).slice(0, 3).every((task) => task.isPinned)).toBe(true)
+    expect(pendingTasks(own).at(-1)?.id).toBe(manual.id)
+    await store.setCompleted(manual.id, true)
+    expect(pendingTasks(await store.tasks()).some((task) => task.id === manual.id)).toBe(false)
+  })
+  it('置顶接口拒绝无效参数和非待办，不存在或已删除事项返回未找到', async () => {
+    const manual = await store.createTask('校验置顶接口')
+    const path = `/api/tasks/${manual.id}/pin`
+    for (const payload of [{}, { isPinned: 'true' }, { isPinned: true, completed: true }]) {
+      expect((await app.inject({ method: 'PATCH', url: path, payload })).statusCode).toBe(400)
+    }
+    expect((await app.inject({ method: 'PATCH', url: '/api/tasks/missing/pin', payload: { isPinned: true } })).statusCode).toBe(404)
+    await store.setCompleted(manual.id, true)
+    expect((await app.inject({ method: 'PATCH', url: path, payload: { isPinned: true } })).statusCode).toBe(409)
+    await store.setCompleted(manual.id, false)
+    await pool.query("UPDATE workbench.tasks SET source='codex' WHERE id=$1", [manual.id])
+    expect((await app.inject({ method: 'PATCH', url: path, payload: { isPinned: true } })).statusCode).toBe(409)
+    await pool.query("UPDATE workbench.tasks SET source='manual' WHERE id=$1", [manual.id])
+    await store.deleteTask(manual.id)
+    expect((await app.inject({ method: 'PATCH', url: path, payload: { isPinned: false } })).statusCode).toBe(404)
   })
   it('旧记录保留完成日期、重复导入不覆盖新状态，示例被拒绝', async () => {
     const task = { id: randomUUID(), reference: 'TASK-old', source: 'manual', title: '旧手工记录', createdAt: '2026-09-01T01:00:00Z', completedAt: '2026-09-02T01:00:00Z' }

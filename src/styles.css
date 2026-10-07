@@ -1072,6 +1072,11 @@ button:focus-visible, input:focus-visible {
 .btn-pipe-transfer { padding: 7px 10px; font-size: 11px; align-self: center; }
 .btn-pipe-transfer:disabled { background: #f6f8fb; color: #a0aabc; border-color: #e6ebf1; }
 .btn-pipe-transfer:disabled::after { background: #cbd5e1; box-shadow: none; }
+.task-card.is-pinned { border-color: #fed7aa; }
+.pin-task { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 10px; line-height: 1.2; white-space: nowrap; color: #64748b; background: #fff; cursor: pointer; }
+.pin-task svg { width: 12px; height: 12px; }
+.pin-task:hover, .pin-task.is-pinned { border-color: #fed7aa; color: #c2410c; background: #fff7ed; }
+.pin-task:disabled { opacity: .5; cursor: wait; }
 .task-card.is-transferring { border-color: var(--accent-orange); background: #fffaf7; }
 .task-card.is-transferring .complete-task { color: var(--accent-orange); }
 .quick-add-box { flex-shrink: 0; align-items: center; gap: 0; transition: border-color 0.2s; }

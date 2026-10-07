@@ -31,6 +31,7 @@ export interface Task {
   recordedAt?: string | null
   projectPath?: string
   statusOrigin?: 'manual' | 'ai' | 'zentao'
+  isPinned?: boolean
   isPersonal?: boolean
   personalOrigin?: 'manual' | 'ai'
   zentao?: {
@@ -94,6 +95,14 @@ export function canManualComplete(task: Task): boolean {
 export function isPendingTask(task: Task): boolean {
   return requiresManualCompletion(task.source) && !task.completedAt && (!task.management ||
     task.management.riskState === 'active' && task.management.handlingState === 'pending')
+}
+
+// 置顶仅改变待办展示顺序；组内仍按创建时间倒序，编号用于稳定排序。
+export function pendingTasks(tasks: readonly Task[]): Task[] {
+  return tasks.filter(isPendingTask).sort((a, b) =>
+    Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned))
+    || Date.parse(b.createdAt) - Date.parse(a.createdAt)
+    || a.id.localeCompare(b.id))
 }
 
 // 自动工作记录归到来源日期；归档时间与真实完成状态分开保存。
@@ -195,6 +204,7 @@ export function decodeSnapshot(raw: string): WorkbenchState | null {
         || typeof task.title !== 'string' || !task.title.trim() || task.title.length > 300
         || !validTimestamp(task.createdAt)
         || (task.completedAt !== null && !validTimestamp(task.completedAt))
+        || (task.isPinned !== undefined && typeof task.isPinned !== 'boolean')
         || (task.isPersonal !== undefined && typeof task.isPersonal !== 'boolean')
         || (task.personalOrigin !== undefined && !['manual', 'ai'].includes(task.personalOrigin as string))
         || (task.recordedAt != null && !validTimestamp(task.recordedAt))) return null

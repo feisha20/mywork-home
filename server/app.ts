@@ -147,6 +147,12 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     const { title, isPersonal } = z.object({ title: z.string().trim().min(1).max(300), isPersonal: z.boolean().default(false) }).parse(request.body)
     return reply.code(201).send(await store.createTask(title, isPersonal))
   })
+  app.patch('/api/tasks/:id/pin', async (request, reply) => {
+    const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
+    const { isPinned } = z.object({ isPinned: z.boolean() }).strict().parse(request.body)
+    const task = await store.setPinned(id, isPinned)
+    return task ?? reply.code(404).send({ error: '待办不存在或已删除' })
+  })
   app.patch('/api/tasks/:id/personal', async (request, reply) => {
     const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
     const { isPersonal } = z.object({ isPersonal: z.boolean() }).strict().parse(request.body)

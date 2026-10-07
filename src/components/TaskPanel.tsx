@@ -13,6 +13,8 @@ interface TaskPanelProps {
   panelRef: RefObject<HTMLElement | null>
   activeId: string | null
   deletingId: string | null
+  pinningId: string | null
+  onTogglePinned: (task: Task) => Promise<void>
   disabled?: boolean
   onAdd: (title: string, isPersonal: boolean) => Promise<void>
   onTogglePersonal: (task: Task) => Promise<Task>
@@ -21,7 +23,7 @@ interface TaskPanelProps {
   onIgnore: (task: Task) => void
 }
 
-export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, disabled, onAdd, onTogglePersonal, onComplete, onDelete, onIgnore }: TaskPanelProps) {
+export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, deletingId, pinningId, onTogglePinned, disabled, onAdd, onTogglePersonal, onComplete, onDelete, onIgnore }: TaskPanelProps) {
   const [title, setTitle] = useState('')
   const [isPersonal, setIsPersonal] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -43,13 +45,18 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
         {tasks.map((task) => (
           <article
             key={task.id}
-            className={`daily-log-card task-card${activeId === task.id ? ' is-transferring' : ''}`}
+            className={`daily-log-card task-card${task.isPinned ? ' is-pinned' : ''}${activeId === task.id ? ' is-transferring' : ''}`}
           >
             <div className="daily-log-top">
               <div className="daily-log-source-group">
                 <span className="daily-log-source">{task.management ? '禅道 · 测试管理' : task.sourceLabel ?? sourceInfo(task.source).label}</span>
                 <TaskReference task={task} />
               </div>
+              <button type="button" className={`pin-task${task.isPinned ? ' is-pinned' : ''}`} disabled={busy}
+                aria-label={`${task.isPinned ? '取消置顶' : '置顶'}待办：${task.title}`} aria-pressed={Boolean(task.isPinned)}
+                title={task.isPinned ? '取消置顶' : '置顶待办'} onClick={() => { void onTogglePinned(task) }}>
+                <Icon name="pin" /><span>{pinningId === task.id ? '保存中' : task.isPinned ? '已置顶' : '置顶'}</span>
+              </button>
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
             <ZentaoTaskDetails task={task} />

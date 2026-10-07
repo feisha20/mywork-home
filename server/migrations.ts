@@ -133,6 +133,9 @@ UPDATE workbench.zentao_management_scopes SET data=jsonb_set(data,'{metrics,open
 UPDATE workbench.tasks SET management=management || jsonb_build_object(
  'riskState','resolved','resolvedAt',now(),'resolutionReason','已停用用例覆盖缺口待办'
 ),updated_at=now() WHERE management->>'ruleId'='coverage' AND management->>'riskState'='active';
+` }, { version: 12, sql: `
+-- 置顶是本地展示偏好，多个待办可独立置顶，采集同步不覆盖此字段。
+ALTER TABLE workbench.tasks ADD COLUMN is_pinned boolean NOT NULL DEFAULT false;
 ` }]
 
 export async function migrate(pool: Pool) {

@@ -1,9 +1,10 @@
 interface IconProps {
-  name: 'arrow' | 'chevron-left' | 'chevron-right' | 'chevrons-left' | 'chevrons-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock' | 'user' | 'sparkles' | 'edit' | 'arrow-left'
+  name: 'pin' | 'arrow' | 'chevron-left' | 'chevron-right' | 'chevrons-left' | 'chevrons-right' | 'chevron-down' | 'check' | 'plus' | 'list' | 'book' | 'calendar' | 'close' | 'trash' | 'copy' | 'refresh' | 'settings' | 'model' | 'sources' | 'arrow-up' | 'arrow-down' | 'eye' | 'search' | 'upload' | 'grip' | 'clock' | 'user' | 'sparkles' | 'edit' | 'arrow-left'
   className?: string
 }
 
 const paths = {
+  pin: 'M16 3l5 5-4 1-3 3v4l-3-3-7 7m4-9-3-3h4l3-3 1-4Z',
   arrow: 'M4 12h16m-6-6 6 6-6 6',
   'arrow-left': 'M20 12H4m6-6-6 6 6 6',
   'chevron-left': 'm15 18-6-6 6-6',
