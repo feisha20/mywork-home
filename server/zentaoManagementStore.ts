@@ -5,6 +5,7 @@ import { dateKey } from '../src/domain/workbench.js';
 import type { ManagementBatch, ManagementScope, ManagementTask, ManagementTaskQuery, ManagementOverview, ZentaoManagementSettings } from '../shared/zentaoManagement.js';
 import { evaluateManagement, storyRuleIds } from './zentaoManagement.js';
 import { excludePersonalReportItems } from '../shared/dailyReports.js';
+import { updateManagementDateHistory } from '../shared/managementDateHistory.js';
 interface StoredScope {
   scope: ManagementScope;
   metrics: ManagementOverview['metrics'][number];
@@ -76,10 +77,8 @@ export class ZentaoManagementStore {
                 const dates = evaluation.datesByStory[story.id];
                 const stale = !!dates && (dates.planned.state === 'unavailable' || dates.actual.state === 'unavailable');
                 const releaseDates = stale && previousStory?.releaseDates ? previousStory.releaseDates : dates;
-                const dateHistory = previousStory?.dateHistory ?? [];
-                if (!stale && dates && previousStory?.releaseDates && JSON.stringify(dates) !== JSON.stringify(previousStory.releaseDates)) {
-                  dateHistory.push({ at: batch.collectedAt, dates: previousStory.releaseDates });
-                }
+                const dateHistory = updateManagementDateHistory(previousStory?.dateHistory,
+                  previousStory?.releaseDates, releaseDates ?? previousStory?.releaseDates, batch.collectedAt);
                 return { ...story, releaseDates, dateHistory, datesStale: stale };
               }) : old?.scope.stories ?? [],
               cases: scope.readable.cases ? scope.cases : old?.scope.cases ?? [],
@@ -130,9 +129,7 @@ export class ZentaoManagementStore {
               created++;
             }
             else {
-              const history = old?.history ?? [];
-              if (old?.dates && JSON.stringify(old.dates) !== JSON.stringify(risk.dates))
-                history.push({ at: batch.collectedAt, dates: old.dates });
+              const history = updateManagementDateHistory(old?.history, old?.dates, risk.dates, batch.collectedAt);
               const metadata = { ...old, ...risk, history, lastVerifiedAt: batch.collectedAt, stale: false };
               await client.query('UPDATE workbench.tasks SET management=$2,title=$3,updated_at=now() WHERE id=$1', [existing.id, JSON.stringify(metadata), old?.handlingState === 'completed' ? existing.title : risk.action]);
               updated++;
@@ -150,9 +147,8 @@ export class ZentaoManagementStore {
               metadata.scopeIds.every((id) => evaluation.completeScopeIds.includes(id));
             if (evaluated.has(metadata.key) || absent) {
               const dates = storyId ? evaluation.datesByStory[storyId] : undefined;
-              if (metadata.dates && dates && JSON.stringify(metadata.dates) !== JSON.stringify(dates)) {
-                metadata.history = [...metadata.history ?? [], { at: batch.collectedAt, dates: metadata.dates }];
-              }
+              metadata.history = updateManagementDateHistory(metadata.history, metadata.dates,
+                dates ?? metadata.dates, batch.collectedAt);
               metadata.dates = dates ?? metadata.dates;
               metadata.riskState = 'resolved';
               metadata.resolvedAt = batch.collectedAt;

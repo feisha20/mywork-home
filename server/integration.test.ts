@@ -770,12 +770,23 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await store.management.apply(batch, defaultZentaoManagement)).created).toBe(1)
     expect((await store.management.apply(batch, defaultZentaoManagement)).created).toBe(0)
     const first = (await own())[0]
+    expect(first.management?.history).toEqual([])
+    const scopeHistory = async () => (await pool.query(
+      'SELECT data FROM workbench.zentao_management_scopes WHERE instance=$1 AND account=$2',
+      [batch.instance, batch.account])).rows[0].data.scope.stories[0].dateHistory
+    expect(await scopeHistory()).toEqual([])
+    // 模拟旧版本重复写入的日期依据，下一次同步应自动清理。
+    await pool.query("UPDATE workbench.tasks SET management=jsonb_set(management,'{history}',$2::jsonb) WHERE id=$1",
+      [first.id, JSON.stringify([{ at: batch.collectedAt, dates: first.management!.dates },
+        { at: batch.collectedAt, dates: first.management!.dates }])])
     const complete = await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { completed: true } })
     expect(complete.statusCode).toBe(200)
     const completedAt = complete.json().completedAt
     const reopenedStore = new Store(pool)
     batch.collectedAt = '2026-10-08T04:00:00Z'
     expect((await reopenedStore.management.apply(batch, defaultZentaoManagement)).created).toBe(0)
+    expect((await own())[0].management?.history).toEqual([])
+    expect(await scopeHistory()).toEqual([])
     expect((await own())[0]).toMatchObject({ id: first.id, completedAt, management: { handlingState: 'completed', riskState: 'active', severity: 'red' } })
     expect((await store.management.page({ state: 'pending' }, { instance: batch.instance, account: batch.account })).total).toBe(0)
     batch.scopes[0].stories[0].plannedReleaseAt = valueDate('2026-10-20')

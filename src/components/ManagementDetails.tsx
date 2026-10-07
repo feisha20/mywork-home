@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Task } from '../domain/workbench'
+import { normalizeManagementDateHistory } from '../../shared/managementDateHistory'
 
 export function ManagementDetails({ task, actions }: { task: Task; actions?: ReactNode }) {
   const [expanded, setExpanded] = useState(false)
@@ -8,6 +9,7 @@ export function ManagementDetails({ task, actions }: { task: Task; actions?: Rea
   const management = task.management
   if (!management) return null
   const dates = management.dates
+  const history = normalizeManagementDateHistory(management.history, dates)
   const displayDate = (value: NonNullable<typeof dates>['planned']) => value.state === 'valid' ? value.value :
     value.state === 'unavailable' ? '待更新' : value.state === 'invalid' ? '待核对：' + (value.value ?? '日期无效') : '未填写'
   const evidence = <>
@@ -18,8 +20,8 @@ export function ManagementDetails({ task, actions }: { task: Task; actions?: Rea
     <p>最近核实：{new Date(management.lastVerifiedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
       {management.stale ? ' · 数据待更新' : ''}</p>
     {management.resolutionReason && <p>收起原因：{management.resolutionReason}</p>}
-    {!!management.history?.length && <ul>{management.history.map((entry, index) => <li key={index}>
-      {new Date(entry.at).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai' })} 前的日期依据：
+    {!!history.length && <ul>{history.map((entry, index) => <li key={index}>
+      {new Date(entry.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })} 前的日期依据：
       计划 {entry.dates.planned.value ?? '未填写'}（{entry.dates.planned.sourceLabel}），
       实际 {entry.dates.actual.value ?? '未填写'}（{entry.dates.actual.sourceLabel}）
     </li>)}</ul>}
