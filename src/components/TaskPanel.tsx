@@ -54,8 +54,9 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
               </div>
               <button type="button" className={`pin-task${task.isPinned ? ' is-pinned' : ''}`} disabled={busy}
                 aria-label={`${task.isPinned ? '取消置顶' : '置顶'}待办：${task.title}`} aria-pressed={Boolean(task.isPinned)}
+                aria-busy={pinningId === task.id}
                 title={task.isPinned ? '取消置顶' : '置顶待办'} onClick={() => { void onTogglePinned(task) }}>
-                <Icon name="pin" /><span>{pinningId === task.id ? '保存中' : task.isPinned ? '已置顶' : '置顶'}</span>
+                <Icon name="pin" />
               </button>
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
