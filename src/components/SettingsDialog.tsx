@@ -12,6 +12,7 @@ import { Icon } from './Icon'
 import { SourcePathDetails } from './SourcePathDetails'
 import { SettingsSelect } from './SettingsSelect'
 import { RecordCompatibility } from './RecordCompatibility'
+import { McpSettings } from './McpSettings'
 import { defaultZentaoManagement, type ManagementFieldPreview, type ZentaoManagementSettings } from '../../shared/zentaoManagement'
 
 type DraftChannel = SettingsUpdate['channels'][number]
@@ -39,6 +40,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   const [selectedId, setSelectedId] = useState<string>('codex')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [mcpBusy, setMcpBusy] = useState(false)
   const [testing, setTesting] = useState(false)
   const [scanning, setScanning] = useState<string | null>(null)
   const [showKey, setShowKey] = useState(false)
@@ -53,7 +55,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   const [pathCheckVersion, setPathCheckVersion] = useState(0)
   const [discarding, setDiscarding] = useState(false)
   const [loadVersion, setLoadVersion] = useState(0)
-  const busy = saving || testing || scanning !== null
+  const busy = saving || testing || scanning !== null || mcpBusy
   const dirty = !!saved && !!draft && JSON.stringify(settingsDraft(saved)) !== JSON.stringify(draft)
   const channel = draft?.channels.find((entry) => entry.id === selectedId)
   const channelSaved = saved?.channels.find((entry) => entry.id === selectedId)
@@ -121,7 +123,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   }
   async function handleSave(event: FormEvent) {
     event.preventDefault()
-    if (!draft || busy) return
+    if (!draft || busy || tab === 'mcp') return
     setError(null); setFeedback(null); setDiscarding(false)
     const parsed = settingsUpdateSchema.safeParse({ ...draft, channels: draft.channels.map((entry) => ({ ...entry, paths: entry.paths.map((path) => path.trim()).filter(Boolean) })) })
     if (!parsed.success) { setError(parsed.error.issues.map((issue) => issue.message).join('；')); return }
@@ -208,9 +210,10 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
           <span className="settings-nav-label">个人工作空间</span>
-          <button type="button" className={tab === 'model' ? 'is-active' : ''} aria-current={tab === 'model' ? 'page' : undefined} onClick={() => setTab('model')}><Icon name="model" /><span>模型配置<small>大模型连接与密钥</small></span></button>
-          <button type="button" className={tab === 'channels' ? 'is-active' : ''} aria-current={tab === 'channels' ? 'page' : undefined} onClick={() => setTab('channels')}><Icon name="sources" /><span>采集源<small>渠道、顺序与路径</small></span>{draft && <b>{draft.channels.length}</b>}</button>
-          <button type="button" className={tab === 'automation' ? 'is-active' : ''} aria-current={tab === 'automation' ? 'page' : undefined} onClick={() => setTab('automation')}><Icon name="clock" /><span>自动化<small>采集、通知与定时报告</small></span></button>
+          <button type="button" disabled={busy} className={tab === 'model' ? 'is-active' : ''} aria-current={tab === 'model' ? 'page' : undefined} onClick={() => setTab('model')}><Icon name="model" /><span>模型配置<small>大模型连接与密钥</small></span></button>
+          <button type="button" disabled={busy} className={tab === 'channels' ? 'is-active' : ''} aria-current={tab === 'channels' ? 'page' : undefined} onClick={() => setTab('channels')}><Icon name="sources" /><span>采集源<small>渠道、顺序与路径</small></span>{draft && <b>{draft.channels.length}</b>}</button>
+          <button type="button" disabled={busy} className={tab === 'automation' ? 'is-active' : ''} aria-current={tab === 'automation' ? 'page' : undefined} onClick={() => setTab('automation')}><Icon name="clock" /><span>自动化<small>采集、通知与定时报告</small></span></button>
+          <button type="button" disabled={busy} className={tab === 'mcp' ? 'is-active' : ''} aria-current={tab === 'mcp' ? 'page' : undefined} onClick={() => setTab('mcp')}><Icon name="sources" /><span>MCP 接入<small>助手权限与接入配置</small></span></button>
           <p className="settings-nav-note"><Icon name="check" />设置保存在本机<br />刷新、重启后依然保留</p>
         </nav>
         <div className="settings-content">
@@ -280,7 +283,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
                 const entry = draft.channels.find((item) => item.id === slot.sources[0])!
                 return <span className="settings-preview-channel" key={slot.id}>{slot.overflow ? <span className="settings-preview-more">+{slot.sources.length}</span> : <ChannelLogo logo={entry.logo} name={entry.name} size={32} />}<small>{slot.overflow ? '更多' : entry.name}</small></span>
               })}</div></section>
-            </div> : <div className="settings-automation-page">
+            </div> : tab === 'mcp' ? <McpSettings onBusyChange={setMcpBusy} /> : <div className="settings-automation-page">
               <div className="settings-section-heading"><div><h3>自动化</h3><p>配置自动采集、待办通知与定时报告</p></div></div>
               <section className="settings-automation-card" aria-labelledby="settings-notifications-heading">
                 <div className="settings-section-heading">
@@ -459,7 +462,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
         </div>
       </div>
       {discarding && <div className="settings-discard" role="alert"><span>还有未保存的修改。</span><button type="button" onClick={() => setDiscarding(false)}>继续编辑</button><button type="button" onClick={onClose}>放弃修改并关闭</button></div>}
-      <footer className="settings-footer"><span className={dirty ? 'has-changes' : ''}><i />{saving ? '正在保存配置…' : dirty ? '有未保存的更改' : '配置保存在本机'}</span><div><button type="button" className="settings-secondary" disabled={busy} onClick={requestClose}>关闭</button><button type="submit" className="settings-primary" disabled={!draft || busy || !dirty}><Icon name="check" />{saving ? '保存中…' : '保存设置'}</button></div></footer>
+      <footer className="settings-footer"><span className={dirty ? 'has-changes' : ''}><i />{saving ? '正在保存配置…' : dirty ? '有未保存的更改' : tab === 'mcp' ? 'MCP 更改即时保存' : '配置保存在本机'}</span><div><button type="button" className="settings-secondary" disabled={busy} onClick={requestClose}>关闭</button><button type="submit" className="settings-primary" disabled={!draft || busy || !dirty || tab === 'mcp'}><Icon name="check" />{saving ? '保存中…' : '保存设置'}</button></div></footer>
     </form>
   </dialog>, document.body)
 }

@@ -149,6 +149,27 @@ CREATE TABLE workbench.scheduled_task_occurrences (
  PRIMARY KEY(plan_id,scheduled_at)
 );
 ALTER TABLE workbench.tasks ADD COLUMN scheduled_plan jsonb;
+` }, { version: 14, sql: `
+-- MCP 仅保存高熵令牌的摘要；调用审计不保存输入正文与来源证据。
+CREATE TABLE workbench.mcp_config (
+ id boolean PRIMARY KEY DEFAULT true CHECK (id), enabled boolean NOT NULL DEFAULT false
+);
+INSERT INTO workbench.mcp_config(id) VALUES(true);
+CREATE TABLE workbench.mcp_clients (
+ id text PRIMARY KEY, name text NOT NULL, token_hash text NOT NULL UNIQUE,
+ can_write boolean NOT NULL DEFAULT false, can_read_evidence boolean NOT NULL DEFAULT false,
+ created_at timestamptz NOT NULL DEFAULT now(), revoked_at timestamptz
+);
+CREATE TABLE workbench.mcp_requests (
+ client_id text NOT NULL REFERENCES workbench.mcp_clients(id), request_id text NOT NULL,
+ input_hash text NOT NULL, task_id text NOT NULL REFERENCES workbench.tasks(id),
+ PRIMARY KEY(client_id,request_id)
+);
+CREATE TABLE workbench.mcp_audit (
+ id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, client_id text NOT NULL REFERENCES workbench.mcp_clients(id),
+ tool text NOT NULL, object_id text, result text NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX mcp_audit_time_idx ON workbench.mcp_audit(occurred_at);
 ` }]
 
 export async function migrate(pool: Pool) {

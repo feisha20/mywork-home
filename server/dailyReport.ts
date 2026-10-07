@@ -224,6 +224,9 @@ export class DailyReportService {
   async generateQueued(day: string): Promise<DailyReport> {
     while (true) {
       await this.active?.promise.catch(() => {})
+      // 外部助手保存视为人工编辑；新增日志由用户主动补充，自动任务保留正文。
+      const saved = await this.store.dailyReport(day)
+      if (saved?.edited) return saved
       try { return await this.generate(day, 'append') }
       catch (error) { if (error instanceof DailyReportError && error.statusCode === 409 && this.active) continue; throw error }
     }

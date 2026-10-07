@@ -10,8 +10,8 @@ export async function copyReportText(text: string): Promise<void> {
   field.value = text
   field.readOnly = true
   field.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;'
-  // 原生模态窗口之外的元素不可聚焦，兼容复制框应放进当前日报窗口。
-  const container = document.querySelector('dialog.daily-report-dialog[open]') ?? document.body
+  // 原生模态窗口之外的元素不可聚焦，兼容复制框应放进当前打开的窗口。
+  const container = document.querySelector('dialog[open]') ?? document.body
   container.appendChild(field)
   try {
     field.focus({ preventScroll: true })

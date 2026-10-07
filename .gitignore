@@ -69,3 +69,9 @@ gemini-records/
 /test-artifacts/
 *.heapsnapshot
 *.cpuprofile
+
+# MCP 个人客户端配置与调试产物可能含令牌或工作资料
+mcp-client*.json
+mcp-client*.toml
+.mcp.local.json
+/mcp-debug/

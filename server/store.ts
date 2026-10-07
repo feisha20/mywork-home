@@ -16,7 +16,7 @@ function jobFromRow(row: any): ReportJob {
     scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
     error: row.last_error, finishedAt: row.finished_at ? new Date(row.finished_at).toISOString() : null }
 }
-function taskFromRow(row: any): Task {
+export function taskFromRow(row: any): Task {
   return { id: row.id, reference: row.reference, source: row.source, title: row.title,
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,

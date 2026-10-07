@@ -57,6 +57,7 @@ export interface PeriodicReportModel {
   revision: number
   edited: boolean
   needsRefresh?: boolean
+  mcpMaterialFingerprint?: string
 }
 
 function pad(num: number): string {

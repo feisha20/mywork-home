@@ -37,6 +37,15 @@ const generator = (): DailyReportGenerator => ({ generateDailyReport: vi.fn(asyn
   taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...input.map((task) => task.id)])].sort() }]), close: vi.fn(async () => {}) })
 
 describe('工作日报的汇总范围与完整性', () => {
+  it('自动报告队列保留外部助手已编辑的日报，不调用模型或改写保存内容', async () => {
+    const store = inputStore(), model = generator()
+    const saved: DailyReport = { day, generatedAt: '2026-10-01T05:00:00Z', items: grouped, recordCount: records.length,
+      revision: 1, edited: true, recordVersions: Object.fromEntries(records.map((task) => [task.id, reportRecordVersion(task)])) }
+    await store.saveDailyReport(saved, 0)
+    const service = new DailyReportService(store, model)
+    expect(await service.generateQueued(day)).toEqual(saved)
+    expect(model.generateDailyReport).not.toHaveBeenCalled()
+  })
   it('禅道管理工作使用本地模板，初次及追加不向模型发送管理事实或历史摘要', async () => {
     const batch = managementBatch()
     const risk = evaluateManagement(batch, defaultZentaoManagement).risks[0]

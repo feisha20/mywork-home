@@ -1,7 +1,7 @@
 import { defaultPeriodicReportSchedule, type SettingsUpdate, type WorkbenchSettings } from '../../shared/settings'
 import { defaultZentaoManagement } from '../../shared/zentaoManagement'
 
-export type SettingsTab = 'model' | 'channels' | 'automation'
+export type SettingsTab = 'model' | 'channels' | 'automation' | 'mcp'
 
 export function settingsDraft(settings: WorkbenchSettings): SettingsUpdate {
   return { revision: settings.revision, model: { baseUrl: settings.model.baseUrl, name: settings.model.name, apiKey: '', clearApiKey: false },

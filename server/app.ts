@@ -14,6 +14,7 @@ import type { ReportAutomation } from './reportAutomation.js'
 import { SettingsError } from './settings.js'
 import { isRecordInReport } from '../shared/dailyReports.js'
 import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
+import { registerMcp } from './mcp.js'
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
   title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable(), isPersonal: z.boolean().optional() })
@@ -200,6 +201,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     const { id } = z.object({ id: z.uuid() }).parse(request.params)
     return await store.run(id) ?? reply.code(404).send({ error: '同步记录不存在' })
   })
+  await registerMcp(app, config, store, sync)
   if (existsSync(config.STATIC_DIR)) {
     await app.register(fastifyStatic, { root: config.STATIC_DIR })
     app.setNotFoundHandler((request, reply) => {

@@ -17,7 +17,7 @@ try {
   url.username = name; url.password = password
   const env = { ...process.env, TEST_DATABASE_URL: url.toString(), RUN_DATABASE_TESTS: 'true' }
   delete env.WORKBENCH_ADMIN_DATABASE_URL
-  await run(process.execPath, ['node_modules/vitest/vitest.mjs','run','server/integration.test.ts'], undefined, env, true)
+  await run(process.execPath, ['node_modules/vitest/vitest.mjs','run','server/integration.test.ts','server/mcp.integration.test.ts','--no-file-parallelism'], undefined, env, true)
 } catch { console.error('本机隔离数据库测试未完成，请检查测试输出与 PostgreSQL 容器；业务数据库未参与测试。'); process.exitCode = 1 }
 finally {
   // 即使初始化中途失败也只尝试删除本次唯一名称，不影响任何已有库或角色。

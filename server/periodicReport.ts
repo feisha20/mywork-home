@@ -50,7 +50,7 @@ export class PeriodicReportService {
     const { bounds, tasks, dailyReports } = await this.material(type, key)
     const baseline = previous ?? synthesizePeriodicReport(type, bounds, dailyReports, tasks)
     const saved = await this.store.savePeriodicReport({ ...baseline, markdown, sections: periodicMarkdownSections(markdown),
-      edited: true, needsRefresh: false, stats: aggregatePeriodData(bounds.startDate, bounds.endDate, dailyReports, tasks).stats,
+      edited: true, needsRefresh: false, mcpMaterialFingerprint: undefined, stats: aggregatePeriodData(bounds.startDate, bounds.endDate, dailyReports, tasks).stats,
       generatedAt: new Date().toISOString() }, expectedRevision, tasks)
     if (!saved) throw new PeriodicReportError('报告已被其他请求更新，当前编辑内容已保留', 409)
     return saved

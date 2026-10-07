@@ -29,6 +29,7 @@ export interface DailyReport {
   items: DailyReportItem[]
   revision: number
   recordVersions: Record<string, string>
+  edited?: boolean
 }
 
 export type SyncPhase = 'scanning' | 'extracting' | 'saving' | 'idle'

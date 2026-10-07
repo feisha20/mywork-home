@@ -99,7 +99,7 @@ export function DailyReportDialog({ day, records, savedReport, onSaved, onClose 
       {pending && <div className="daily-report-progress" role="status"><span className="report-spinner" aria-hidden="true" /><div><p>正在读取或整理工作日报…</p><span>已有日报直接读取，补充时仅整理未纳入的工作记录。</span></div></div>}
       {error && <p className="daily-report-error" role="alert">{error}</p>}
       {report && <section className="daily-report-preview" aria-label="工作日报正文">
-        <p className="daily-report-meta">已保存 · 已整理 {report.recordCount} 条记录，汇总为 {report.items.length} 项工作</p>
+        <p className="daily-report-meta">已保存{report.edited ? ' · 助手编辑，自动整理保留正文' : ''} · 已整理 {report.recordCount} 条记录，汇总为 {report.items.length} 项工作</p>
         <h3>{dailyReportTitle(report.day)}</h3>
         <ol>{report.items.map((item, index) => <li key={index}>{item.text}</li>)}</ol>
         {!report.items.length && <p>已排除个人事项，当前暂无已整理的工作摘要。</p>}

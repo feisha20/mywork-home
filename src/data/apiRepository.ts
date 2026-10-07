@@ -89,3 +89,9 @@ export const fetchScheduledTasks = () => request<import('../../shared/scheduledT
 export const saveScheduledTask = (input: import('../../shared/scheduledTasks').ScheduledTaskInput, id?: string) =>
   request<import('../../shared/scheduledTasks').ScheduledTaskPlan>(id ? `/scheduled-tasks/${encodeURIComponent(id)}` : '/scheduled-tasks', { method: id ? 'PUT' : 'POST', body: JSON.stringify(input) })
 export const deleteScheduledTask = (id: string) => request<{ deleted: boolean }>(`/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
+
+export const fetchMcpSettings = (signal?: AbortSignal) => request<import('../../shared/mcp').McpSettingsView>('/mcp/settings', { signal })
+export const setMcpEnabled = (enabled: boolean) => request<import('../../shared/mcp').McpSettingsView>('/mcp/settings', { method: 'PUT', body: JSON.stringify({ enabled }) })
+export const createMcpClient = (input: { name: string; canWrite: boolean; canReadEvidence: boolean }) =>
+  request<{ client: import('../../shared/mcp').McpClientView; token: string }>('/mcp/clients', { method: 'POST', body: JSON.stringify(input) })
+export const revokeMcpClient = (id: string) => request<{ revoked: boolean }>(`/mcp/clients/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })
