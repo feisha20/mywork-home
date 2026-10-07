@@ -5,6 +5,20 @@ beforeEach(() => vi.useFakeTimers())
 afterEach(() => vi.useRealTimers())
 
 describe('工作台自适应轮询', () => {
+  it('通知开启时允许后台检查，关闭后停止后台请求', async () => {
+    let notificationsEnabled = true
+    const refresh = vi.fn(async () => ({ running: false }))
+    const poller = createAdaptivePolling(refresh, () => notificationsEnabled)
+    await poller.refreshNow()
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    notificationsEnabled = false; poller.pause()
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    notificationsEnabled = true; await poller.refreshNow()
+    expect(refresh).toHaveBeenCalledTimes(3)
+    poller.stop()
+  })
   it('空闲每 30 秒读取，抽取中每 5 秒读取，结束后恢复空闲频率', async () => {
     let running = false
     const refresh = vi.fn(async () => ({ running }))

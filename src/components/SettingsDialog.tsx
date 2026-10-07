@@ -19,7 +19,17 @@ const messageOf = (error: unknown) => error instanceof Error ? error.message : '
 const collectorOptions = Object.entries(COLLECTORS).map(([value, label]) => ({ value: value as CollectorKind, label }))
 const compatibleOptions = collectorOptions.filter((option) => ['auto', 'generic', 'none'].includes(option.value))
 
-export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSaved: (settings: WorkbenchSettings) => void }) {
+interface SettingsDialogProps {
+  onClose: () => void
+  onSaved: (settings: WorkbenchSettings) => void
+  notificationsEnabled: boolean
+  requestingNotifications: boolean
+  notificationDescription: string
+  onToggleNotifications: () => void
+}
+
+export function SettingsDialog({ onClose, onSaved, notificationsEnabled, requestingNotifications,
+  notificationDescription, onToggleNotifications }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
   const [saved, setSaved] = useState<WorkbenchSettings | null>(null)
@@ -200,7 +210,7 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
           <span className="settings-nav-label">个人工作空间</span>
           <button type="button" className={tab === 'model' ? 'is-active' : ''} aria-current={tab === 'model' ? 'page' : undefined} onClick={() => setTab('model')}><Icon name="model" /><span>模型配置<small>大模型连接与密钥</small></span></button>
           <button type="button" className={tab === 'channels' ? 'is-active' : ''} aria-current={tab === 'channels' ? 'page' : undefined} onClick={() => setTab('channels')}><Icon name="sources" /><span>采集源<small>渠道、顺序与路径</small></span>{draft && <b>{draft.channels.length}</b>}</button>
-          <button type="button" className={tab === 'automation' ? 'is-active' : ''} aria-current={tab === 'automation' ? 'page' : undefined} onClick={() => setTab('automation')}><Icon name="clock" /><span>自动化<small>自动采集与定时日报</small></span></button>
+          <button type="button" className={tab === 'automation' ? 'is-active' : ''} aria-current={tab === 'automation' ? 'page' : undefined} onClick={() => setTab('automation')}><Icon name="clock" /><span>自动化<small>采集、通知与定时报告</small></span></button>
           <p className="settings-nav-note"><Icon name="check" />设置保存在本机<br />刷新、重启后依然保留</p>
         </nav>
         <div className="settings-content">
@@ -271,7 +281,17 @@ export function SettingsDialog({ onClose, onSaved }: { onClose: () => void; onSa
                 return <span className="settings-preview-channel" key={slot.id}>{slot.overflow ? <span className="settings-preview-more">+{slot.sources.length}</span> : <ChannelLogo logo={entry.logo} name={entry.name} size={32} />}<small>{slot.overflow ? '更多' : entry.name}</small></span>
               })}</div></section>
             </div> : <div className="settings-automation-page">
-              <div className="settings-section-heading"><div><h3>自动化</h3><p>配置自动采集与定时生成日报</p></div></div>
+              <div className="settings-section-heading"><div><h3>自动化</h3><p>配置自动采集、待办通知与定时报告</p></div></div>
+              <section className="settings-automation-card" aria-labelledby="settings-notifications-heading">
+                <div className="settings-section-heading">
+                  <div><h4 id="settings-notifications-heading">待办通知</h4><p>禅道同步或计划任务产生新待办时，发送 Mac 系统通知</p></div>
+                  <button type="button" role="switch" aria-checked={notificationsEnabled} aria-label="待办通知"
+                    className={`settings-switch${notificationsEnabled ? ' is-on' : ''}`} disabled={requestingNotifications}
+                    onClick={onToggleNotifications}><span /></button>
+                </div>
+                <p className="settings-help" role="status">{requestingNotifications ? '正在开启通知…' : notificationDescription}</p>
+                <p className="settings-help">此开关立即生效，仅保存在当前浏览器，无需点击保存。历史待办不提醒，后台运行可能延迟，关闭工作台后停止接收。</p>
+              </section>
               <section className="settings-automation-card" aria-labelledby="settings-sync-heading">
                 <div className="settings-section-heading"><div><h4 id="settings-sync-heading">自动采集</h4><p>定时检查各渠道的待办、会话与工作进展</p></div><button type="button" role="switch" aria-checked={draft.sync.enabled} aria-label="自动采集" className={`settings-switch${draft.sync.enabled ? ' is-on' : ''}`} onClick={() => setDraft((current) => current && { ...current, sync: { ...current.sync, enabled: !current.sync.enabled } })}><span /></button></div>
                 <label className="settings-interval">采集间隔<div><input type="number" min={1} max={1440} step={1} value={draft.sync.intervalMs / 60000} onChange={(event) => setDraft((current) => current && { ...current, sync: { ...current.sync, intervalMs: Number(event.target.value) * 60000 } })} /><span>分钟</span></div></label>

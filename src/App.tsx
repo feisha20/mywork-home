@@ -5,6 +5,7 @@ import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
 import { mergeDailyReports } from '../shared/dailyReports'
 import { createTask, deleteTask, fetchWorkbench, handleManagementTask, migrateLegacyTasks, startSync, updateTask, updateTaskPersonal, updateTaskPinned } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
+import { useTaskNotifications } from './data/useTaskNotifications'
 import { changedCaptureDestinations } from './domain/captureFlow'
 import { CaptureOutput } from './components/CaptureOutput'
 import type { CaptureOutputEvent } from './components/CaptureOutput'
@@ -27,6 +28,9 @@ const busPaths = ['M 100 240 L 460 240 L 520 280 L 700 280', 'M 100 420 L 480 42
 const phaseLabels = { inbound: '待办正在汇入核心', orbit: '核心正在处理 · 环轨加速', outbound: '正在收进今天的日报', idle: '工作流就绪，等待下一次推进' }
 
 export default function App() {
+  const { enabled: notificationsEnabled, active: notificationsActive, requesting: requestingNotifications,
+    description: notificationDescription, toggle: toggleNotifications, notify, canNotify } = useTaskNotifications()
+  const previousNotificationsActive = useRef(notificationsActive)
   const [state, setState] = useState<WorkbenchState>({ version: 1, tasks: [] })
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot | null>(null)
   const [scheduledTasksOpen, setScheduledTasksOpen] = useState(false)
@@ -66,6 +70,7 @@ export default function App() {
     const version = mutationVersion.current
     try {
       const result = await fetchWorkbench()
+      notify(result.tasks)
       setSnapshot((current) => {
         const next = { ...result, dailyReports: mergeDailyReports(current?.dailyReports ?? [], result.dailyReports ?? []) }
         return JSON.stringify(current) === JSON.stringify(next) ? current : next
@@ -85,7 +90,7 @@ export default function App() {
       return result
     } catch (cause) { connectionError.current = true; setConnected(false); setError(cause instanceof Error ? cause.message : '工作台加载失败'); return null }
     finally { refreshing.current = false }
-  }, [])
+  }, [notify])
   const handleReportSaved = useCallback((report: DailyReport) => {
     setSnapshot((current) => current ? { ...current, dailyReports: mergeDailyReports(current.dailyReports ?? [], [report]).filter((entry) => entry.day === dateKey(new Date())) } : current)
   }, [])
@@ -100,13 +105,13 @@ export default function App() {
         setClock((current) => dateKey(current) === dateKey(now) ? current : now)
       }
       return result ? { running: result.harness.run?.status === 'running' } : null
-    }, () => !document.hidden)
+    }, () => !document.hidden || canNotify())
     pollerRef.current = poller
     const resume = () => { if (ready) void poller.refreshNow() }
     const visibilityChanged = () => {
       setPageVisible(!document.hidden)
       if (document.hidden) setCaptureOutputs([])
-      if (document.hidden) poller.pause()
+      if (document.hidden && !canNotify()) poller.pause()
       else resume()
     }
     document.addEventListener('visibilitychange', visibilityChanged)
@@ -121,7 +126,13 @@ export default function App() {
       document.removeEventListener('visibilitychange', visibilityChanged)
       window.removeEventListener('focus', resume)
     }
-  }, [refresh])
+  }, [refresh, canNotify])
+  useEffect(() => {
+    if (previousNotificationsActive.current === notificationsActive) return
+    previousNotificationsActive.current = notificationsActive
+    if (document.hidden && !notificationsActive) pollerRef.current?.pause()
+    else void pollerRef.current?.refreshNow()
+  }, [notificationsActive])
   useEffect(() => {
     if (!recentId) return
     const timer = window.setTimeout(() => setRecentId(null), 2500)
@@ -238,7 +249,7 @@ export default function App() {
           onOpenSettings={() => setSettingsOpen(true)}
         /></Suspense>
         {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+      {settingsOpen && <SettingsDialog notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       </div>
     )
   }
@@ -266,7 +277,7 @@ export default function App() {
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
       {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+      {settingsOpen && <SettingsDialog notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
     </div>
