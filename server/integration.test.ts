@@ -9,6 +9,8 @@ import type { FastifyInstance } from 'fastify'
 import { loadConfig } from './config.js'
 import { migrate } from './migrations.js'
 import { Store } from './store.js'
+import { ScheduledTasks } from './scheduledTasks.js'
+import type { ScheduledTaskInput } from '../shared/scheduledTasks.js'
 import { SyncService } from './sync.js'
 import { createApp } from './app.js'
 import type { Extractor } from './harness.js'
@@ -76,6 +78,62 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect(task.recordedAt).toBe('2026-09-25T03:20:00.000Z')
     expect(task.completedAt).toBeNull()
     expect(task.evidence).toEqual(evidence)
+  })
+  it('计划接口支持持久化、编辑与删除，拒绝无效计划和不存在的编号', async () => {
+    const input: ScheduledTaskInput = { title: '提交 OKR', frequency: 'monthly', time: '09:00', weekday: 5, day: 1, month: 1, quarterMonth: 1,
+      startDate: '2090-01-01', endDate: null, enabled: true, isPersonal: false }
+    expect((await app.inject({ method: 'POST', url: '/api/scheduled-tasks', payload: { ...input, time: '25:00' } })).statusCode).toBe(400)
+    const created = await app.inject({ method: 'POST', url: '/api/scheduled-tasks', payload: input })
+    expect(created.statusCode).toBe(201)
+    const plan = created.json()
+    expect(plan.nextAt).toBe('2090-01-01T01:00:00.000Z')
+    expect((await new ScheduledTasks(new Store(pool)).list()).some((item) => item.id === plan.id)).toBe(true)
+    const edited = await app.inject({ method: 'PUT', url: `/api/scheduled-tasks/${plan.id}`, payload: { ...input, title: '审核部门 OKR', enabled: false } })
+    expect(edited.json()).toMatchObject({ title: '审核部门 OKR', nextAt: null })
+    expect((await app.inject({ url: '/api/scheduled-tasks' })).json().some((item: any) => item.id === plan.id)).toBe(true)
+    expect((await app.inject({ method: 'DELETE', url: `/api/scheduled-tasks/${plan.id}`, payload: {} })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'PUT', url: `/api/scheduled-tasks/${plan.id}`, payload: input })).statusCode).toBe(404)
+  })
+  it('计划并发补齐、完成和删除不重复生成，暂停恢复和删除计划保留已有待办', async () => {
+    const service = new ScheduledTasks(store)
+    const input: ScheduledTaskInput = { title: '定期提交日报', frequency: 'daily', time: '09:00', weekday: 5, day: 1, month: 1, quarterMonth: 1,
+      startDate: '2026-01-01', endDate: null, enabled: true, isPersonal: true }
+    const plan = (await service.save(input, undefined, new Date('2026-01-01T00:00:00Z')))!
+    const at = new Date('2026-01-03T01:00:00Z')
+    await Promise.all([service.generateDue(at), new ScheduledTasks(new Store(pool)).generateDue(at)])
+    const generated = (await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)
+    expect(generated).toHaveLength(3)
+    expect(generated.every((task) => task.isPersonal && !task.completedAt && task.source === 'manual')).toBe(true)
+    expect((await store.snapshotTasks('2026-01-03')).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(3)
+    await store.setCompleted(generated[0].id, true)
+    await store.deleteTask(generated[1].id)
+    await service.generateDue(at)
+    expect((await pool.query('SELECT count(*)::int AS count FROM workbench.scheduled_task_occurrences WHERE plan_id=$1', [plan.id])).rows[0].count).toBe(3)
+    expect((await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(2)
+    await service.save({ ...input, enabled: false }, plan.id, at)
+    await service.generateDue(new Date('2026-01-05T02:00:00Z'))
+    expect((await service.list()).find((item) => item.id === plan.id)?.nextAt).toBeNull()
+    const resumed = await service.save(input, plan.id, new Date('2026-01-06T02:00:00Z'))
+    expect(resumed?.nextAt).toBe('2026-01-07T01:00:00.000Z')
+    await service.generateDue(new Date('2026-01-07T01:00:00Z'))
+    expect((await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(3)
+    await service.remove(plan.id)
+    expect((await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(3)
+  })
+  it('计划生成事务失败时待办和游标都回滚，重试后只生成一次', async () => {
+    const service = new ScheduledTasks(store)
+    const input: ScheduledTaskInput = { title: '事务回滚计划', frequency: 'daily', time: '09:00', weekday: 5, day: 1, month: 1, quarterMonth: 1,
+      startDate: '2026-01-01', endDate: '2026-01-01', enabled: true, isPersonal: false }
+    const plan = (await service.save(input, undefined, new Date('2026-01-01T00:00:00Z')))!
+    const original = store.transaction.bind(store)
+    vi.spyOn(store, 'transaction').mockImplementationOnce((action) => original(async (client) => { await action(client); throw new Error('模拟事务失败') }))
+    await expect(service.generateDue(new Date('2026-01-01T02:00:00Z'))).rejects.toThrow('模拟事务失败')
+    expect((await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(0)
+    expect((await service.list()).find((item) => item.id === plan.id)?.nextAt).toBe(plan.nextAt)
+    await service.generateDue(new Date('2026-01-01T02:00:00Z'))
+    expect((await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(1)
+    expect((await service.list()).find((item) => item.id === plan.id)?.nextAt).toBeNull()
+    await service.remove(plan.id)
   })
   it('数据库持久化、重复完成与恢复未完成', async () => {
     expect((await app.inject({ url: '/api/health' })).statusCode).toBe(200)

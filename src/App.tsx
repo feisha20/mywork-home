@@ -20,6 +20,7 @@ import { PerpetualCalendar } from './components/PerpetualCalendar'
 import { UserMenu } from './components/UserMenu'
 import type { WorkbenchSettings } from '../shared/settings'
 
+const ScheduledTasksDialog = lazy(() => import('./components/ScheduledTasksDialog').then((module) => ({ default: module.ScheduledTasksDialog })))
 const PersonalSpace = lazy(() => import('./components/PersonalSpace').then((module) => ({ default: module.PersonalSpace })))
 
 const busPaths = ['M 100 240 L 460 240 L 520 280 L 700 280', 'M 100 420 L 480 420 L 540 320 L 700 320', 'M 700 280 L 880 280 L 940 240 L 1300 240', 'M 700 320 L 860 320 L 920 420 L 1300 420']
@@ -28,6 +29,7 @@ const phaseLabels = { inbound: '待办正在汇入核心', orbit: '核心正在�
 export default function App() {
   const [state, setState] = useState<WorkbenchState>({ version: 1, tasks: [] })
   const [snapshot, setSnapshot] = useState<WorkbenchSnapshot | null>(null)
+  const [scheduledTasksOpen, setScheduledTasksOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [connected, setConnected] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -235,7 +237,8 @@ export default function App() {
           onClose={() => setSpaceOpen(false)}
           onOpenSettings={() => setSettingsOpen(true)}
         /></Suspense>
-        {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+        {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
+      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       </div>
     )
   }
@@ -247,6 +250,7 @@ export default function App() {
         <div className="top-meta">
           <PerpetualCalendar today={today} clock={clock} />
           <UserMenu
+            onOpenScheduledTasks={() => setScheduledTasksOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
             onEnterSpace={() => setSpaceOpen(true)}
           />
@@ -261,6 +265,7 @@ export default function App() {
         <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} onTogglePersonal={handleTogglePersonal} disabled={!connected || changingId !== null || deletingId !== null || classifyingId !== null} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
+      {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}

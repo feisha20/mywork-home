@@ -41,7 +41,7 @@ export function SettingsSelect<Value extends string>({
     if (!expanded) return
     const root = rootRef.current, trigger = triggerRef.current
     if (!root || !trigger) return
-    const scrollArea = root.closest('.settings-content')
+    const scrollArea = root.closest('.settings-content, .scheduled-tasks-body')
     const measure = () => {
       const bounds = trigger.getBoundingClientRect()
       const visible = scrollArea?.getBoundingClientRect()

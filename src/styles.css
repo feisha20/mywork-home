@@ -2419,3 +2419,68 @@ button:focus-visible, input:focus-visible {
 }
 
 .evidence-invalid { opacity: .7; border-left-color: #ca8a04 !important; }
+
+/* 计划任务：左侧管理计划，右侧设定周期；窄屏顺序展示。 */
+.scheduled-tasks-dialog { width: min(980px, calc(100vw - 32px)); height: min(780px, calc(100dvh - 40px)); max-height: calc(100dvh - 40px); margin: auto; padding: 0; border: 1px solid #d8e1ec; border-radius: 24px; background: #fff; color: var(--text-main); box-shadow: 0 24px 90px rgba(22,36,58,.25); overflow: hidden; }
+.scheduled-tasks-dialog[open] { display: flex; flex-direction: column; }
+.scheduled-tasks-dialog::backdrop { background: rgba(28,39,56,.42); backdrop-filter: blur(3px); }
+.scheduled-tasks-dialog svg { width: 18px; height: 18px; flex-shrink: 0; }
+.scheduled-tasks-dialog button, .scheduled-tasks-dialog input, .scheduled-tasks-dialog select { font: inherit; }
+.scheduled-tasks-dialog button { cursor: pointer; }
+.scheduled-tasks-dialog button:disabled { opacity: .5; cursor: default; }
+.scheduled-tasks-dialog button:focus-visible { outline: 2px solid var(--accent-orange); outline-offset: 3px; }
+.scheduled-tasks-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 24px 28px; border-bottom: 1px solid #e6ecf3; }
+.scheduled-tasks-header h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 19px; }
+.scheduled-tasks-header h2 svg { color: var(--accent-orange); }
+.scheduled-tasks-header p { margin: 8px 0 0; color: #7c8a9e; font-size: 12px; }
+.scheduled-icon-button { display: grid; place-items: center; padding: 8px; border: 0; border-radius: 8px; background: #f4f6f9; color: #65748a; }
+.scheduled-tasks-body { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); flex: 1; min-height: 0; overflow-y: auto; }
+.scheduled-plans, .scheduled-editor { min-width: 0; padding: 24px; }
+.scheduled-plans { background: #f8fafc; border-right: 1px solid #e6ecf3; }
+.scheduled-tasks-dialog h3 { margin: 0 0 18px; font-size: 14px; }
+.scheduled-section-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.scheduled-section-heading h3 span { margin-left: 6px; color: #8996a8; font-weight: 400; }
+.scheduled-section-heading button { display: flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--accent-orange); font-size: 12px; }
+.scheduled-plan { padding: 16px; margin-bottom: 12px; background: #fff; border: 1px solid #e1e7ef; border-radius: 14px; }
+.scheduled-plan.is-editing { border-color: #ffb38d; }
+.scheduled-plan-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; font-size: 13px; }
+.scheduled-plan-title strong { overflow-wrap: anywhere; line-height: 1.6; }
+.scheduled-plan-title span { flex-shrink: 0; padding: 3px 7px; border-radius: 6px; background: #f1f4f8; color: #8c98aa; font-size: 10px; }
+.scheduled-plan-title span.is-enabled { background: #eaf8f2; color: #25a37b; }
+.scheduled-plan p { margin: 10px 0 6px; font-size: 12px; color: #64748b; }
+.scheduled-plan small { font-size: 11px; color: #8896a9; }
+.scheduled-plan-actions { display: flex; gap: 8px; margin-top: 14px; }
+.scheduled-plan-actions button, .scheduled-delete button { padding: 5px 10px; border: 1px solid #dfe5ee; border-radius: 7px; background: #fff; color: #64748b; font-size: 11px; }
+.scheduled-delete { margin-top: 12px; padding-top: 8px; border-top: 1px solid #eee; }
+.scheduled-delete button { margin-right: 8px; }
+.scheduled-delete button:first-of-type { color: #d65a32; border-color: #ffcaa8; }
+.scheduled-empty { font-size: 12px; line-height: 1.9; color: #8996a8; padding: 24px 4px; }
+.scheduled-editor fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.scheduled-templates { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+.scheduled-templates button { padding: 6px 9px; border: 1px solid #f6dcc6; border-radius: 7px; background: #fff9f3; color: #ac704b; font-size: 11px; }
+.scheduled-editor label { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; color: #526176; font-size: 12px; }
+.scheduled-editor input:not([type=checkbox]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px; border: 1px solid #dfe5ee; border-radius: 9px; background: #fff; color: #37445a; outline: none; }
+.scheduled-editor input:focus { border-color: #f4aa8e; box-shadow: 0 0 0 3px rgba(255,104,56,.08); }
+.scheduled-editor .settings-field { gap: 8px; margin-bottom: 18px; font-weight: 400; }
+.scheduled-editor .settings-field > label { margin-bottom: 0; }
+.scheduled-editor .settings-select-trigger:disabled { opacity: 1; background: #f8fafc; color: #8290a1; }
+.scheduled-field-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 14px; }
+.scheduled-editor .scheduled-checkbox { flex-direction: row; align-items: center; gap: 8px; margin-bottom: 12px; }
+.scheduled-checkbox input { accent-color: var(--accent-orange); }
+.scheduled-preview { display: flex; align-items: center; gap: 8px; margin-top: 20px; padding: 12px; border-radius: 9px; background: #fff7ed; color: #ba6a39; font-size: 12px; line-height: 1.6; }
+.scheduled-help { color: #8996a8; font-size: 11px; line-height: 1.8; }
+.scheduled-save { display: flex; gap: 10px; margin-top: 18px; }
+.scheduled-save button { padding: 10px 18px; border: 1px solid #ffccb2; border-radius: 9px; background: #fff6ed; color: #dc6538; font-size: 12px; }
+.scheduled-save button + button { background: #fff; color: #7c8a9e; border-color: #dfe5ee; }
+.scheduled-message { margin: 0; padding: 12px 28px; font-size: 12px; color: #259472; background: #effaf5; }
+.scheduled-message.is-error { color: #c45335; background: #fff3ed; }
+.scheduled-tasks-footer { padding: 14px 24px; border-top: 1px solid #e6ecf3; font-size: 11px; color: #8896a9; line-height: 1.7; }
+.scheduled-task-date { margin: 0 0 10px; color: #8a97aa; font-size: 11px; }
+@media (max-width: 700px) {
+  .scheduled-tasks-dialog { width: calc(100vw - 16px); height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); border-radius: 17px; }
+  .scheduled-tasks-header { padding: 18px; }
+  .scheduled-tasks-body { grid-template-columns: minmax(0,1fr); }
+  .scheduled-plans, .scheduled-editor { padding: 18px; }
+  .scheduled-plans { border-right: 0; border-bottom: 1px solid #e6ecf3; }
+  .scheduled-tasks-footer { padding: 12px 18px; }
+}

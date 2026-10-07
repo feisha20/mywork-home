@@ -10,7 +10,7 @@ import type { ZentaoSnapshot, ZentaoTrackedItem } from './zentao.js'
 import { ZentaoManagementStore, visibleManagementSql } from './zentaoManagementStore.js'
 
 const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
-const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_pinned,is_personal,personal_origin,evidence_stale,zentao,management,jsonb_array_length(evidence) AS evidence_count'
+const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_pinned,is_personal,personal_origin,evidence_stale,zentao,management,scheduled_plan,jsonb_array_length(evidence) AS evidence_count'
 function jobFromRow(row: any): ReportJob {
   return { id: row.id, kind: row.kind, day: new Date(row.day).toISOString().slice(0,10), periodKey: row.period_key,
     scheduledAt: new Date(row.scheduled_at).toISOString(), status: row.status, attempts: row.attempts,
@@ -21,7 +21,7 @@ function taskFromRow(row: any): Task {
     createdAt: new Date(row.created_at).toISOString(), completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
     recordedAt: row.recorded_at ? new Date(row.recorded_at).toISOString() : null,
     projectPath: row.project_path, statusOrigin: row.status_origin, isPinned: Boolean(row.is_pinned), isPersonal: Boolean(row.is_personal), personalOrigin: row.personal_origin,
-    evidence: row.evidence, zentao: row.zentao, management: row.management,
+    scheduledPlan: row.scheduled_plan, evidence: row.evidence, zentao: row.zentao, management: row.management,
     evidenceCount: row.evidence_count === undefined ? undefined : Number(row.evidence_count), evidenceStale: Boolean(row.evidence_stale) }
 }
 

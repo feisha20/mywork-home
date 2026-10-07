@@ -8,6 +8,7 @@ import { createApp } from './app.js'
 import { DailyReportService } from './dailyReport.js'
 import { PeriodicReportService } from './periodicReport.js'
 import { ReportAutomation } from './reportAutomation.js'
+import { ScheduledTasks } from './scheduledTasks.js'
 import { SettingsService } from './settings.js'
 
 const config = loadConfig()
@@ -22,7 +23,8 @@ const reports = new DailyReportService(store, new HarnessExtractor(config, 'dail
 const periodic = new PeriodicReportService(store)
 await periodic.restoreOriginalFormat()
 const automation = new ReportAutomation(store, settings, reports, periodic, () => sync.waitForIdle())
-const app = await createApp(config, store, sync, reports, periodic, automation)
+const scheduled = new ScheduledTasks(store)
+const app = await createApp(config, store, sync, reports, periodic, automation, scheduled)
 let closing = false
 async function shutdown() {
   if (closing) return
@@ -34,6 +36,7 @@ async function shutdown() {
 process.on('SIGTERM', () => void shutdown())
 process.on('SIGINT', () => void shutdown())
 await app.listen({ host: config.HOST, port: config.PORT })
+scheduled.start()
 await sync.start()
 automation.start()
 console.log(`工作台已启动：http://${config.HOST}:${config.PORT}`)

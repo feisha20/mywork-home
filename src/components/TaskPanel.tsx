@@ -49,7 +49,7 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
           >
             <div className="daily-log-top">
               <div className="daily-log-source-group">
-                <span className="daily-log-source">{task.management ? '禅道 · 测试管理' : task.sourceLabel ?? sourceInfo(task.source).label}</span>
+                <span className="daily-log-source">{task.management ? '禅道 · 测试管理' : task.scheduledPlan ? '计划任务' : task.sourceLabel ?? sourceInfo(task.source).label}</span>
                 <TaskReference task={task} />
               </div>
               <button type="button" className={`pin-task${task.isPinned ? ' is-pinned' : ''}`} disabled={busy}
@@ -59,6 +59,7 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
               </button>
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
+            {task.scheduledPlan && <p className="scheduled-task-date">计划时间：{new Date(task.scheduledPlan.scheduledAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</p>}
             <ZentaoTaskDetails task={task} />
             <ManagementDetails task={task} />
             <div className="daily-log-actions">

@@ -84,3 +84,8 @@ export const fetchReportJobs = (signal?: AbortSignal) => request<ReportJob[]>('/
 export const retryReportJob = (id: string) => request<{ queued: boolean }>(`/report-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' })
 
 export const fetchDailyReportStatus = (day: string, signal?: AbortSignal) => request<{ recordCount: number; unorganizedCount: number }>(`/daily-reports/${encodeURIComponent(day)}/status`, { signal })
+
+export const fetchScheduledTasks = () => request<import('../../shared/scheduledTasks').ScheduledTaskPlan[]>('/scheduled-tasks')
+export const saveScheduledTask = (input: import('../../shared/scheduledTasks').ScheduledTaskInput, id?: string) =>
+  request<import('../../shared/scheduledTasks').ScheduledTaskPlan>(id ? `/scheduled-tasks/${encodeURIComponent(id)}` : '/scheduled-tasks', { method: id ? 'PUT' : 'POST', body: JSON.stringify(input) })
+export const deleteScheduledTask = (id: string) => request<{ deleted: boolean }>(`/scheduled-tasks/${encodeURIComponent(id)}`, { method: 'DELETE', body: '{}' })

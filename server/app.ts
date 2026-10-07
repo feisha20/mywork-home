@@ -1,4 +1,6 @@
 import Fastify from 'fastify'
+import { ScheduledTasks } from './scheduledTasks.js'
+import { scheduledTaskSchema } from '../shared/scheduledTasks.js'
 import fastifyStatic from '@fastify/static'
 import { existsSync } from 'node:fs'
 import { z } from 'zod'
@@ -18,9 +20,10 @@ const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), sour
 
 export async function createApp(config: Config, store: Store, sync: SyncService,
   reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config)),
-  periodic = new PeriodicReportService(store), automation?: ReportAutomation) {
+  periodic = new PeriodicReportService(store), automation?: ReportAutomation, scheduled = new ScheduledTasks(store)) {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 })
   app.addHook('onClose', () => reports.close())
+  app.addHook('onClose', () => scheduled.close())
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api/')) return
     const origin = request.headers.origin
@@ -46,6 +49,20 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     catch { return reply.code(503).send({ status: 'unavailable' }) }
   })
   app.get('/api/workbench', () => sync.snapshot())
+  app.get('/api/scheduled-tasks', () => scheduled.list())
+  app.post('/api/scheduled-tasks', async (request, reply) => {
+    const plan = await scheduled.save(scheduledTaskSchema.parse(request.body))
+    return reply.code(201).send(plan)
+  })
+  app.put('/api/scheduled-tasks/:id', async (request, reply) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params)
+    return await scheduled.save(scheduledTaskSchema.parse(request.body), id)
+      ?? reply.code(404).send({ error: '计划任务不存在' })
+  })
+  app.delete('/api/scheduled-tasks/:id', async (request, reply) => {
+    const { id } = z.object({ id: z.uuid() }).parse(request.params)
+    return await scheduled.remove(id) ? { deleted: true } : reply.code(404).send({ error: '计划任务不存在' })
+  })
   app.get('/api/tasks/management', async (request) => {
     const query = z.object({ state: z.enum(['pending', 'completed', 'ignored', 'resolved']).default('pending'),
       projectId: z.string().max(100).optional(), executionId: z.string().max(100).optional(), severity: z.enum(['red', 'yellow', 'gray']).optional(),

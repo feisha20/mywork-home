@@ -23,6 +23,7 @@ export interface Task {
   id: string
   reference: string
   source: SourceId
+  scheduledPlan?: { id: string; scheduledAt: string } | null
   sourceLabel?: string
   title: string
   createdAt: string

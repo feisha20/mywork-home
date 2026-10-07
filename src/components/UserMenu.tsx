@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from './Icon'
 
 interface UserMenuProps {
+  onOpenScheduledTasks: () => void
   onOpenSettings: () => void
   onEnterSpace: () => void
 }
 
-export function UserMenu({ onOpenSettings, onEnterSpace }: UserMenuProps) {
+export function UserMenu({ onOpenSettings, onEnterSpace, onOpenScheduledTasks }: UserMenuProps) {
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -73,6 +74,13 @@ export function UserMenu({ onOpenSettings, onEnterSpace }: UserMenuProps) {
               <span className="user-menu-item-desc">全屏沉淀工作周报与月报复盘</span>
             </div>
             <span className="user-menu-badge">全屏</span>
+          </button>
+          <button type="button" role="menuitem" className="user-menu-item" onClick={() => { setOpen(false); onOpenScheduledTasks() }}>
+            <span className="user-menu-item-icon"><Icon name="calendar" /></span>
+            <div className="user-menu-item-content">
+              <span className="user-menu-item-title">计划任务</span>
+              <span className="user-menu-item-desc">按周期自动生成日报、OKR 等待办</span>
+            </div>
           </button>
           <button
             type="button"

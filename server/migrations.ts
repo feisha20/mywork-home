@@ -136,6 +136,19 @@ UPDATE workbench.tasks SET management=management || jsonb_build_object(
 ` }, { version: 12, sql: `
 -- 置顶是本地展示偏好，多个待办可独立置顶，采集同步不覆盖此字段。
 ALTER TABLE workbench.tasks ADD COLUMN is_pinned boolean NOT NULL DEFAULT false;
+` }, { version: 13, sql: `
+-- 计划与发生记录分开保存，完成或删除待办不会再次生成同一期。
+CREATE TABLE workbench.scheduled_tasks (
+ id text PRIMARY KEY, data jsonb NOT NULL, next_at timestamptz,
+ created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX scheduled_tasks_due_idx ON workbench.scheduled_tasks(next_at) WHERE next_at IS NOT NULL;
+CREATE TABLE workbench.scheduled_task_occurrences (
+ plan_id text NOT NULL REFERENCES workbench.scheduled_tasks(id) ON DELETE CASCADE,
+ scheduled_at timestamptz NOT NULL, task_id text NOT NULL,
+ PRIMARY KEY(plan_id,scheduled_at)
+);
+ALTER TABLE workbench.tasks ADD COLUMN scheduled_plan jsonb;
 ` }]
 
 export async function migrate(pool: Pool) {
