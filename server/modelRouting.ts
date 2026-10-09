@@ -1,3 +1,4 @@
+import { modelApiFormat } from '../shared/modelApi.js'
 import type { ModelRuntimeStatus } from '../shared/settings.js'
 import type { Config } from './config.js'
 
@@ -8,11 +9,11 @@ export class ModelRouter {
   private lastUsedIdentity: string | null = null
   private failures = new Map<string, number>()
   private active = new Map<string, number>()
-  private identity(model: Model) { return JSON.stringify([model.id, model.baseUrl, model.name, model.apiKey]) }
+  private identity(model: Model) { return JSON.stringify([model.id, model.baseUrl, model.name, model.apiKey, modelApiFormat(model.apiFormat)]) }
   candidates(config: Config): Model[] {
     for (const [key, until] of this.failures) if (until <= Date.now()) this.failures.delete(key)
     const models = (config.models ?? [{ id: 'default', label: '默认模型', enabled: true,
-      baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }])
+      apiFormat: config.WORKBENCH_LLM_API_FORMAT, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }])
       .filter((model) => model.enabled && model.apiKey)
     if (!config.autoSwitchModels) return models.slice(0, 1)
     const ready = models.filter((model) => (this.failures.get(this.identity(model)) ?? 0) <= Date.now())
@@ -21,7 +22,7 @@ export class ModelRouter {
   status(config: Config): ModelRuntimeStatus {
     const next = this.candidates(config)[0]
     const models = config.models ?? [{ id: 'default', label: '默认模型', enabled: true,
-      baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }]
+      apiFormat: config.WORKBENCH_LLM_API_FORMAT, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }]
     return {
       ...(this.active.size ? { activeModelIds: models.filter((model) => this.active.has(this.identity(model))).map((model) => model.id) } : {}),
       preferredModelId: models.find((model) => model.enabled && model.apiKey)?.id ?? null,
@@ -45,7 +46,7 @@ export class ModelRouter {
       this.active.set(identity, (this.active.get(identity) ?? 0) + 1)
       try {
         const result = await request({ ...config, WORKBENCH_LLM_BASE_URL: model.baseUrl,
-          WORKBENCH_LLM_MODEL: model.name, WORKBENCH_LLM_API_KEY: model.apiKey }, budget)
+          WORKBENCH_LLM_MODEL: model.name, WORKBENCH_LLM_API_FORMAT: modelApiFormat(model.apiFormat), WORKBENCH_LLM_API_KEY: model.apiKey }, budget)
         this.lastUsedIdentity = this.identity(model)
         this.failures.delete(this.identity(model))
         return result

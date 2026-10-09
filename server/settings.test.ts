@@ -63,7 +63,7 @@ describe('设置持久化与密钥边界', () => {
     expect((await SettingsService.open(config)).view()).toEqual(upgraded.view())
   })
   it('首次继承环境默认值，接口只返回密钥是否存在，文件仅当前用户可读写', async () => {
-    expect(settings.view().model).toEqual({ baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, hasApiKey: true })
+    expect(settings.view().model).toEqual({ apiFormat: 'openai-completions', baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, hasApiKey: true })
     expect(JSON.stringify(settings.view())).not.toContain(config.WORKBENCH_LLM_API_KEY)
     expect((await stat(join(directory, 'settings/workbench.json'))).mode & 0o777).toBe(0o600)
     expect((await stat(join(directory, 'settings'))).mode & 0o777).toBe(0o700)
@@ -353,6 +353,58 @@ describe('设置接口', () => {
       expect((await app.inject({ method: 'PUT', url: '/api/settings', headers: { origin: 'https://other.example' }, payload: input })).statusCode).toBe(403)
       expect((await app.inject({ method: 'PUT', url: '/api/settings', payload: input })).statusCode).toBe(409)
     } finally { await app.close(); await sync.close() }
+  })
+  it('各 API 格式的连接测试使用对应地址、鉴权与响应格式，协议变化不复用旧密钥', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    fetch.mockResolvedValue(new Response(JSON.stringify({ type: 'message', content: [{ type: 'text', text: 'OK' }] })))
+    await settings.testModel({ baseUrl: 'http://fixture.example/v1', name: 'gemini-fixture', apiFormat: 'anthropic-messages', apiKey: 'fixture-key' })
+    expect(fetch.mock.calls[0][0]).toBe('http://fixture.example/v1/messages')
+    expect(fetch.mock.calls[0][1].headers).toMatchObject({ 'x-api-key': 'fixture-key', 'anthropic-version': '2023-06-01' })
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBeUndefined()
+    expect(JSON.parse(fetch.mock.calls[0][1].body)).toMatchObject({ messages: [{ role: 'user', content: '请只回复 OK' }] })
+    fetch.mockResolvedValue(new Response(JSON.stringify({ object: 'response', output: [] })))
+    await settings.testModel({ baseUrl: 'http://fixture.example/v1', name: 'response-fixture', apiFormat: 'openai-responses', apiKey: 'fixture-key' })
+    expect(fetch.mock.calls[1][0]).toBe('http://fixture.example/v1/responses')
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toMatchObject({ input: '请只回复 OK', max_output_tokens: 64 })
+    await expect(settings.testModel({ id: 'default', baseUrl: config.WORKBENCH_LLM_BASE_URL, name: 'fixture', apiFormat: 'anthropic-messages' })).rejects.toThrow('请先填写 API Key')
+    const draft = settingsDraft(settings.view())
+    draft.models![0].apiFormat = 'anthropic-messages'; draft.models![0].apiKey = 'new-fixture-key'
+    await settings.save(draft)
+    const reopened = await SettingsService.open(config)
+    expect(reopened.view().models![0].apiFormat).toBe('anthropic-messages')
+    expect(reopened.runtimeConfig().WORKBENCH_LLM_API_FORMAT).toBe('anthropic-messages')
+    expect(JSON.stringify(reopened.view())).not.toContain('new-fixture-key')
+    const changed = settingsDraft(reopened.view()); changed.models![0].apiFormat = 'openai-responses'
+    expect((await reopened.save(changed)).models![0].hasApiKey).toBe(false)
+  })
+  it('地区限制返回固定中文说明，其他上游错误仅显示状态码，不泄露正文', async () => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const model = { id: 'default', baseUrl: config.WORKBENCH_LLM_BASE_URL, name: '模拟模型' }
+    fetch.mockResolvedValue(new Response(JSON.stringify({ error: { message: `User location is not supported for the API use. ${config.WORKBENCH_LLM_API_KEY}` } }), { status: 400 }))
+    await expect(settings.testModel(model)).rejects.toThrow('上游服务不支持当前请求地区')
+    fetch.mockResolvedValue(new Response(`私密上游正文 ${config.WORKBENCH_LLM_API_KEY}`, { status: 400 }))
+    try { await settings.testModel(model); expect.fail('应返回上游错误') }
+    catch (error) {
+      expect((error as Error).message).toContain('HTTP 400')
+      expect((error as Error).message).not.toContain('私密上游正文')
+      expect((error as Error).message).not.toContain(config.WORKBENCH_LLM_API_KEY)
+    }
+  })
+  it('别名持久化并传递给首页，修改或清空别名保留真实模型名称与密钥', async () => {
+    const draft = settingsDraft(settings.view())
+    draft.models![0].alias = '短别名'
+    await settings.save(draft)
+    const reopened = await SettingsService.open(config)
+    expect(reopened.view().models![0].alias).toBe('短别名')
+    expect(reopened.runtimeConfig().models![0].alias).toBe('短别名')
+    expect(reopened.runtimeConfig().models![0].name).toBe(config.WORKBENCH_LLM_MODEL)
+    expect(reopened.runtimeConfig().models![0].apiKey).toBe(config.WORKBENCH_LLM_API_KEY)
+    const cleared = settingsDraft(reopened.view()); cleared.models![0].alias = ''
+    const result = await reopened.save(cleared)
+    expect(result.models![0].alias).toBe('')
+    expect(result.models![0].hasApiKey).toBe(true)
   })
   it('测试草稿模型使用服务端保存的密钥，失败响应不透露上游内容', async () => {
     const { app, sync } = await appForTest()

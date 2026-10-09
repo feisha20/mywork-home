@@ -18,6 +18,53 @@ async function listenFixtureServer(fixture: Server) {
   })
 }
 describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
+  it.each(['anthropic-messages', 'openai-responses'] as const)('%s 使用实际 Harness 完成模拟事项抽取', async (format) => {
+    const requests: { url: string; headers: Record<string, unknown>; body: any }[] = []
+    const text = JSON.stringify({ items: [{ title: '完成协议接入验证', status: 'completed', isPersonal: false, evidenceIds: ['M1'] }] })
+    server = createServer(async (request, response) => {
+      let raw = ''; for await (const chunk of request) raw += chunk
+      requests.push({ url: request.url!, headers: request.headers, body: JSON.parse(raw) })
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      const send = (type: string, data: object) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
+      if (format === 'anthropic-messages') {
+        send('message_start', { message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: 'gemini-fixture', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } })
+        send('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
+        send('content_block_delta', { index: 0, delta: { type: 'text_delta', text } })
+        send('content_block_stop', { index: 0 })
+        send('message_delta', { delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 30 } })
+        send('message_stop', {})
+      } else {
+        const part = { type: 'output_text', text, annotations: [] }
+        const item = { id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [part] }
+        const result = { id: 'resp_fixture', object: 'response', created_at: 1, status: 'completed', model: 'gemini-fixture', output: [item], usage: { input_tokens: 10, output_tokens: 30, total_tokens: 40 } }
+        send('response.created', { response: { ...result, status: 'in_progress', output: [] } })
+        send('response.output_item.added', { output_index: 0, item: { ...item, status: 'in_progress', content: [] } })
+        send('response.content_part.added', { item_id: item.id, output_index: 0, content_index: 0, part: { ...part, text: '' } })
+        send('response.output_text.delta', { item_id: item.id, output_index: 0, content_index: 0, delta: text })
+        send('response.output_text.done', { item_id: item.id, output_index: 0, content_index: 0, text })
+        send('response.content_part.done', { item_id: item.id, output_index: 0, content_index: 0, part })
+        send('response.output_item.done', { output_index: 0, item })
+        send('response.completed', { response: result })
+      }
+      response.end()
+    })
+    await listenFixtureServer(server)
+    runtime = await mkdtemp(join(tmpdir(), 'workbench-protocol-'))
+    const config = loadConfig({ DATABASE_URL: 'postgresql://app:test@localhost/test', WORKBENCH_RUNTIME_DIR: runtime,
+      WORKBENCH_LLM_API_FORMAT: format, WORKBENCH_LLM_MODEL: 'gemini-fixture', WORKBENCH_LLM_API_KEY: 'fixture-key',
+      WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1` })
+    extractor = new HarnessExtractor(config)
+    const message: SourceMessage = { id: 'fixture-message', source: 'codex', sessionId: 'fixture', rootSessionId: 'fixture', projectPath: '/fixture', role: 'assistant', timestamp: new Date().toISOString(), text: '已完成协议接入验证。' }
+    expect((await extractor.extract([message], [], []))[0].title).toBe('完成协议接入验证')
+    expect(requests).toHaveLength(1)
+    expect(new URL(requests[0].url, 'http://fixture').pathname).toBe(format === 'anthropic-messages' ? '/v1/messages' : '/v1/responses')
+    expect(requests[0].body.model).toBe('gemini-fixture')
+    expect(requests[0].body.stream).toBe(true)
+    if (format === 'anthropic-messages') {
+      expect(requests[0].headers['x-api-key']).toBe('fixture-key')
+      expect(requests[0].headers['anthropic-version']).toBe('2023-06-01')
+    } else expect(requests[0].headers.authorization).toBe('Bearer fixture-key')
+  }, 60000)
   it('使用固定SDK发出兼容流式请求，无执行工具、无数据库口令', async () => {
     const requests: { url: string; body: any; authorization?: string }[] = []
     const message: SourceMessage = { id: 'fixture-evidence', source: 'codex', sessionId: 'fixture', rootSessionId: 'fixture', projectPath: '/fixture', role: 'assistant', timestamp: new Date().toISOString(), text: '已完成接口测试。password=fixture-password-123' }

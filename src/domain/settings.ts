@@ -1,3 +1,4 @@
+import { modelApiFormat } from '../../shared/modelApi'
 import { defaultPeriodicReportSchedule, type SettingsUpdate, type WorkbenchSettings } from '../../shared/settings'
 import { defaultZentaoManagement } from '../../shared/zentaoManagement'
 
@@ -30,7 +31,7 @@ export function moveChannel<T extends { id: string }>(channels: readonly T[], id
 export function draftModelReady(model: NonNullable<SettingsUpdate['models']>[number], saved: WorkbenchSettings) {
   const previous = saved.models?.find((entry) => entry.id === model.id)
   return model.enabled && !!model.baseUrl.trim() && !!model.name.trim() && !model.clearApiKey
-    && !!(model.apiKey?.trim() || (previous?.hasApiKey && previous.baseUrl === model.baseUrl.trim().replace(/\/+$/, '')))
+    && !!(model.apiKey?.trim() || (previous?.hasApiKey && previous.baseUrl === model.baseUrl.trim().replace(/\/+$/, '') && modelApiFormat(previous.apiFormat) === modelApiFormat(model.apiFormat)))
 }
 export function preferredDraftModel(draft: SettingsUpdate, saved: WorkbenchSettings) {
   return draft.models?.find((model) => draftModelReady(model, saved))

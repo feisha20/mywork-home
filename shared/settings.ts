@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { MODEL_API_FORMATS, type ModelApiFormat } from './modelApi.js'
 import type { SourceId } from '../src/domain/workbench.js'
 import { defaultZentaoManagement, type ZentaoManagementSettings } from './zentaoManagement.js'
 
@@ -60,6 +61,8 @@ export const defaultPeriodicReportSchedule: PeriodicReportScheduleSettings = {
   monthlyTime: '18:00',
 }
 export interface ModelProfile {
+  alias?: string
+  apiFormat?: ModelApiFormat
   id: string
   label: string
   enabled: boolean
@@ -76,7 +79,7 @@ export interface ModelRuntimeStatus {
 }
 export interface WorkbenchSettings {
   revision: number
-  model: { baseUrl: string; name: string; hasApiKey: boolean }
+  model: { baseUrl: string; name: string; apiFormat?: ModelApiFormat; hasApiKey: boolean }
   modelRuntime?: ModelRuntimeStatus
   models?: ModelProfile[]
   autoSwitchModels?: boolean
@@ -146,6 +149,8 @@ export const pathCheckSchema = z.object({
 })
 export const recordPreviewSchema = pathCheckSchema.extend({ mapping: recordMappingSchema.optional() })
 export const modelSettingsSchema = z.object({
+  alias: z.string().trim().max(16, '模型别名最多 16 个字符').refine((value) => !/[\r\n\0]/.test(value), '模型别名不能包含换行或控制字符').optional(),
+  apiFormat: z.enum(MODEL_API_FORMATS).optional(),
   id: z.string().regex(/^[a-zA-Z0-9-]{1,64}$/, '模型标识无效').optional(),
   baseUrl: z.string().trim().max(2048).url('模型地址格式无效').refine((value) => {
     const url = new URL(value)

@@ -1,3 +1,4 @@
+import { modelApiFormat, modelApiBase } from '../shared/modelApi.js'
 import { randomUUID } from 'node:crypto'
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -41,16 +42,18 @@ ${summaryGuidance}
 没有可记录事项时返回 {"items":[]}。`
 
 export function harnessPatch(config: Config, systemPrompt = persona) {
+  const format = modelApiFormat(config.WORKBENCH_LLM_API_FORMAT)
   return [
     ...['persistent-bash', 'persistent-pwsh', 'terminal-bash', 'terminal-pwsh', 'pty', 'mcp-resources',
       'session-log-deepseek', 'plugin-package-inventory-deepseek', 'llm-deepseek', 'deepseek-llm-api-extensions'].map((id) => ({ id, disabled: true })),
     { id: 'system-prompt', config: { includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: systemPrompt } },
     { insert: [{ id: 'workbench-llm', name: '@deepseek-ai/dsh-llm-pi-ai', config: { providers: {
       'workbench-ark': {
-        api: 'openai-completions', baseURL: config.WORKBENCH_LLM_BASE_URL, apiKeyEnv: 'WORKBENCH_LLM_API_KEY',
+        api: format, baseURL: modelApiBase(config.WORKBENCH_LLM_BASE_URL, format), apiKeyEnv: 'WORKBENCH_LLM_API_KEY',
         reasoning: 'low', streamIdleTimeoutMs: Math.min(config.WORKBENCH_BATCH_TIMEOUT_MS, 120_000),
         retryPolicy: { mode: 'normal', maxRetries: 0 },
-        compat: { thinkingFormat: 'openai', supportsReasoningEffort: true, supportsDeveloperRole: false, supportsStore: false, maxTokensField: 'max_tokens' },
+        ...(format === 'openai-completions' ? { compat: { thinkingFormat: 'openai', supportsReasoningEffort: true, supportsDeveloperRole: false, supportsStore: false, maxTokensField: 'max_tokens' } }
+          : format === 'openai-responses' ? { compat: { supportsDeveloperRole: false } } : {}),
         models: [{ id: config.WORKBENCH_LLM_MODEL, input: ['text'], reasoningEfforts: { low: 'low' }, contextWindow: 128000, maxTokens: 8192 }],
       },
     } } }] },

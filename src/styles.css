@@ -1322,13 +1322,7 @@ button:focus-visible, input:focus-visible {
 .settings-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
 .settings-model-page { max-width: 860px; margin: auto; }
 /* 模型配置：运行状态、优先顺序和编辑详情各自独立。 */
-.settings-model-current { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; padding: 18px; border: 1px solid #dcece4; border-radius: 14px; background: #f5faf7; }
-.settings-model-current-icon { display: grid; place-items: center; flex: 0 0 auto; width: 42px; height: 42px; border: 1px solid #dcece4; border-radius: 12px; background: #fff; color: #43846e; }
-.settings-model-current-icon svg { width: 22px; height: 22px; }
-.settings-model-current > div { flex: 1; min-width: 0; }
 .settings-model-eyebrow { display: block; font-size: 10px; color: #82918e; line-height: 18px; }
-.settings-model-current strong { display: block; font-size: 17px; line-height: 26px; color: #334d42; overflow-wrap: anywhere; }
-.settings-model-current p, .settings-model-current small { display: block; margin-top: 3px; font-size: 11px; line-height: 18px; color: #72877d; overflow-wrap: anywhere; }
 .settings-model-policy, .settings-model-enabled { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .settings-model-policy { margin-bottom: 20px; padding: 0 2px; }
 .settings-model-policy strong { font-size: 12px; font-weight: 550; color: #435066; }
@@ -1367,7 +1361,7 @@ button:focus-visible, input:focus-visible {
 .settings-model-remove .is-danger:hover:not(:disabled) { color: #a94340; background: #fff4f3; }
 .settings-model-data-note { margin-top: 14px; }
 @media (max-width: 980px) { .settings-model-columns { grid-template-columns: 190px minmax(0, 1fr); gap: 12px; } .settings-model-editor { padding: 14px; } }
-@media (max-width: 760px) { .settings-model-columns { grid-template-columns: minmax(0, 1fr); } .settings-model-list { max-height: 260px; } .settings-model-current { flex-wrap: wrap; padding: 14px; } .settings-model-current > .settings-badge { margin-left: 56px; } }
+@media (max-width: 760px) { .settings-model-columns { grid-template-columns: minmax(0, 1fr); } .settings-model-list { max-height: 260px; } }
 .settings-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 14px; margin-bottom: 22px; }
 .settings-section-heading h3 { font-size: 16px; line-height: 24px; font-weight: 650; }
 .settings-section-heading p { font-size: 11px; color: #8794a6; line-height: 19px; margin-top: 4px; }
@@ -2579,3 +2573,14 @@ button:focus-visible, input:focus-visible {
   .daily-report-actions { width: 100%; justify-content: flex-end; }
   .daily-report-actions > .model-status-inline { flex: 1 1 100%; max-width: none; justify-content: flex-end; margin-right: 0; }
 }
+
+/* 模型连接结果紧邻测试按钮，保持在当前操作位置。 */
+.settings-connection-test { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; flex: 1; }
+.settings-test-result { display: flex; align-items: flex-start; gap: 5px; flex: 1 1 160px; min-width: 0; margin: 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.settings-test-result.is-success { color: #3c936e; }
+.settings-test-result.is-error { color: #c65b49; }
+.settings-test-result svg { flex-shrink: 0; width: 13px; height: 13px; margin-top: 3px; }
+
+.settings-model-row-state > span + span::before { content: ' · '; color: #a3adb9; }
+.settings-model-row-state .is-runtime { color: #50816f; }
+.settings-model-row-state .is-warning { color: #b8873e; }

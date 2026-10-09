@@ -1,3 +1,4 @@
+import { modelApiFormat, modelApiHelp, modelApiOptions } from '../../shared/modelApi'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { createPortal } from 'react-dom'
@@ -52,6 +53,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   const [dragged, setDragged] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [modelTestResult, setModelTestResult] = useState<{ id: string; success: boolean; message: string } | null>(null)
   const [scanFeedback, setScanFeedback] = useState<{ id: string; message: string } | null>(null)
   const [scanChoices, setScanChoices] = useState<{ id: string; paths: string[] } | null>(null)
   const [unresolvedPaths, setUnresolvedPaths] = useState<string[]>([])
@@ -62,10 +64,8 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   const dirty = !!saved && !!draft && JSON.stringify(settingsDraft(saved)) !== JSON.stringify(draft)
   const model = draft?.models?.find((entry) => entry.id === selectedModelId) ?? draft?.models?.[0]
   const modelSaved = saved?.models?.find((entry) => entry.id === model?.id)
-  const modelHasSavedKey = !!modelSaved?.hasApiKey && modelSaved.baseUrl === model?.baseUrl.replace(/\/+$/, '')
+  const modelHasSavedKey = !!modelSaved?.hasApiKey && modelSaved.baseUrl === model?.baseUrl.replace(/\/+$/, '') && modelApiFormat(modelSaved.apiFormat) === modelApiFormat(model?.apiFormat)
   const draftPreferred = draft && saved ? preferredDraftModel(draft, saved) : undefined
-  const runtimeModel = saved?.models?.find((entry) => entry.id === modelRuntime?.nextModelId)
-  const lastUsedModel = saved?.models?.find((entry) => entry.id === modelRuntime?.lastUsedModelId)
   const otherEnabledModels = draft?.models?.filter((entry) => entry.id !== model?.id && entry.enabled).length ?? 0
   const canRemoveModel = (draft?.models?.length ?? 0) > 1 && (!model?.enabled || otherEnabledModels > 0)
   const modelDirty = !!draft && !!saved && JSON.stringify([draft.models, draft.autoSwitchModels]) !== JSON.stringify([settingsDraft(saved).models, saved.autoSwitchModels ?? true])
@@ -106,7 +106,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
     onClose()
   }
   function changeModels(models: NonNullable<SettingsUpdate['models']>) {
-    setDraft((current) => current && { ...current, models, model: models[0] }); setFeedback(null); setDeletingModelId(null)
+    setDraft((current) => current && { ...current, models, model: models[0] }); setFeedback(null); setModelTestResult(null); setDeletingModelId(null)
   }
   function changeModel(patch: Partial<NonNullable<SettingsUpdate['models']>[number]>) {
     if (draft?.models && model) changeModels(draft.models.map((entry) => entry.id === model.id ? { ...entry, ...patch } : entry))
@@ -114,7 +114,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   function addModel() {
     if (!draft?.models) return
     const id = crypto.randomUUID()
-    changeModels([...draft.models, { id, label: '新模型', enabled: true, baseUrl: '', name: '', apiKey: '', clearApiKey: false }])
+    changeModels([...draft.models, { id, apiFormat: 'openai-completions', label: '新模型', enabled: true, baseUrl: '', name: '', apiKey: '', clearApiKey: false }])
     setSelectedModelId(id); setShowKey(false)
   }
   function changeChannel(id: string, patch: Partial<DraftChannel>) {
@@ -153,7 +153,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   async function handleSave(event: FormEvent) {
     event.preventDefault()
     if (!draft || busy || tab === 'mcp') return
-    setError(null); setFeedback(null); setDiscarding(false)
+    setError(null); setFeedback(null); setModelTestResult(null); setDiscarding(false)
     const parsed = settingsUpdateSchema.safeParse({ ...draft, channels: draft.channels.map((entry) => ({ ...entry, paths: entry.paths.map((path) => path.trim()).filter(Boolean) })) })
     if (!parsed.success) { setError(parsed.error.issues.map((issue) => issue.message).join('；')); return }
     setSaving(true)
@@ -179,10 +179,10 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
     finally { setScanning(null) }
   }
   async function handleTest() {
-    if (!draft || busy) return
-    setTesting(true); setError(null); setFeedback(null)
-    try { setFeedback((await testModelConnection(model!)).message) }
-    catch (cause) { setError(messageOf(cause)) }
+    if (!model || busy) return
+    setTesting(true); setError(null); setFeedback(null); setModelTestResult(null)
+    try { setModelTestResult({ id: model.id, success: true, message: (await testModelConnection(model)).message }) }
+    catch (cause) { setModelTestResult({ id: model.id, success: false, message: messageOf(cause) }) }
     finally { setTesting(false) }
   }
   function changeZentao(patch: Partial<NonNullable<DraftChannel['zentao']>>) {
@@ -251,30 +251,34 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
           {loading ? <div className="settings-loading" role="status">正在读取工作台设置…</div> : !draft ? <div className="settings-loading"><p>暂时无法读取设置</p><button type="button" className="settings-secondary" onClick={() => setLoadVersion((current) => current + 1)}>重新加载</button></div> : <fieldset disabled={busy} className="settings-fields">
             {tab === 'model' ? <div className="settings-model-page">
               <div className="settings-section-heading"><div><h3>模型配置</h3><p>选择首选模型，连接失败时按顺序使用备用模型</p></div><button type="button" className="settings-secondary" disabled={(draft.models?.length ?? 0) >= 10} onClick={addModel}><Icon name="plus" />添加模型</button></div>
-              <div className="settings-model-current" role="status">
-                <span className="settings-model-current-icon"><Icon name="model" /></span>
-                <div><span className="settings-model-eyebrow">当前默认模型 · 已保存</span><strong>{runtimeModel?.label ?? '暂无可用模型'}</strong><p>{runtimeModel ? `${runtimeModel.name} · 下次请求优先使用` : '请配置并启用模型，或等待故障模型恢复'}</p>{lastUsedModel && <small>最近实际使用：{lastUsedModel.label} · {lastUsedModel.name}</small>}</div>
-                <span className={`settings-badge${runtimeModel ? ' is-ready' : ''}`}>{runtimeModel && runtimeModel.id !== modelRuntime?.preferredModelId ? '已切换备用' : runtimeModel ? '优先使用' : '暂不可用'}</span>
-              </div>
               <div className="settings-model-policy"><div><strong>自动故障切换</strong><p>连接失败后尝试下一模型，1 分钟后重试首选模型。</p></div><button type="button" className={`settings-switch${draft.autoSwitchModels ? ' is-on' : ''}`} role="switch" aria-checked={!!draft.autoSwitchModels} aria-label="自动故障切换" onClick={() => { setDraft({ ...draft, autoSwitchModels: !draft.autoSwitchModels }); setFeedback(null) }}><span /></button></div>
               {modelDirty && <p className="settings-model-pending"><Icon name="clock" />修改尚未生效，保存后首选：{draftPreferred?.label ?? '暂无可用模型'}</p>}
               <div className="settings-model-columns">
-                <div className="settings-model-library"><div className="settings-model-list-heading"><strong>我的模型</strong><small>按备用顺序排列</small></div>
+                <div className="settings-model-library"><div className="settings-model-list-heading"><strong>我的模型</strong><small>{modelRuntime && !modelRuntime.nextModelId ? '暂无可用模型' : '按备用顺序排列'}</small></div>
                   <ol className="settings-model-list" aria-label="模型优先顺序">
-                    {draft.models?.map((entry, index) => <li key={entry.id} className={entry.id === model?.id ? 'is-editing' : ''}>
-                      <button type="button" className="settings-model-select" aria-pressed={entry.id === model?.id} onClick={() => { setSelectedModelId(entry.id); setShowKey(false); setFeedback(null); setDeletingModelId(null) }}><span className="settings-model-row-title"><strong>{entry.label || '未命名模型'}</strong><span className={`settings-badge${entry.id === draftPreferred?.id ? ' is-preferred' : ''}`}>{!entry.enabled ? '已停用' : !saved || !draftModelReady(entry, saved) ? '待配置' : entry.id === draftPreferred?.id ? '首选' : '备用'}</span></span><small>{entry.name || '待填写模型名称'}</small><span className="settings-model-row-state">{modelRuntime?.coolingModelIds.includes(entry.id) ? '连接失败 · 等待恢复' : modelRuntime?.lastUsedModelId === entry.id ? '最近使用' : entry.id === model?.id ? '正在编辑' : '点击编辑配置'}</span></button>
+                    {draft.models?.map((entry, index) => {
+                      const states = [
+                        modelRuntime?.activeModelIds?.includes(entry.id) ? '正在调用' : '',
+                        modelRuntime?.nextModelId === entry.id ? modelRuntime.preferredModelId === entry.id ? '下次优先' : '备用接管' : '',
+                        modelRuntime?.lastUsedModelId === entry.id ? '最近使用' : '',
+                        modelRuntime?.coolingModelIds.includes(entry.id) ? '连接失败 · 等待恢复' : '',
+                      ].filter(Boolean)
+                      return <li key={entry.id} className={entry.id === model?.id ? 'is-editing' : ''}>
+                      <button type="button" className="settings-model-select" aria-pressed={entry.id === model?.id} onClick={() => { setSelectedModelId(entry.id); setShowKey(false); setFeedback(null); setModelTestResult(null); setDeletingModelId(null) }}><span className="settings-model-row-title"><strong>{entry.label || '未命名模型'}</strong><span className={`settings-badge${entry.id === draftPreferred?.id ? ' is-preferred' : ''}`}>{!entry.enabled ? '已停用' : !saved || !draftModelReady(entry, saved) ? '待配置' : entry.id === draftPreferred?.id ? '首选' : '备用'}</span></span><small>{entry.name || '待填写模型名称'}</small><span className="settings-model-row-state" title="调用状态基于已保存配置；首选顺序修改需保存后生效">{states.length ? states.map((state) => <span key={state} className={state.startsWith('连接失败') ? 'is-warning' : 'is-runtime'}>{state}</span>) : entry.id === model?.id ? '正在编辑' : '点击编辑配置'}</span></button>
                       <div className="settings-model-row-actions">{entry.id !== draftPreferred?.id && <button type="button" className="settings-text-button" disabled={!saved || !draftModelReady({ ...entry, enabled: true }, saved)} title={!saved || !draftModelReady({ ...entry, enabled: true }, saved) ? '请先填写地址、模型名称和密钥' : undefined} onClick={() => { changeModels(moveChannel(draft.models!, entry.id, 0).map((item) => item.id === entry.id ? { ...item, enabled: true } : item)) }}>设为首选</button>}<div className="settings-sort-buttons"><button type="button" aria-label={`提高${entry.label}优先级`} disabled={index === 0} onClick={() => changeModels(moveChannel(draft.models!, entry.id, index - 1))}><Icon name="arrow-up" /></button><button type="button" aria-label={`降低${entry.label}优先级`} disabled={index === draft.models!.length - 1} onClick={() => changeModels(moveChannel(draft.models!, entry.id, index + 1))}><Icon name="arrow-down" /></button></div></div>
-                    </li>)}
+                    </li> })}
                   </ol><p className="settings-help">点击模型只编辑配置，不会切换正在使用的模型。</p>
                 </div>
                 <div className="settings-model-editor">
                   <div className="settings-model-editor-heading"><div><span className="settings-model-eyebrow">正在编辑</span><h4>{model?.label || '新模型'}</h4></div><span className={`settings-badge${modelHasSavedKey ? ' is-ready' : ''}`}>{modelHasSavedKey ? '密钥已保存' : '待配置密钥'}</span></div>
                   <div className="settings-model-enabled"><span>启用此模型</span><button type="button" className={`settings-switch${model?.enabled ? ' is-on' : ''}`} role="switch" aria-checked={!!model?.enabled} aria-label="启用此模型" disabled={!!model?.enabled && otherEnabledModels === 0} title={model?.enabled && otherEnabledModels === 0 ? '至少启用一个模型' : undefined} onClick={() => changeModel({ enabled: !model?.enabled })}><span /></button></div>
                   <label className="settings-field">配置名称<input required value={model?.label ?? ''} maxLength={40} placeholder="例如：公司模型、个人模型" onChange={(event) => changeModel({ label: event.target.value })} /></label>
-                  <label className="settings-field">基础地址 <span className="settings-field-caption">Base URL</span><input type="url" required value={model!.baseUrl} maxLength={2048} placeholder="https://ark.cn-beijing.volces.com/api/coding/v3" onChange={(event) => changeModel({ baseUrl: event.target.value })} /><small>填写 API 基础地址，工作台会自动添加 /chat/completions。</small></label>
+                  <label className="settings-field">模型别名<input value={model?.alias ?? ''} maxLength={16} placeholder="例如：Gemini、GLM Flash" onChange={(event) => changeModel({ alias: event.target.value })} /><small>用于芯片展示，最多 16 个字符；留空使用配置名称，不影响实际调用的模型名称。</small></label>
+                  <SettingsSelect label="API 格式" value={modelApiFormat(model?.apiFormat)} options={modelApiOptions} onChange={(apiFormat) => changeModel({ apiFormat })} help="按上游接口选择格式，与模型品牌无关。" />
+                  <label className="settings-field">基础地址 <span className="settings-field-caption">Base URL</span><input type="url" required value={model!.baseUrl} maxLength={2048} placeholder="https://ark.cn-beijing.volces.com/api/coding/v3" onChange={(event) => changeModel({ baseUrl: event.target.value })} /><small>{modelApiHelp(modelApiFormat(model?.apiFormat))}</small></label>
                   <label className="settings-field">模型名称<input required value={model!.name} maxLength={160} placeholder="glm-5.3-flash" onChange={(event) => changeModel({ name: event.target.value })} /></label>
-                  <div className="settings-field"><label htmlFor="settings-api-key">API Key</label><div className="settings-key-input"><input id="settings-api-key" type={showKey ? 'text' : 'password'} autoComplete="new-password" value={model!.apiKey ?? ''} disabled={busy || model!.clearApiKey} placeholder={modelHasSavedKey ? '已配置 · 留空保留现有密钥' : '输入模型服务的 API Key'} maxLength={4096} onChange={(event) => changeModel({ apiKey: event.target.value })} /><button type="button" aria-label={showKey ? '隐藏 API Key' : '显示 API Key'} aria-pressed={showKey} onClick={() => setShowKey((current) => !current)}><Icon name="eye" /></button></div><small>密钥仅保存在服务端，不会回传明文，也不会存入浏览器缓存。更换基础地址后需要重新填写密钥。</small></div>
-                  <div className="settings-model-actions"><button type="button" className="settings-secondary" onClick={() => void handleTest()}><Icon name="refresh" />{testing ? '连接测试中…' : '测试连接'}</button>{modelSaved?.hasApiKey && <label className="settings-checkbox"><input type="checkbox" checked={!!model!.clearApiKey} onChange={(event) => changeModel({ clearApiKey: event.target.checked, apiKey: '' })} />清除已保存密钥</label>}</div>
+                  <div className="settings-field"><label htmlFor="settings-api-key">API Key</label><div className="settings-key-input"><input id="settings-api-key" type={showKey ? 'text' : 'password'} autoComplete="new-password" value={model!.apiKey ?? ''} disabled={busy || model!.clearApiKey} placeholder={modelHasSavedKey ? '已配置 · 留空保留现有密钥' : '输入模型服务的 API Key'} maxLength={4096} onChange={(event) => changeModel({ apiKey: event.target.value })} /><button type="button" aria-label={showKey ? '隐藏 API Key' : '显示 API Key'} aria-pressed={showKey} onClick={() => setShowKey((current) => !current)}><Icon name="eye" /></button></div><small>密钥仅保存在服务端，不会回传明文，也不会存入浏览器缓存。更换基础地址或 API 格式后需要重新填写密钥。</small></div>
+                  <div className="settings-model-actions"><div className="settings-connection-test"><button type="button" className="settings-secondary" onClick={() => void handleTest()}><Icon name="refresh" />{testing ? '连接测试中…' : '测试连接'}</button>{modelTestResult && modelTestResult.id === model?.id && <p className={`settings-test-result${modelTestResult.success ? ' is-success' : ' is-error'}`} role={modelTestResult.success ? 'status' : 'alert'}>{modelTestResult.success && <Icon name="check" />}<span>{modelTestResult.message}</span></p>}</div>{modelSaved?.hasApiKey && <label className="settings-checkbox"><input type="checkbox" checked={!!model!.clearApiKey} onChange={(event) => changeModel({ clearApiKey: event.target.checked, apiKey: '' })} />清除已保存密钥</label>}</div>
 
                   <div className="settings-model-remove">
                     {deletingModelId === model?.id ? <><p>从配置中移除“{model?.label}”？保存设置后生效。</p><div><button type="button" className="settings-secondary" onClick={() => setDeletingModelId(null)}>取消</button><button type="button" className="settings-secondary is-danger" onClick={() => { changeModels(draft.models!.filter((entry) => entry.id !== model?.id)); setSelectedModelId(''); setShowKey(false) }}>确认移除</button></div></> : <><small>{draft.models?.length === 1 ? '至少保留一个模型配置。' : !canRemoveModel ? '先启用其他模型，再移除此模型。' : '移除配置不会删除已有工作记录。'}</small><button type="button" className="settings-text-button is-danger" disabled={!canRemoveModel} onClick={() => setDeletingModelId(model!.id)}><Icon name="trash" />移除此模型</button></>}

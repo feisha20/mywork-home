@@ -8,6 +8,21 @@ const config = () => ({ ...loadConfig({ DATABASE_URL: 'postgresql://app:test@loc
 ] })
 afterEach(() => vi.useRealTimers())
 describe('模型自动切换', () => {
+  it('跨协议故障切换保留每个候选模型的 API 格式，修改格式后解除旧协议冷却', async () => {
+    const router = new ModelRouter()
+    const value = { ...config(), models: config().models.map((model, index) => ({ ...model,
+      apiFormat: index ? 'anthropic-messages' as const : 'openai-responses' as const })) }
+    const formats: string[] = []
+    await router.run(value, 180_000, async (candidate) => {
+      formats.push(candidate.WORKBENCH_LLM_API_FORMAT)
+      if (candidate.WORKBENCH_LLM_MODEL === 'office') throw new ModelConnectionError('模拟故障')
+      return '成功'
+    })
+    expect(formats).toEqual(['openai-responses', 'anthropic-messages'])
+    expect(router.status(value).nextModelId).toBe('home')
+    value.models[0].apiFormat = 'anthropic-messages'
+    expect(router.status(value).nextModelId).toBe('office')
+  })
   it('并发调用显示实际模型，单次结束不会提前清除状态，失败后清除状态', async () => {
     const router = new ModelRouter(), value = config()
     const finish: (() => void)[] = []

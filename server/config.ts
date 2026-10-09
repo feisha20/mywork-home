@@ -2,6 +2,7 @@ import 'dotenv/config'
 import { homedir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { z } from 'zod'
+import { MODEL_API_FORMATS, type ModelApiFormat } from '../shared/modelApi.js'
 
 const environment = z.object({
   DATABASE_URL: z.string().min(1, '请配置专属数据库连接 DATABASE_URL'),
@@ -9,6 +10,7 @@ const environment = z.object({
   PORT: z.coerce.number().int().min(1).max(65535).default(8787),
   SYNC_INTERVAL_MS: z.coerce.number().int().min(1000).default(600_000),
   SYNC_ENABLED: z.enum(['true', 'false']).default('true'),
+  WORKBENCH_LLM_API_FORMAT: z.enum(MODEL_API_FORMATS).default('openai-completions'),
   WORKBENCH_LLM_API_KEY: z.string().default(''),
   WORKBENCH_LLM_BASE_URL: z.url().default('https://ark.cn-beijing.volces.com/api/coding/v3'),
   WORKBENCH_LLM_MODEL: z.string().default('glm-5.3-flash'),
@@ -33,7 +35,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   if (!['postgres:', 'postgresql:'].includes(database.protocol) || !database.password) throw new Error('请配置有效的 PostgreSQL 专属连接及密码')
   if (database.username === 'postgres') throw new Error('运行服务必须使用工作台专属数据库用户')
   return { ...config, sourceSecrets: [] as string[],
-    models: undefined as { id: string; label: string; enabled: boolean; baseUrl: string; name: string; apiKey: string }[] | undefined,
+    models: undefined as { alias?: string; apiFormat?: ModelApiFormat; id: string; label: string; enabled: boolean; baseUrl: string; name: string; apiKey: string }[] | undefined,
     autoSwitchModels: true }
 }
 export type Config = ReturnType<typeof loadConfig>

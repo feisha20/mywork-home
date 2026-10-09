@@ -1,3 +1,4 @@
+import { modelChipDisplay } from '../../shared/modelUsage'
 import { createRef, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, RefObject } from 'react'
 import { CAPTURE_SOURCES, sourceInfo } from '../domain/workbench'
@@ -46,6 +47,7 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
   const running = harness?.run?.status === 'running'
   const energized = running || phase !== 'idle' || routing
   const labels = { scanning: '扫描记录', extracting: '抽取工作事项', saving: '保存事项', idle: '同步结束' }
+  const modelDisplay = modelChipDisplay(harness?.modelUsage, harness?.model)
   const run = harness?.run
   const activeSource = running && (run?.phase === 'scanning' || run?.phase === 'extracting') ? run.activeSource ?? null : null
   const syncTime = run?.finishedAt ? shortTime.format(new Date(run.finishedAt)) : null
@@ -106,7 +108,7 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
               <rect x="2" y="2" width="20" height="20" rx="5" />
               <path d="M12 2v20M2 12h20M7 7h10v10H7z" />
             </svg>
-            <span className="chip-label" title={harness?.modelUsage?.active[0]?.name ?? harness?.modelUsage?.next?.name ?? harness?.model}>{harness?.modelUsage?.active[0]?.name ?? harness?.modelUsage?.next?.name ?? (harness?.modelUsage ? '模型待就绪' : harness?.model || '工作流核心')}</span>
+            <span className="chip-label" title={modelDisplay.title}>{modelDisplay.text}</span>
             <span className="chip-subtitle">{running ? labels[run!.phase] : '工作流核心'}</span>
           </div>
         </div>

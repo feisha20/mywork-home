@@ -7,6 +7,7 @@ import { CAPTURE_SOURCES, SOURCES } from '../src/domain/workbench.js'
 import { builtinCollectors, defaultPeriodicReportSchedule, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema, zentaoSettingsSchema } from '../shared/settings.js'
 import type { ChannelConfig, ChannelSummary, CollectorKind, PathScanResult, SettingsUpdate, WorkbenchSettings, ZentaoConnection } from '../shared/settings.js'
 import type { Config } from './config.js'
+import { modelApiFormat, modelApiEndpoint } from '../shared/modelApi.js'
 import { modelRouter } from './modelRouting.js'
 import { SourcePaths } from './sourcePaths.js'
 import { previewCompatibleRecords } from './compatibleRecords.js'
@@ -44,8 +45,8 @@ export class SettingsService {
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('无法读取工作台设置，请检查运行目录权限')
       const service = new SettingsService(config, { revision: 1,
-        autoSwitchModels: true, models: [{ id: 'default', label: '默认模型', enabled: true, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }],
-        model: { baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL }, apiKey: config.WORKBENCH_LLM_API_KEY,
+        autoSwitchModels: true, models: [{ id: 'default', label: '默认模型', enabled: true, apiFormat: config.WORKBENCH_LLM_API_FORMAT, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }],
+        model: { apiFormat: config.WORKBENCH_LLM_API_FORMAT, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL }, apiKey: config.WORKBENCH_LLM_API_KEY,
         sync: { enabled: config.SYNC_ENABLED === 'true', intervalMs: Math.min(86_400_000, Math.max(60_000, Math.ceil(config.SYNC_INTERVAL_MS / 60_000) * 60_000)) },
         dailyReportSchedule: { enabled: false, times: ['12:00', '18:00', '21:00'] },
         periodicReportSchedule: defaultPeriodicReportSchedule,
@@ -66,7 +67,7 @@ export class SettingsService {
         ...(channel.collector === 'zentao' ? { zentao: { baseUrl: zentao?.baseUrl ?? '', account: zentao?.account ?? '', hasPassword: !!zentaoPassword,
           management: zentao?.management ?? defaultZentaoManagement } } : {}) }))
       await chmod(file, 0o600)
-      const models = input.models?.map((model) => ({ id: model.id, label: model.label, enabled: model.enabled, baseUrl: model.baseUrl, name: model.name, apiKey: model.apiKey ?? '' }))
+      const models = input.models?.map((model) => ({ id: model.id, label: model.label, alias: model.alias ?? '', enabled: model.enabled, baseUrl: model.baseUrl, name: model.name, apiFormat: modelApiFormat(model.apiFormat), apiKey: model.apiKey ?? '' }))
         ?? [{ id: 'default', label: '默认模型', enabled: true, ...input.model, apiKey }]
       const service = new SettingsService(config, { ...input, channels, models, apiKey, zentaoPassword }, sourcePaths)
       if (legacy || !parsed.models) await service.persist(service.data)
@@ -80,12 +81,12 @@ export class SettingsService {
       if (!location.hostPath) unresolvedPaths.push(location.path)
       return location.hostPath ?? location.path
     }) }))
-    return { modelRuntime: modelRouter.status(this.runtimeConfig()), models: this.data.models.map(({ apiKey, ...model }) => ({ ...model, hasApiKey: !!apiKey })), autoSwitchModels: this.data.autoSwitchModels, revision: this.data.revision, model: { baseUrl: this.data.model.baseUrl, name: this.data.model.name, hasApiKey: !!this.data.apiKey },
+    return { modelRuntime: modelRouter.status(this.runtimeConfig()), models: this.data.models.map(({ apiKey, ...model }) => ({ ...model, hasApiKey: !!apiKey })), autoSwitchModels: this.data.autoSwitchModels, revision: this.data.revision, model: { apiFormat: modelApiFormat(this.data.models[0].apiFormat), baseUrl: this.data.model.baseUrl, name: this.data.model.name, hasApiKey: !!this.data.apiKey },
       sync: { ...this.data.sync }, dailyReportSchedule: { ...this.data.dailyReportSchedule }, periodicReportSchedule: { ...this.data.periodicReportSchedule }, channels, pathEnvironment: this.sourcePaths.environment, unresolvedPaths: [...new Set(unresolvedPaths)] }
   }
   runtimeConfig(): Config {
     // 采集源密码也参与本机会话和报告的脱敏。
-    return { ...this.config, models: structuredClone(this.data.models), autoSwitchModels: this.data.autoSwitchModels, WORKBENCH_LLM_BASE_URL: this.data.model.baseUrl, WORKBENCH_LLM_MODEL: this.data.model.name,
+    return { ...this.config, models: structuredClone(this.data.models), autoSwitchModels: this.data.autoSwitchModels, WORKBENCH_LLM_API_FORMAT: modelApiFormat(this.data.models[0].apiFormat), WORKBENCH_LLM_BASE_URL: this.data.model.baseUrl, WORKBENCH_LLM_MODEL: this.data.model.name,
       WORKBENCH_LLM_API_KEY: this.data.apiKey, SYNC_ENABLED: this.data.sync.enabled ? 'true' : 'false', SYNC_INTERVAL_MS: this.data.sync.intervalMs,
       sourceSecrets: [...this.config.sourceSecrets, this.data.zentaoPassword, ...this.data.models.map((model) => model.apiKey)].filter(Boolean) }
   }
@@ -140,13 +141,13 @@ export class SettingsService {
       const models = profiles.map((model) => {
         const saved = this.data.models.find((entry) => entry.id === model.id)
         const baseUrl = model.baseUrl.replace(/\/+$/, '')
-        const sameEndpoint = saved?.baseUrl === baseUrl
-        return { id: model.id, label: model.label, enabled: model.enabled, baseUrl, name: model.name,
+        const sameEndpoint = saved?.baseUrl === baseUrl && modelApiFormat(saved.apiFormat) === modelApiFormat(model.apiFormat)
+        return { id: model.id, label: model.label, alias: model.alias ?? '', enabled: model.enabled, baseUrl, name: model.name, apiFormat: modelApiFormat(model.apiFormat),
           apiKey: model.clearApiKey ? '' : model.apiKey || (sameEndpoint ? saved.apiKey : '') }
       })
       const next: SavedSettings = { revision: this.data.revision + 1,
         models, autoSwitchModels: input.autoSwitchModels,
-        model: { baseUrl: models[0].baseUrl, name: models[0].name },
+        model: { apiFormat: models[0].apiFormat, baseUrl: models[0].baseUrl, name: models[0].name },
         apiKey: models[0].apiKey, zentaoPassword,
         sync: input.sync, dailyReportSchedule: input.dailyReportSchedule, periodicReportSchedule: input.periodicReportSchedule, channels: input.channels.map(({ zentao: _connection, ...channel }) => ({ ...channel, id: channel.id as ChannelConfig['id'],
           ...(channel.collector === 'zentao' ? { zentao: { baseUrl, account: connection.account, hasPassword: !!zentaoPassword,
@@ -219,21 +220,48 @@ export class SettingsService {
   async testModel(raw: unknown): Promise<{ message: string }> {
     const model = modelSettingsSchema.parse(raw)
     const saved = model.id ? this.data.models.find((entry) => entry.id === model.id) : this.data.models[0]
-    const apiKey = model.clearApiKey ? '' : model.apiKey || (saved?.baseUrl === model.baseUrl.replace(/\/+$/, '') ? saved.apiKey : '')
+    const apiKey = model.clearApiKey ? '' : model.apiKey || (saved?.baseUrl === model.baseUrl.replace(/\/+$/, '') && modelApiFormat(saved.apiFormat) === modelApiFormat(model.apiFormat) ? saved.apiKey : '')
     if (!apiKey) throw new SettingsError('请先填写 API Key')
+    const format = modelApiFormat(model.apiFormat)
+    const headers: Record<string, string> = format === 'anthropic-messages'
+      ? { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+      : { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
+    const body = format === 'openai-responses'
+      ? { model: model.name, input: '请只回复 OK', max_output_tokens: 64, stream: false }
+      : { model: model.name, messages: [{ role: 'user', content: '请只回复 OK' }], max_tokens: 64, stream: false }
     let response: Response
     try {
-      response = await fetch(`${model.baseUrl.replace(/\/+$/, '')}/chat/completions`, { method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000),
-        body: JSON.stringify({ model: model.name, messages: [{ role: 'user', content: '请只回复 OK' }], max_tokens: 16, stream: false }) })
+      response = await fetch(modelApiEndpoint(model.baseUrl, format), { method: 'POST',
+        headers, signal: AbortSignal.timeout(15_000), body: JSON.stringify(body) })
     } catch { throw new SettingsError('模型连接失败或超时，请检查地址与网络', 502) }
     if (!response.ok) {
-      await response.body?.cancel()
+      // 上游正文可能含密钥或业务信息；只识别固定错误，界面不回显正文。
+      let regionRestricted = false
+      if (response.status === 400 || response.status === 403) {
+        const reader = response.body?.getReader()
+        if (reader) {
+          const chunks: Uint8Array[] = []
+          let length = 0
+          try {
+            while (length < 8192) {
+              const chunk = await reader.read()
+              if (chunk.done) break
+              const part = chunk.value.subarray(0, 8192 - length)
+              chunks.push(part); length += part.length
+            }
+            regionRestricted = /user location is not supported for the api use/i.test(Buffer.concat(chunks).toString('utf8'))
+          } catch { /* 读取失败时仍返回固定的状态码提示。 */ }
+          finally { await reader.cancel().catch(() => {}) }
+        }
+      } else await response.body?.cancel()
+      if (regionRestricted) throw new SettingsError('上游服务不支持当前请求地区，请检查模型网关的网络出口与代理配置', 502)
       const reasons: Record<number, string> = { 401: '密钥无效或已过期', 403: '模型访问权限不足', 404: '模型名称或基础地址不正确', 429: '请求受限或额度不足' }
-      throw new SettingsError(reasons[response.status] ?? '上游模型请求失败，请检查配置', 502)
+      throw new SettingsError(reasons[response.status] ?? `上游模型请求失败（HTTP ${response.status}），请检查 API 格式、模型名称与上游服务`, 502)
     }
     const result = await response.json().catch(() => null)
-    if (!result?.choices?.length) throw new SettingsError('接口未返回兼容的模型响应，请检查基础地址', 502)
+    const compatible = format === 'anthropic-messages' ? result?.type === 'message' && Array.isArray(result.content)
+      : format === 'openai-responses' ? result?.object === 'response' && Array.isArray(result.output) : !!result?.choices?.length
+    if (!compatible) throw new SettingsError('接口未返回兼容的模型响应，请检查基础地址', 502)
     return { message: '连接成功，模型可以正常响应' }
   }
   async testZentao(raw: unknown): Promise<{ message: string; bugs: number; tasks: number }> {
