@@ -68,6 +68,7 @@ export interface ModelProfile {
   hasApiKey: boolean
 }
 export interface ModelRuntimeStatus {
+  activeModelIds?: string[]
   preferredModelId: string | null
   nextModelId: string | null
   lastUsedModelId: string | null

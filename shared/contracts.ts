@@ -1,5 +1,6 @@
 import type { Task } from '../src/domain/workbench.js'
 import type { ChannelSummary } from './settings.js'
+import type { ModelUsage } from './modelUsage.js'
 
 export type SessionSource = Exclude<Task['source'], 'manual' | 'zentao'>
 
@@ -56,7 +57,7 @@ export interface WorkbenchSnapshot {
   dataVersion?: string
   tasks: Task[]
   dailyReports: DailyReport[]
-  harness: { run: SyncRun | null; nextSyncAt: string | null; model: string; intervalMs?: number; autoSyncEnabled?: boolean }
+  harness: { run: SyncRun | null; nextSyncAt: string | null; model: string; modelUsage?: ModelUsage; intervalMs?: number; autoSyncEnabled?: boolean }
   channels?: ChannelSummary[]
   sources: Record<SessionSource, SourceStatus> & { zentao?: SourceStatus }
 }

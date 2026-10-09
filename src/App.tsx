@@ -19,6 +19,7 @@ import { Icon } from './components/Icon'
 import { SettingsDialog } from './components/SettingsDialog'
 import { PerpetualCalendar } from './components/PerpetualCalendar'
 import { UserMenu } from './components/UserMenu'
+import { modelUsage } from '../shared/modelUsage'
 import type { WorkbenchSettings } from '../shared/settings'
 
 const ScheduledTasksDialog = lazy(() => import('./components/ScheduledTasksDialog').then((module) => ({ default: module.ScheduledTasksDialog })))
@@ -233,7 +234,7 @@ export default function App() {
   }, [])
   const handleSettingsSaved = useCallback((settings: WorkbenchSettings) => {
     setSnapshot((current) => current && { ...current, channels: settings.channels.map(({ paths: _paths, pathMode: _mode, ...channel }) => channel),
-      harness: { ...current.harness, model: settings.model.name, intervalMs: settings.sync.intervalMs, autoSyncEnabled: settings.sync.enabled } })
+      harness: { ...current.harness, modelUsage: settings.modelRuntime ? modelUsage(settings.models ?? [], settings.modelRuntime, settings.autoSwitchModels ?? true) : undefined, model: settings.model.name, intervalMs: settings.sync.intervalMs, autoSyncEnabled: settings.sync.enabled } })
     void pollerRef.current?.refreshNow()
   }, [])
   const status = job ? phaseLabels[phase] : recentId ? '✓ 已收进今天的日报' : loading ? '正在连接工作台服务' : phaseLabels.idle

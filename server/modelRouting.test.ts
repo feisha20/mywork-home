@@ -8,6 +8,19 @@ const config = () => ({ ...loadConfig({ DATABASE_URL: 'postgresql://app:test@loc
 ] })
 afterEach(() => vi.useRealTimers())
 describe('模型自动切换', () => {
+  it('并发调用显示实际模型，单次结束不会提前清除状态，失败后清除状态', async () => {
+    const router = new ModelRouter(), value = config()
+    const finish: (() => void)[] = []
+    const request = () => new Promise<void>((resolve) => { finish.push(resolve) })
+    const first = router.run(value, 180_000, request), second = router.run(value, 180_000, request)
+    expect(router.status(value).activeModelIds).toEqual(['office'])
+    finish[0](); await first
+    expect(router.status(value).activeModelIds).toEqual(['office'])
+    finish[1](); await second
+    expect(router.status(value).activeModelIds).toBeUndefined()
+    await expect(router.run(value, 180_000, async () => { throw new Error('输出校验失败') })).rejects.toThrow('输出校验失败')
+    expect(router.status(value).activeModelIds).toBeUndefined()
+  })
   it('优先模型失败后使用独立地址与密钥的备用模型，冷却后恢复优先级', async () => {
     vi.useFakeTimers()
     const router = new ModelRouter(), value = config()

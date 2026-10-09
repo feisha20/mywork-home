@@ -640,9 +640,14 @@ body {
   font-size: 11px;
   font-weight: 700;
   color: #F8FAFC;
-  letter-spacing: 1px;
   margin-top: 6px;
   z-index: 4;
+  max-width: 132px;
+  padding: 0 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0;
 }
 
 .processor-chip.energized .core-symbol {
@@ -817,7 +822,7 @@ body {
 .daily-report-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 16px; border-top: 1px solid #e5ebf3; }
 .daily-report-copy-status { flex: 1; min-width: 140px; color: var(--text-sub); font-size: 11px; line-height: 1.7; }
 .daily-report-copy-status [role="alert"] { color: #b91c1c; }
-.daily-report-actions { display: flex; gap: 8px; margin-left: auto; }
+.daily-report-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; margin-left: auto; }
 .report-regenerate { border-color: #d5dfec; background: #fff; color: var(--text-sub); }
 .report-copy { background: var(--accent-orange); border-color: var(--accent-orange); color: #fff; }
 .report-copy:hover { background: #ed592d; border-color: #ed592d; }
@@ -2543,3 +2548,34 @@ button:focus-visible, input:focus-visible {
 .mcp-client-list li > div { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .mcp-client-list strong { overflow-wrap: anywhere; font-size: 13px; color: #435066; }
 .mcp-client-list small { font-size: 11px; color: #8d99ab; }
+
+/* 模型状态沿用渠道卡片的轻量层级，长名称保留完整提示。 */
+.model-status { min-width: 0; padding: 12px 14px; border: 1px solid #e1e8f1; border-radius: 16px; background: rgba(255,255,255,.95); box-shadow: 0 5px 18px rgba(160,175,200,.07); }
+.model-status-heading, .model-status-heading > span, .model-status-identity, .model-status-policy { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.model-status-heading { margin-bottom: 9px; color: var(--text-sub); font-size: 10px; }
+.model-status-heading > span { justify-content: flex-start; gap: 5px; }
+.model-status-heading svg { width: 13px; height: 13px; }
+.model-status-state { flex-shrink: 0; color: #50816f; }
+.model-status-state i { width: 5px; height: 5px; border-radius: 50%; background: #69ba95; }
+.model-status-identity strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-main); }
+.model-status-identity button { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; border: 1px solid #e5ebf3; border-radius: 8px; background: #fff; color: var(--text-sub); cursor: pointer; }
+.model-status-identity button svg { width: 14px; height: 14px; }
+.model-status-identity button:hover { color: var(--accent-orange); border-color: #ffc9ab; background: #fff8f2; }
+.model-status-identity button:focus-visible { outline: 2px solid var(--accent-orange); outline-offset: 3px; }
+.model-status-name { margin: 2px 0 0; font: 11px/1.6 "SF Mono", Menlo, monospace; color: #617187; overflow-wrap: anywhere; }
+.model-status-detail { display: flex; flex-wrap: wrap; gap: 4px 8px; margin: 8px 0 0; font-size: 10px; line-height: 1.6; color: var(--text-sub); }
+.model-status-detail span { min-width: 0; overflow-wrap: anywhere; color: #617187; }
+.model-status-policy { flex-wrap: wrap; margin-top: 9px; padding-top: 8px; border-top: 1px solid #edf1f5; font-size: 10px; line-height: 1.5; color: #8a96a8; }
+.model-status-recovering, .model-status.is-unavailable .model-status-state { color: #b8873e; }
+.model-status.is-unavailable .model-status-state i { background: #d6a251; }
+.model-status.is-active { border-color: #c9e8db; }
+.model-status-note { margin: 8px 0 0; font-size: 10px; line-height: 1.6; color: var(--text-sub); }
+.model-status-inline { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 200px; margin-right: 4px; color: #617187; font-size: 11px; line-height: 1.5; }
+.model-status-inline > svg { flex-shrink: 0; width: 13px; height: 13px; color: #6da88b; }
+.model-status-inline-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-status-inline small { flex-shrink: 0; font-size: 10px; color: var(--text-sub); }
+.model-status-inline.is-unavailable > svg { color: #b8873e; }
+@media (max-width: 540px) {
+  .daily-report-actions { width: 100%; justify-content: flex-end; }
+  .daily-report-actions > .model-status-inline { flex: 1 1 100%; max-width: none; justify-content: flex-end; margin-right: 0; }
+}
