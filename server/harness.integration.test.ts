@@ -50,6 +50,37 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
     expect(req.authorization).toBe('Bearer fixture-api-key')
     expect(JSON.stringify(req.body)).not.toContain('database-secret'); expect(JSON.stringify(req.body)).not.toContain('fixture-password-123')
   }, 60000)
+  it('公司模型连接失败后自动切换个人模型，后续请求跳过故障服务且全部密钥脱敏', async () => {
+    const requests: { url: string; body: string; key?: string }[] = []
+    server = createServer(async (request, response) => {
+      let raw = ''; for await (const chunk of request) raw += chunk
+      requests.push({ url: request.url!, body: raw, key: request.headers.authorization })
+      if (request.url!.startsWith('/office/')) { response.writeHead(503); response.end('fixture unavailable'); return }
+      const content = JSON.stringify({ items: [{ title: '完成模拟工作', status: 'completed', isPersonal: false, evidenceIds: ['M1'] }] })
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      response.write(`data: ${JSON.stringify({ id: 'fixture-fallback', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ id: 'fixture-fallback', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
+      response.end('data: [DONE]\n\n')
+    })
+    await listenFixtureServer(server)
+    runtime = await mkdtemp(join(tmpdir(), 'workbench-model-fallback-'))
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+    const config = loadConfig({ DATABASE_URL: 'postgresql://app:database-secret@localhost/test', WORKBENCH_RUNTIME_DIR: runtime, WORKBENCH_BATCH_TIMEOUT_MS: '30000' })
+    config.models = [
+      { id: 'office', label: '公司模型', enabled: true, baseUrl: `${base}/office`, name: 'office-model', apiKey: 'fixture-office-secret' },
+      { id: 'home', label: '个人模型', enabled: true, baseUrl: `${base}/home`, name: 'home-model', apiKey: 'fixture-home-secret' },
+    ]
+    config.sourceSecrets = config.models.map((model) => model.apiKey)
+    const message: SourceMessage = { id: 'fixture', source: 'codex', sessionId: 'fixture', rootSessionId: 'fixture', projectPath: '/fixture', role: 'assistant', timestamp: new Date().toISOString(), text: '已完成模拟工作。fixture-office-secret fixture-home-secret' }
+    extractor = new HarnessExtractor(config)
+    expect((await extractor.extract([message], [], []))[0].title).toBe('完成模拟工作')
+    expect((await extractor.extract([message], [], []))[0].title).toBe('完成模拟工作')
+    expect(requests.map((request) => request.url)).toEqual(['/office/chat/completions', '/home/chat/completions', '/home/chat/completions'])
+    expect(requests.map((request) => request.key)).toEqual(['Bearer fixture-office-secret', 'Bearer fixture-home-secret', 'Bearer fixture-home-secret'])
+    const bodies = requests.map((request) => request.body).join('')
+    expect(bodies).not.toContain('fixture-office-secret')
+    expect(bodies).not.toContain('fixture-home-secret')
+  }, 60000)
   it('日报先归类再精简，与抽取同时运行时提示词隔离，遗漏及超长内容自动修复', async () => {
     const requests: any[] = []
     let groupAttempts = 0, summaryAttempts = 0, compactAttempts = 0

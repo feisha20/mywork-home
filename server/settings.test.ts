@@ -72,7 +72,7 @@ describe('设置持久化与密钥边界', () => {
     const input = settingsDraft(settings.view())
     input.channels.unshift(input.channels.splice(2, 1)[0])
     input.channels[0].paths = [join(directory, '新的目录')]; input.channels[0].pathMode = 'manual'
-    input.model.name = '新的模型'; input.model.baseUrl = 'https://model.example/v1/'
+    input.model.name = '新的模型'; input.model.baseUrl = 'https://model.example/v1/'; input.model.apiKey = config.WORKBENCH_LLM_API_KEY
     const saved = await settings.save(input)
     const reloaded = await SettingsService.open({ ...config, WORKBENCH_LLM_MODEL: '旧默认模型', WORKBENCH_LLM_API_KEY: '旧环境密钥' })
     expect(reloaded.view()).toEqual(saved)
@@ -85,6 +85,56 @@ describe('设置持久化与密钥边界', () => {
     const clear = settingsDraft(reloaded.view()); clear.model.clearApiKey = true
     await reloaded.save(clear)
     expect((await SettingsService.open(config)).view().model.hasApiKey).toBe(false)
+  })
+  it('多模型独立保留密钥，重排与重启不串用，接口仅返回密钥状态', async () => {
+    const draft = settingsDraft(settings.view())
+    draft.models!.push({ id: 'home', label: '个人模型', enabled: true, baseUrl: 'https://home.example/v1', name: '个人模型', apiKey: '个人模型测试密钥' })
+    const saved = await settings.save(draft)
+    expect(saved.models).toHaveLength(2)
+    expect(JSON.stringify(saved)).not.toContain('个人模型测试密钥')
+    const reopened = await SettingsService.open(config)
+    const ordered = settingsDraft(reopened.view())
+    ordered.models!.reverse(); ordered.model = ordered.models![0]
+    await reopened.save(ordered)
+    const reloaded = await SettingsService.open(config)
+    expect(reloaded.runtimeConfig().models!.map((model) => model.apiKey)).toEqual(['个人模型测试密钥', config.WORKBENCH_LLM_API_KEY])
+    expect(reloaded.runtimeConfig().sourceSecrets).toContain('个人模型测试密钥')
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] })))
+    vi.stubGlobal('fetch', fetch)
+    await reloaded.testModel({ id: 'default', baseUrl: config.WORKBENCH_LLM_BASE_URL, name: '公司模型' })
+    expect(fetch.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${config.WORKBENCH_LLM_API_KEY}`)
+    await expect(reloaded.testModel({ id: 'home', baseUrl: 'https://other.example/v1', name: '个人模型' })).rejects.toThrow('填写 API Key')
+    const changed = settingsDraft(reloaded.view())
+    changed.models![0].baseUrl = 'https://other.example/v1'
+    await reloaded.save(changed)
+    expect(reloaded.runtimeConfig().models![0].apiKey).toBe('')
+    expect(reloaded.runtimeConfig().models![1].apiKey).toBe(config.WORKBENCH_LLM_API_KEY)
+  })
+  it('旧版单模型自动迁移，模型删除与清除密钥不影响其他配置', async () => {
+    const file = join(directory, 'settings/workbench.json'), raw = JSON.parse(await readFile(file, 'utf8'))
+    delete raw.models; delete raw.autoSwitchModels
+    await writeFile(file, JSON.stringify(raw))
+    const reopened = await SettingsService.open(config)
+    expect(reopened.view().models![0]).toMatchObject({ id: 'default', enabled: true, hasApiKey: true })
+    expect(reopened.runtimeConfig().models![0].apiKey).toBe(config.WORKBENCH_LLM_API_KEY)
+    const draft = settingsDraft(reopened.view())
+    draft.models!.push({ id: 'backup', label: '备用', enabled: true, baseUrl: 'https://backup.example', name: '备用', apiKey: '备用测试密钥' })
+    await reopened.save(draft)
+    const clear = settingsDraft(reopened.view()); clear.models![1].clearApiKey = true
+    await reopened.save(clear)
+    expect(reopened.runtimeConfig().models!.map((model) => model.apiKey)).toEqual([config.WORKBENCH_LLM_API_KEY, ''])
+    const remove = settingsDraft(reopened.view()); remove.models!.pop()
+    remove.autoSwitchModels = false
+    await reopened.save(remove)
+    expect((await SettingsService.open(config)).view()).toMatchObject({ autoSwitchModels: false, models: [{ id: 'default' }] })
+  })
+  it('拒绝重复模型标识和全部停用，新增模型测试不会使用其他模型密钥', async () => {
+    const draft = settingsDraft(settings.view())
+    draft.models!.push({ ...draft.models![0] })
+    expect(() => settings.save(draft)).toThrow('模型标识不能重复')
+    draft.models!.pop(); draft.models![0].enabled = false
+    expect(() => settings.save(draft)).toThrow('至少启用一个模型')
+    await expect(settings.testModel({ id: 'unknown', baseUrl: config.WORKBENCH_LLM_BASE_URL, name: '新模型' })).rejects.toThrow('填写 API Key')
   })
   it('定时生成日报配置重启后保留，旧版缺少字段时自动补充默认配置', async () => {
     expect(settings.view().dailyReportSchedule).toEqual({ enabled: false, times: ['12:00', '18:00', '21:00'] })
@@ -309,10 +359,10 @@ describe('设置接口', () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] })))
     vi.stubGlobal('fetch', fetch)
     try {
-      const model = { baseUrl: 'https://model.example/v1', name: '测试草稿模型', apiKey: '' }
+      const model = { id: 'default', baseUrl: config.WORKBENCH_LLM_BASE_URL, name: '测试草稿模型', apiKey: '' }
       const success = await app.inject({ method: 'POST', url: '/api/settings/test-model', payload: model })
       expect(success.statusCode).toBe(200)
-      expect(fetch.mock.calls[0][0]).toBe('https://model.example/v1/chat/completions')
+      expect(fetch.mock.calls[0][0]).toBe(`${config.WORKBENCH_LLM_BASE_URL}/chat/completions`)
       expect(fetch.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${config.WORKBENCH_LLM_API_KEY}`)
       expect(JSON.parse(fetch.mock.calls[0][1].body).model).toBe(model.name)
       expect(settings.view().model.name).toBe(config.WORKBENCH_LLM_MODEL)

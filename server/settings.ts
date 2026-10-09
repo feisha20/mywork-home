@@ -7,12 +7,13 @@ import { CAPTURE_SOURCES, SOURCES } from '../src/domain/workbench.js'
 import { builtinCollectors, defaultPeriodicReportSchedule, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema, zentaoSettingsSchema } from '../shared/settings.js'
 import type { ChannelConfig, ChannelSummary, CollectorKind, PathScanResult, SettingsUpdate, WorkbenchSettings, ZentaoConnection } from '../shared/settings.js'
 import type { Config } from './config.js'
+import { modelRouter } from './modelRouting.js'
 import { SourcePaths } from './sourcePaths.js'
 import { previewCompatibleRecords } from './compatibleRecords.js'
 import { ZentaoError, ZentaoV2Client } from './zentao.js'
 import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
 
-interface SavedSettings extends Omit<SettingsUpdate, 'channels'> { channels: ChannelConfig[]; apiKey: string; zentaoPassword: string }
+interface SavedSettings extends Omit<SettingsUpdate, 'channels' | 'models'> { channels: ChannelConfig[]; models: NonNullable<Config['models']>; apiKey: string; zentaoPassword: string }
 export class SettingsError extends Error {
   constructor(message: string, readonly statusCode = 400) { super(message) }
 }
@@ -43,6 +44,7 @@ export class SettingsService {
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error('无法读取工作台设置，请检查运行目录权限')
       const service = new SettingsService(config, { revision: 1,
+        autoSwitchModels: true, models: [{ id: 'default', label: '默认模型', enabled: true, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }],
         model: { baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL }, apiKey: config.WORKBENCH_LLM_API_KEY,
         sync: { enabled: config.SYNC_ENABLED === 'true', intervalMs: Math.min(86_400_000, Math.max(60_000, Math.ceil(config.SYNC_INTERVAL_MS / 60_000) * 60_000)) },
         dailyReportSchedule: { enabled: false, times: ['12:00', '18:00', '21:00'] },
@@ -64,8 +66,10 @@ export class SettingsService {
         ...(channel.collector === 'zentao' ? { zentao: { baseUrl: zentao?.baseUrl ?? '', account: zentao?.account ?? '', hasPassword: !!zentaoPassword,
           management: zentao?.management ?? defaultZentaoManagement } } : {}) }))
       await chmod(file, 0o600)
-      const service = new SettingsService(config, { ...input, channels, apiKey, zentaoPassword }, sourcePaths)
-      if (legacy) await service.persist(service.data)
+      const models = input.models?.map((model) => ({ id: model.id, label: model.label, enabled: model.enabled, baseUrl: model.baseUrl, name: model.name, apiKey: model.apiKey ?? '' }))
+        ?? [{ id: 'default', label: '默认模型', enabled: true, ...input.model, apiKey }]
+      const service = new SettingsService(config, { ...input, channels, models, apiKey, zentaoPassword }, sourcePaths)
+      if (legacy || !parsed.models) await service.persist(service.data)
       return service
     } catch { throw new Error('工作台设置无法读取，请检查服务端配置文件') }
   }
@@ -76,14 +80,14 @@ export class SettingsService {
       if (!location.hostPath) unresolvedPaths.push(location.path)
       return location.hostPath ?? location.path
     }) }))
-    return { revision: this.data.revision, model: { baseUrl: this.data.model.baseUrl, name: this.data.model.name, hasApiKey: !!this.data.apiKey },
+    return { modelRuntime: modelRouter.status(this.runtimeConfig()), models: this.data.models.map(({ apiKey, ...model }) => ({ ...model, hasApiKey: !!apiKey })), autoSwitchModels: this.data.autoSwitchModels, revision: this.data.revision, model: { baseUrl: this.data.model.baseUrl, name: this.data.model.name, hasApiKey: !!this.data.apiKey },
       sync: { ...this.data.sync }, dailyReportSchedule: { ...this.data.dailyReportSchedule }, periodicReportSchedule: { ...this.data.periodicReportSchedule }, channels, pathEnvironment: this.sourcePaths.environment, unresolvedPaths: [...new Set(unresolvedPaths)] }
   }
   runtimeConfig(): Config {
     // 采集源密码也参与本机会话和报告的脱敏。
-    return { ...this.config, WORKBENCH_LLM_BASE_URL: this.data.model.baseUrl, WORKBENCH_LLM_MODEL: this.data.model.name,
+    return { ...this.config, models: structuredClone(this.data.models), autoSwitchModels: this.data.autoSwitchModels, WORKBENCH_LLM_BASE_URL: this.data.model.baseUrl, WORKBENCH_LLM_MODEL: this.data.model.name,
       WORKBENCH_LLM_API_KEY: this.data.apiKey, SYNC_ENABLED: this.data.sync.enabled ? 'true' : 'false', SYNC_INTERVAL_MS: this.data.sync.intervalMs,
-      sourceSecrets: [...this.config.sourceSecrets, this.data.zentaoPassword].filter(Boolean) }
+      sourceSecrets: [...this.config.sourceSecrets, this.data.zentaoPassword, ...this.data.models.map((model) => model.apiKey)].filter(Boolean) }
   }
   channels() { return structuredClone(this.data.channels) }
   zentaoConnection(): ZentaoConnection | null {
@@ -132,9 +136,18 @@ export class SettingsService {
       const sameIdentity = previous?.baseUrl === baseUrl && previous.account === connection.account
       const zentaoPassword = connection.clearPassword ? '' : connection.password || (sameIdentity ? this.data.zentaoPassword : '')
       if (zentao.enabled && !zentaoPassword) throw new SettingsError('启用禅道采集前，请填写密码；更换地址或账号后需要重新填写密码')
+      const profiles: NonNullable<SettingsUpdate['models']> = input.models ?? [{ id: this.data.models[0].id, label: this.data.models[0].label, enabled: true, ...input.model }, ...this.data.models.slice(1)]
+      const models = profiles.map((model) => {
+        const saved = this.data.models.find((entry) => entry.id === model.id)
+        const baseUrl = model.baseUrl.replace(/\/+$/, '')
+        const sameEndpoint = saved?.baseUrl === baseUrl
+        return { id: model.id, label: model.label, enabled: model.enabled, baseUrl, name: model.name,
+          apiKey: model.clearApiKey ? '' : model.apiKey || (sameEndpoint ? saved.apiKey : '') }
+      })
       const next: SavedSettings = { revision: this.data.revision + 1,
-        model: { baseUrl: input.model.baseUrl.replace(/\/+$/, ''), name: input.model.name },
-        apiKey: input.model.clearApiKey ? '' : input.model.apiKey || this.data.apiKey, zentaoPassword,
+        models, autoSwitchModels: input.autoSwitchModels,
+        model: { baseUrl: models[0].baseUrl, name: models[0].name },
+        apiKey: models[0].apiKey, zentaoPassword,
         sync: input.sync, dailyReportSchedule: input.dailyReportSchedule, periodicReportSchedule: input.periodicReportSchedule, channels: input.channels.map(({ zentao: _connection, ...channel }) => ({ ...channel, id: channel.id as ChannelConfig['id'],
           ...(channel.collector === 'zentao' ? { zentao: { baseUrl, account: connection.account, hasPassword: !!zentaoPassword,
             management: connection.management ?? defaultZentaoManagement } } : {}),
@@ -205,7 +218,8 @@ export class SettingsService {
   }
   async testModel(raw: unknown): Promise<{ message: string }> {
     const model = modelSettingsSchema.parse(raw)
-    const apiKey = model.clearApiKey ? '' : model.apiKey || this.data.apiKey
+    const saved = model.id ? this.data.models.find((entry) => entry.id === model.id) : this.data.models[0]
+    const apiKey = model.clearApiKey ? '' : model.apiKey || (saved?.baseUrl === model.baseUrl.replace(/\/+$/, '') ? saved.apiKey : '')
     if (!apiKey) throw new SettingsError('请先填写 API Key')
     let response: Response
     try {

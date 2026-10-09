@@ -59,9 +59,26 @@ export const defaultPeriodicReportSchedule: PeriodicReportScheduleSettings = {
   monthlyEnabled: true,
   monthlyTime: '18:00',
 }
+export interface ModelProfile {
+  id: string
+  label: string
+  enabled: boolean
+  baseUrl: string
+  name: string
+  hasApiKey: boolean
+}
+export interface ModelRuntimeStatus {
+  preferredModelId: string | null
+  nextModelId: string | null
+  lastUsedModelId: string | null
+  coolingModelIds: string[]
+}
 export interface WorkbenchSettings {
   revision: number
   model: { baseUrl: string; name: string; hasApiKey: boolean }
+  modelRuntime?: ModelRuntimeStatus
+  models?: ModelProfile[]
+  autoSwitchModels?: boolean
   sync: { enabled: boolean; intervalMs: number }
   dailyReportSchedule: DailyReportScheduleSettings
   periodicReportSchedule: PeriodicReportScheduleSettings
@@ -128,6 +145,7 @@ export const pathCheckSchema = z.object({
 })
 export const recordPreviewSchema = pathCheckSchema.extend({ mapping: recordMappingSchema.optional() })
 export const modelSettingsSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9-]{1,64}$/, '模型标识无效').optional(),
   baseUrl: z.string().trim().max(2048).url('模型地址格式无效').refine((value) => {
     const url = new URL(value)
     return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
@@ -136,6 +154,11 @@ export const modelSettingsSchema = z.object({
   apiKey: z.string().trim().max(4096).optional(),
   clearApiKey: z.boolean().optional(),
 }).refine((model) => !(model.clearApiKey && model.apiKey), '清除密钥时不能同时填写新密钥')
+export const modelProfileSchema = modelSettingsSchema.safeExtend({
+  id: z.string().regex(/^[a-zA-Z0-9-]{1,64}$/, '模型标识无效'),
+  label: z.string().trim().min(1, '请填写配置名称').max(40),
+  enabled: z.boolean(),
+})
 export const channelSettingsSchema = z.object({
   id: channelId,
   name: z.string().trim().min(1, '请填写渠道名称').max(40), logo,
@@ -162,11 +185,16 @@ export const periodicReportScheduleSchema = z.object({
 })
 export const settingsUpdateSchema = z.object({
   revision: z.number().int().min(1), model: modelSettingsSchema,
+  models: z.array(modelProfileSchema).min(1).max(10).optional(),
+  autoSwitchModels: z.boolean().default(true),
   sync: z.object({ enabled: z.boolean(), intervalMs: z.number().int().min(60_000).max(86_400_000) }),
   dailyReportSchedule: dailyReportScheduleSchema.default(defaultDailyReportSchedule),
   periodicReportSchedule: periodicReportScheduleSchema.default(defaultPeriodicReportSchedule),
   channels: z.array(channelSettingsSchema).min(6).max(30),
-}).superRefine(({ channels }, context) => {
+}).superRefine(({ channels, models }, context) => {
+  if (models && (new Set(models.map((model) => model.id)).size !== models.length || !models.some((model) => model.enabled))) {
+    context.addIssue({ code: 'custom', message: '模型标识不能重复，且至少启用一个模型' })
+  }
   if (new Set(channels.map((channel) => channel.id)).size !== channels.length) context.addIssue({ code: 'custom', message: '渠道标识不能重复' })
   for (const [id, collector] of Object.entries(builtinCollectors)) {
     const channel = channels.find((entry) => entry.id === id)

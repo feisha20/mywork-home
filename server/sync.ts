@@ -1,3 +1,4 @@
+import { modelRouter } from './modelRouting.js'
 import { randomUUID } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import type { PoolClient } from 'pg'
@@ -441,7 +442,7 @@ export class SyncService {
       if (dbCount > 0) sources.zentao.sessionCount = dbCount
     }
     return { version: 1, recordedDays: days, dataVersion: version, tasks: tasks.map((task) => ({ ...task, sourceLabel: channels.find((channel) => channel.id === task.source)?.name })), dailyReports,
-      harness: { run, nextSyncAt: this.nextSyncAt, model: config.WORKBENCH_LLM_MODEL, intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' },
+      harness: { run, nextSyncAt: this.nextSyncAt, model: modelRouter.candidates(config)[0]?.name ?? config.WORKBENCH_LLM_MODEL, intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' },
       sources, channels: this.settings?.summaries() }
   }
   async waitForIdle() { await this.starting; await this.active }
