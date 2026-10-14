@@ -60,6 +60,38 @@ describe('禅道 V2 个人待办采集', () => {
       expect(fetch).toHaveBeenCalledTimes(4)
     }
   })
+  it('已删除事项详情明确返回不存在时移除旧待办，仍同步其他待办且不重复补查', async () => {
+    const fetch = mockApi(list('bugs', [bug(1)], 1), list('tasks', [task(2)], 1))
+    fetch.mockResolvedValueOnce(response({ status: 'fail', message: 'Bug does not exist.' }))
+      .mockResolvedValueOnce(response({ status: 'fail', message: 'Task does not exist.' }))
+    const snapshot = await new ZentaoV2Client(connection).readWork([
+      { type: 'bug', id: '92611' }, { type: 'bug', id: '92611' }, { type: 'task', id: '3' },
+    ])
+    expect(snapshot).toMatchObject({ bugs: 1, tasks: 1 })
+    expect(snapshot.items.slice(2)).toMatchObject([
+      { reference: 'BUG-92611', state: 'removed', completedAt: null },
+      { reference: 'TASK-3', state: 'removed', completedAt: null },
+    ])
+    mockApi(list('bugs', [bug(92611)], 1), list('tasks', [], 0))
+    const previous = await new ZentaoV2Client(connection).readWork()
+    expect(snapshot.items[2].id).toBe(previous.items[0].id)
+    expect(fetch).toHaveBeenCalledTimes(5)
+  })
+  it('列表失败、HTTP 404、权限错误及含糊的详情失败不会被当成删除', async () => {
+    for (const detail of [
+      new Response(JSON.stringify({ status: 'fail', message: 'Bug does not exist.' }), { status: 404 }),
+      response({ status: 'fail', message: 'Access denied.' }),
+      response({ status: 'fail', message: 'Task does not exist.' }),
+      response({ status: 'fail', message: 'Unknown error.' }),
+      response({ status: 'success', bug: null }),
+    ]) {
+      const fetch = mockApi(list('bugs', [], 0), list('tasks', [], 0))
+      fetch.mockResolvedValueOnce(detail)
+      await expect(new ZentaoV2Client(connection).readWork([{ type: 'bug', id: '92611' }])).rejects.toThrow()
+    }
+    mockApi({ status: 'fail', message: 'Bug does not exist.' }, list('tasks', [], 0))
+    await expect(new ZentaoV2Client(connection).readWork()).rejects.toThrow('工作列表读取失败')
+  })
   it('按服务端分页完整读取，重复采集保留稳定编号和真实完成时间', async () => {
     const fetch = vi.fn().mockResolvedValueOnce(response({ status: 'success', token: '测试令牌' }))
       .mockResolvedValueOnce(response(list('bugs', [bug(1)], 2, 1, 1)))

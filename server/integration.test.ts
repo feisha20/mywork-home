@@ -642,6 +642,34 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     // 源为禅道的事项不作为会话模型可修改的既有任务。
     expect((await store.projectTasks('')).some((row) => row.source === 'zentao')).toBe(false)
   })
+  it('详情明确不存在的 Bug 从待办移除且不生成日志，恢复后沿用原编号', async () => {
+    const connection = { baseUrl: `https://deleted-${randomUUID()}.example`, account: 'fixture', password: '隔离测试密码' }
+    const response = (value: unknown) => new Response(JSON.stringify(value))
+    const mockApi = (missing: boolean) => {
+      const fetch = vi.fn().mockResolvedValueOnce(response({ status: 'success', token: '隔离测试令牌' }))
+        .mockResolvedValueOnce(response({ status: 'success', bugs: missing ? [] : [{
+          id: '92611', title: '待验证删除的 Bug', status: 'active', assignedTo: 'fixture', deleted: '0', openedDate: '2026-10-14 09:00:00',
+        }], pager: { recTotal: missing ? 0 : 1, pageID: 1, recPerPage: 100 } }))
+        .mockResolvedValueOnce(response({ status: 'success', tasks: [], pager: { recTotal: 0, pageID: 1, recPerPage: 100 } }))
+      if (missing) fetch.mockResolvedValueOnce(response({ status: 'fail', message: 'Bug does not exist.' }))
+      vi.stubGlobal('fetch', fetch)
+    }
+    try {
+      mockApi(false)
+      const original = await new ZentaoV2Client(connection).readWork(), id = original.items[0].id
+      await store.applyZentaoSnapshot(original)
+      mockApi(true)
+      const removed = await new ZentaoV2Client(connection).readWork(await store.zentaoTrackedItems(connection.baseUrl, connection.account))
+      expect(await store.applyZentaoSnapshot(removed)).toEqual({ created: 0, updated: 1 })
+      expect((await store.tasks()).some((item) => item.id === id)).toBe(false)
+      expect((await store.recordPage({ startDate: '2026-10-14', endDate: '2026-10-14' })).tasks.some((item) => item.id === id)).toBe(false)
+      expect(await store.zentaoTrackedItems(connection.baseUrl, connection.account)).toEqual([])
+      expect(await store.applyZentaoSnapshot(removed)).toEqual({ created: 0, updated: 0 })
+      mockApi(false)
+      expect(await store.applyZentaoSnapshot(await new ZentaoV2Client(connection).readWork())).toEqual({ created: 0, updated: 1 })
+      expect((await store.tasks()).find((item) => item.id === id)).toMatchObject({ completedAt: null, title: '待验证删除的 Bug' })
+    } finally { vi.unstubAllGlobals() }
+  })
   it('个人分类清理旧日报混合摘要，刷新自动周报并提示人工月报复核', async () => {
     const day = '2026-07-15', at = `${day}T03:00:00Z`
     const originals = ['完成项目交付', '安排家庭旅行', '完善另一个工作项目'].map((title) => ({

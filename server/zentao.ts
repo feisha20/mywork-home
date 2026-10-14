@@ -17,6 +17,7 @@ export interface ZentaoSnapshot {
   instance: string; account: string; items: ZentaoWorkItem[]; bugs: number; tasks: number
 }
 export class ZentaoError extends Error {}
+class ZentaoMissingWork extends ZentaoError {}
 const object = (value: unknown): value is JsonObject => !!value && typeof value === 'object' && !Array.isArray(value)
 const code = (value: unknown) => typeof value === 'string' ? value : object(value) && typeof value.code === 'string' ? value.code : ''
 const accountOf = (value: unknown) => typeof value === 'string' ? value : object(value) && typeof value.account === 'string' ? value.account : ''
@@ -68,7 +69,7 @@ export class ZentaoV2Client {
   private token = ''
   private signal = AbortSignal.timeout(60_000)
   constructor(private connection: ZentaoConnection) {}
-  private async request(path: string, body?: JsonObject): Promise<JsonObject> {
+  private async request(path: string, body?: JsonObject, missingWork?: WorkType): Promise<JsonObject> {
     const url = `${this.connection.baseUrl.replace(/\/+$/, '')}/api.php/v2${path}`
     let response: Response
     try {
@@ -82,6 +83,12 @@ export class ZentaoV2Client {
       throw new ZentaoError(reasons[response.status] ?? '禅道接口请求失败，本轮保留已有待办')
     }
     const result: unknown = await response.json().catch(() => null)
+    // 删除后的详情接口可能返回 HTTP 200 + fail，而不是带 deleted 标记的对象。
+    // 仅在补查单个已采集事项时识别明确的不存在响应，权限、认证与列表错误仍保留快照。
+    if (missingWork && object(result) && result.status === 'fail'
+      && result.message === `${missingWork === 'bug' ? 'Bug' : 'Task'} does not exist.`) {
+      throw new ZentaoMissingWork('禅道已采集事项不存在')
+    }
     if (!object(result) || result.status !== 'success') throw new ZentaoError(body ? '禅道登录失败，请检查账号和密码' : '禅道工作列表读取失败，本轮保留已有待办')
     return result
   }
@@ -167,8 +174,16 @@ export class ZentaoV2Client {
       const key = `${known.type}:${Number(known.id)}`
       trackedKeys.add(key)
       if (seen.has(key)) continue
-      const result = await this.request(`/${known.type === 'bug' ? 'bugs' : 'tasks'}/${Number(known.id)}`)
-      const item = workItem(result[known.type], known.type, this.connection, this.token)
+      let row: unknown
+      try {
+        const result = await this.request(`/${known.type === 'bug' ? 'bugs' : 'tasks'}/${Number(known.id)}`, undefined, known.type)
+        row = result[known.type]
+      } catch (error) {
+        if (!(error instanceof ZentaoMissingWork)) throw error
+        row = { id: String(Number(known.id)), title: '已删除的禅道 Bug', name: '已删除的禅道任务',
+          status: known.type === 'bug' ? 'active' : 'wait', deleted: true }
+      }
+      const item = workItem(row, known.type, this.connection, this.token)
       if (item.zentao.id !== String(Number(known.id))) throw new ZentaoError('禅道事项详情编号不匹配，本轮保留已有待办')
       items.push(item); seen.add(key)
     }
