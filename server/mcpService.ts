@@ -91,7 +91,9 @@ export class McpService {
       }
       case 'save_report': {
         const input = mcpSchema(name).parse(raw), secrets = [...this.secrets(), token]
-        data = await this.data.saveReport({ ...input, ...(input.items ? { items: input.items.map((item) => ({ ...item, text: redact(item.text, secrets) })) } : {}),
+        data = await this.data.saveReport({ ...input, ...(input.items ? { items: input.items.map((item) => ({ ...item, text: redact(item.text, secrets),
+          ...(item.topic ? { topic: redact(item.topic, secrets) } : {}),
+          ...(item.subItems ? { subItems: item.subItems.map((text) => redact(text, secrets)) } : {}) })) } : {}),
           ...(input.markdown !== undefined ? { markdown: redact(input.markdown, secrets) } : {}) }); break
       }
     }

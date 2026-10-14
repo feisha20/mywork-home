@@ -4,7 +4,7 @@ import { recordsForDate } from '../src/domain/workbench.js'
 import type { DailyReport, DailyReportItem } from '../shared/contracts.js'
 import { dailyReportInput, parseDailyReport, parseDailyReportGroups, parseDailyReportSummaries, dailyReportSummaryInput,
   parseDailyReportSummaryDrafts, dailyReportSummaryRepairInput, parseDailyReportCompactSummaries, DailyReportService } from './dailyReport.js'
-import { excludePersonalReportItems, isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
+import { dailyReportItemMaxLength, excludePersonalReportItems, isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 import type { DailyReportGenerator } from './dailyReport.js'
 import { createApp } from './app.js'
 import { loadConfig } from './config.js'
@@ -125,19 +125,19 @@ describe('工作日报的汇总范围与完整性', () => {
     const input = Array.from({ length: 20 }, (_, index) => ({ ...records[0], id: `record-${index}` }))
     expect(() => parseDailyReportGroups(JSON.stringify({ groups: input.map((task) => ({ topic: task.id, taskIds: [task.id] })) }), input)).toThrow('分类过细')
     const groups = parseDailyReportGroups(JSON.stringify({ groups: [{ topic: '测试计划建设', taskIds: ['task-1', 'task-2'] }] }), records)
-    expect(() => parseDailyReportSummaries(JSON.stringify({ items: [{ groupId: 'group-1', text: '细'.repeat(81) }] }), groups, records)).toThrow('80字')
+    expect(() => parseDailyReportSummaries(JSON.stringify({ items: [{ groupId: 'group-1', text: '细'.repeat(dailyReportItemMaxLength + 1) }] }), groups, records)).toThrow(`${dailyReportItemMaxLength}个字符`)
     expect(() => parseDailyReportSummaries(JSON.stringify({ items: [{ groupId: 'group-1', text: '第一项' }, { groupId: 'group-1', text: '第二项' }] }), groups, records)).toThrow('不得再次拆分')
   })
   it('英文名称计入字符数，仅精简超长摘要，保留其他条目与来源归属', () => {
     const groups = [{ topic: '测试计划建设', taskIds: ['task-1'] }, { topic: 'AI工具环境配置', taskIds: ['task-2'] }]
-    const longText = '推进AI工具与代理环境配置，完成codex-with-chatgpt项目部署和workspace.example固定域名连接，ChatGPT内置浏览器与Gemini CLI登录及代理节点访问仍在排查处理中。'
+    const longText = '推进AI工具与代理环境配置，完成codex-with-chatgpt项目部署和workspace.example固定域名连接，ChatGPT内置浏览器与Gemini CLI登录及代理节点访问仍在排查处理中。'.repeat(15)
     const drafts = parseDailyReportSummaryDrafts(JSON.stringify({ items: [
       { groupId: 'group-1', text: grouped[0].text }, { groupId: 'group-2', text: longText },
     ] }), ['group-1', 'group-2'])
     const input = dailyReportSummaryRepairInput(dailyReportSummaryInput(day, records, groups), drafts)
     expect(input.groups.map((group) => group.groupId)).toEqual(['group-2'])
     expect(input.groups[0].draftCharacters).toBe(longText.length)
-    expect(input.groups[0].draftCharacters).toBeGreaterThan(80)
+    expect(input.groups[0].draftCharacters).toBeGreaterThan(dailyReportItemMaxLength)
     expect(input.groups[0].records.map((record) => record.taskId)).toEqual(['task-2'])
     expect(() => parseDailyReportCompactSummaries(JSON.stringify({ items: [drafts[1]] }), ['group-2'])).toThrow(`${longText.length}个字符`)
     const replacement = { groupId: 'group-2', text: '推进AI工具与代理环境配置，完成固定域名接入，继续排查连接和登录问题。' }
@@ -146,6 +146,58 @@ describe('工作日报的汇总范围与完整性', () => {
     const result = parseDailyReportSummaries(JSON.stringify({ items: [drafts[0], replacement] }), groups, records)
     expect(result[0].text).toBe(grouped[0].text)
     expect(result[1]).toMatchObject({ text: replacement.text, taskIds: ['task-2'] })
+  })
+  it('多成果子项保留在保存和补充摘要中，完整摘要供周期报告使用', () => {
+    const groups = [{ topic: '测试计划建设', taskIds: records.map((task) => task.id) }]
+    const subItems = ['完善测试计划列表展示，仍在推进。', '补充交互与验证流程。']
+    const raw = JSON.stringify({ items: [{ groupId: 'group-1', text: '测试计划建设', subItems }] })
+    const drafts = parseDailyReportSummaryDrafts(raw, ['group-1'])
+    expect(drafts[0]).toMatchObject({ text: subItems.join('；'), subItems })
+    const items = parseDailyReportSummaries(raw, groups, records)
+    expect(items[0]).toMatchObject({ text: subItems.join('；'), subItems, topic: groups[0].topic })
+    const previous: DailyReport = { day, generatedAt: records[0].createdAt, recordCount: 2, revision: 1, recordVersions: {}, items }
+    const updated = [{ ...records[0], id: 'new', title: '补充筛选条件' }]
+    const nextGroups = [{ topic: groups[0].topic, taskIds: ['new'], existingGroupIds: ['saved-1'] }]
+    expect(dailyReportSummaryInput(day, updated, nextGroups, [], previous).groups[0].previousSummaries).toEqual([subItems.join('；')])
+    const appended = [...subItems, '补充筛选条件。']
+    const result = parseDailyReportSummaries(JSON.stringify({ items: [{ groupId: 'group-1', text: '更新', subItems: appended }] }), nextGroups, updated, previous)
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ subItems: appended, text: appended.join('；'), taskIds: ['task-1', 'task-2', 'new'] })
+    const longDraft = parseDailyReportSummaryDrafts(JSON.stringify({ items: [{ groupId: 'group-1', text: '概述', subItems: ['长'.repeat(dailyReportItemMaxLength), '第二项'] }] }), ['group-1'])
+    const repair = dailyReportSummaryRepairInput(dailyReportSummaryInput(day, records, groups), longDraft)
+    expect(repair.groups[0].subItems).toEqual(longDraft[0].subItems)
+    expect(() => parseDailyReportCompactSummaries(JSON.stringify({ items: longDraft }), ['group-1'])).toThrow('字符')
+    for (const invalid of [['单个子项'], ['第一项', ''], ['第一项', '第二项\n第三项']]) {
+      expect(() => parseDailyReport(JSON.stringify({ items: [{ text: '概述', subItems: invalid, taskIds: records.map((task) => task.id) }] }), records)).toThrow()
+    }
+  })
+  it('同一项目的多项成果可用多个句子汇报，超过80字符仍原样保留，追加不丢失已有成果', () => {
+    const titles = ['完成会话按日期归档', '完成待办删除与状态管理', '完成日报一键复制', '补充日志筛选和列表交互', '性能问题仍在排查']
+    const tasks = titles.map((title, index) => ({ ...records[0], id: `work-${index}`, title,
+      completedAt: index < 3 ? records[1].completedAt : null }))
+    const groups = [{ topic: '个人工作台', taskIds: tasks.map((task) => task.id) }]
+    const text = '个人工作台：完成会话按日期归档，保留不同来源的工作记录，便于回看当天工作；补充待办删除与状态管理，完成日报一键复制，方便整理后直接汇报；补充日志筛选和列表交互，性能问题仍在排查，相关调整尚未完成。'
+    expect(text.length).toBeGreaterThan(80)
+    const drafts = [{ groupId: 'group-1', text }]
+    const input = dailyReportSummaryInput(day, tasks, groups)
+    expect(dailyReportSummaryRepairInput(input, drafts).groups).toEqual([])
+    expect(parseDailyReportCompactSummaries(JSON.stringify({ items: drafts }), ['group-1'])).toEqual(drafts)
+    const items = parseDailyReportSummaries(JSON.stringify({ items: drafts }), groups, tasks)
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ text, taskIds: tasks.map((task) => task.id) })
+    const previous: DailyReport = { day, generatedAt: records[0].createdAt, revision: 1,
+      recordCount: tasks.length, recordVersions: {}, items }
+    const added = { ...records[0], id: 'work-new', title: '补充日报保存冲突提示' }
+    const appendedGroups = [{ topic: '个人工作台', taskIds: [added.id], existingGroupIds: ['saved-1'] }]
+    const appendInput = dailyReportSummaryInput(day, [added], appendedGroups, [], previous)
+    expect(appendInput.groups[0].previousSummaries).toEqual([text])
+    const combined = `${text}补充日报保存冲突提示，便于发现并发编辑问题。`
+    const result = parseDailyReportSummaries(JSON.stringify({ items: [{ groupId: 'group-1', text: combined }] }), appendedGroups, [added], previous)
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ text: combined, taskIds: [...tasks.map((task) => task.id), added.id] })
+    const multiline = [{ groupId: 'group-1', text: text.replace('；', '；\n') }]
+    expect(dailyReportSummaryRepairInput(input, multiline).groups).toHaveLength(1)
+    expect(() => parseDailyReportCompactSummaries(JSON.stringify({ items: multiline }), ['group-1'])).toThrow('一段文字')
   })
   it('补充时只读取新简介和原摘要，合并相关分类并保留未涉及条目', () => {
     const previous: DailyReport = { day, generatedAt: records[0].createdAt, recordCount: 2, revision: 1, recordVersions: {}, items: [
@@ -229,6 +281,54 @@ describe('工作日报的汇总范围与完整性', () => {
     expect(model.generateDailyReport).toHaveBeenCalledTimes(before)
     await service.close()
   })
+  it('全部日志已整理时仍可重新生成，使用全量素材，不沿用旧摘要或已移除记录', async () => {
+    const tasks = [...records], store = inputStore(tasks), model = generator()
+    const previous: DailyReport = { day, generatedAt: records[0].createdAt, revision: 4, edited: true,
+      recordCount: 3, recordVersions: { ...Object.fromEntries(records.map((task) => [task.id, reportRecordVersion(task)])), removed: '旧记录' },
+      items: [{ text: '旧摘要', taskIds: [...records.map((task) => task.id), 'removed'] }] }
+    // 模拟已保存的历史日报。
+    store.dailyReport.mockResolvedValueOnce(previous)
+    store.saveDailyReport.mockImplementationOnce(async (report, revision) => {
+      expect(revision).toBe(4)
+      return report
+    })
+    const service = new DailyReportService(store, model)
+    const report = await service.generate(day, 'regenerate')
+    expect(model.generateDailyReport).toHaveBeenCalledWith(day, expect.arrayContaining(records), undefined)
+    expect(report).toMatchObject({ revision: 5, recordCount: 2, items: grouped })
+    expect(report.edited).toBeUndefined()
+    expect(report.recordVersions).not.toHaveProperty('removed')
+    await service.close()
+  })
+  it('重新整理失败或发生保存冲突时保留旧日报，之后仍可重试', async () => {
+    const store = inputStore(), model = generator(), service = new DailyReportService(store, model)
+    const previous = await service.generate(day)
+    vi.mocked(model.generateDailyReport).mockRejectedValueOnce(new Error('模型失败'))
+    await expect(service.generate(day, 'regenerate')).rejects.toMatchObject({ statusCode: 502 })
+    expect(await store.dailyReport(day)).toEqual(previous)
+    store.saveDailyReport.mockResolvedValueOnce(null)
+    await expect(service.generate(day, 'regenerate')).rejects.toMatchObject({ statusCode: 409 })
+    expect(await store.dailyReport(day)).toEqual(previous)
+    expect((await service.generate(day, 'regenerate')).revision).toBe(previous.revision + 1)
+    await service.close()
+  })
+  it('重新整理同样排除个人事项，并在本地重新合并管理日志', async () => {
+    const batch = managementBatch(), risk = evaluateManagement(batch, defaultZentaoManagement).risks[0]
+    const management: Task = { ...records[1], id: 'management-new', source: 'zentao',
+      management: { ...risk, riskState: 'active', handlingState: 'completed', occurrence: 1,
+        firstSeenAt: records[1].createdAt, lastVerifiedAt: records[1].createdAt, handledAt: records[1].completedAt,
+        resolvedAt: null, resolutionReason: null } }
+    const store = inputStore([...records, management, { ...records[0], id: 'private', isPersonal: true }])
+    const model = generator(), service = new DailyReportService(store, model)
+    const previous = await service.generate(day)
+    const report = await service.generate(day, 'regenerate')
+    expect(vi.mocked(model.generateDailyReport).mock.calls.at(-1)).toEqual([day, expect.arrayContaining(records), undefined])
+    expect(report.recordCount).toBe(3)
+    expect(report.items.filter((item) => item.localTemplate)).toHaveLength(1)
+    expect(report.items.at(-1)?.taskIds).toEqual([management.id])
+    expect(report.revision).toBe(previous.revision + 1)
+    await service.close()
+  })
   it('保存冲突时不覆盖日报，也不提前标记记录', async () => {
     const store = inputStore(), service = new DailyReportService(store, generator())
     store.saveDailyReport.mockResolvedValueOnce(null)
@@ -242,8 +342,8 @@ describe('工作日报的汇总范围与完整性', () => {
     const tasks = [...records], store = inputStore(tasks), model = generator()
     const service = new DailyReportService(store, model), saved = await service.generate(day)
     tasks[0] = { ...tasks[0], title: '补充测试计划筛选' }
-    vi.mocked(model.generateDailyReport).mockRejectedValueOnce(Object.assign(new Error('模型校验失败'), { validationFeedback: 'group-2仍有96个字符，严格不超过80字符' }))
-    await expect(service.generate(day, 'append')).rejects.toMatchObject({ statusCode: 502, message: '部分日报摘要未能精简到80字符以内，请重试' })
+    vi.mocked(model.generateDailyReport).mockRejectedValueOnce(Object.assign(new Error('模型校验失败'), { validationFeedback: `group-2仍有${dailyReportItemMaxLength + 1}个字符，严格不超过${dailyReportItemMaxLength}个字符` }))
+    await expect(service.generate(day, 'append')).rejects.toMatchObject({ statusCode: 502, message: `部分日报摘要超过${dailyReportItemMaxLength}字符上限，请重试` })
     vi.mocked(model.generateDailyReport).mockRejectedValueOnce(new Error('模型连接失败'))
     await expect(service.generate(day, 'append')).rejects.toMatchObject({ statusCode: 502, message: '模型连接中断，请稍后重试' })
     expect(await store.dailyReport(day)).toEqual(saved)
@@ -273,6 +373,12 @@ describe('工作日报接口', () => {
       expect(saved.json()).toEqual(response.json())
       expect((await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day } })).json()).toEqual(response.json())
       expect(model.generateDailyReport).toHaveBeenCalledOnce()
+      const regenerated = await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day, mode: 'regenerate' } })
+      expect(regenerated.statusCode).toBe(200)
+      expect(regenerated.json().revision).toBe(response.json().revision + 1)
+      expect(model.generateDailyReport).toHaveBeenCalledTimes(2)
+      expect(vi.mocked(model.generateDailyReport).mock.calls.at(-1)).toEqual([day, expect.arrayContaining(records), undefined])
+      expect((await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day, mode: 'unknown' } })).statusCode).toBe(400)
       vi.mocked(store.tasks).mockResolvedValue([...records, { ...records[0], id: 'new-task' }])
       vi.mocked(model.generateDailyReport).mockRejectedValueOnce(new Error('尚未配置模型密钥 WORKBENCH_LLM_API_KEY'))
       const failed = await app.inject({ method: 'POST', url: '/api/daily-reports', payload: { day, mode: 'append' } })

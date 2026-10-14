@@ -164,7 +164,8 @@ export class HarnessExtractor implements Extractor {
       for (let index = 0; index < drafts.length; index++) drafts[index] = replacements.get(drafts[index].groupId) ?? drafts[index]
     }
     return parseDailyReportSummaries(JSON.stringify({ items: drafts }), groups, records, previous)
-      .map((item) => ({ ...item, text: redact(item.text, secrets) }))
+      .map((item) => ({ ...item, text: redact(item.text, secrets),
+        ...(item.subItems ? { subItems: item.subItems.map((text) => redact(text, secrets)) } : {}) }))
   }
   private async runPrompt<T>(prompt: string, systemPrompt: string, parse: (raw: string) => T,
     timeoutMs = this.config.WORKBENCH_BATCH_TIMEOUT_MS, maxAttempts = 2, config = this.currentConfig()): Promise<T> {

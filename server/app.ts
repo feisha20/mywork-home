@@ -154,7 +154,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     return { recordCount: records.length, unorganizedCount: records.filter((task) => !isRecordInReport(task, report)).length }
   })
   app.post('/api/daily-reports', async (request, reply) => {
-    const { day, mode } = z.object({ day: z.iso.date(), mode: z.enum(['initial', 'append']).default('initial') }).parse(request.body)
+    const { day, mode } = z.object({ day: z.iso.date(), mode: z.enum(['initial', 'append', 'regenerate']).default('initial') }).parse(request.body)
     try { return await reports.generate(day, mode) }
     catch (error) {
       if (error instanceof DailyReportError) return reply.code(error.statusCode).send({ error: error.message })

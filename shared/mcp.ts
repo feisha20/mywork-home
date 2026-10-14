@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { dailyReportItemMaxLength, dailyReportItemSchema } from './dailyReports.js'
 
 export interface McpClientView {
   id: string; name: string; canWrite: boolean; canReadEvidence: boolean; createdAt: string; revokedAt: string | null
@@ -24,7 +25,7 @@ export const mcpTools = [
   { name: 'get_source_status', title: '工作资料采集状态', description: '读取来源状态和最近同步结果，明确说明资料缺口，不触发同步或读取系统设置。', schema: z.object({}).strict() },
   { name: 'create_todo', title: '创建手工待办', description: '创建工作待办。相同客户端的requestId重复调用不会重复创建；不同内容不能复用同一requestId。', write: true, schema: z.object({ title: z.string().trim().min(1).max(300), requestId: id }).strict() },
   { name: 'update_todo', title: '更新本地待办', description: '必须提供读取到的version。仅手工事项可改标题，普通禅道任务只改本地状态；Bug、管理风险和自动日志不允许修改。置顶仅支持未完成待办。', write: true, schema: z.object({ id, version: z.string().min(1).max(160), title: z.string().trim().min(1).max(300).optional(), completed: z.boolean().optional(), isPinned: z.boolean().optional() }).strict().refine((value) => value.title !== undefined || value.completed !== undefined || value.isPinned !== undefined, '请至少修改一个字段') },
-  { name: 'save_report', title: '保存助手撰写报告', description: '先读取完整素材，再提供revision及materialVersion保存。日报items需要完整覆盖普通工作日志，每项一句话且最多80字；管理日志由服务合并。周月报传markdown。保存视为人工编辑，自动流程不覆盖；先在对话中展示拟保存内容，用户要求保存时调用。', write: true, schema: z.object({ ...report, revision: z.number().int().nonnegative(), materialVersion: z.string().length(64), items: z.array(z.object({ text: z.string().trim().min(1).max(80).refine((text) => !/[\r\n]/.test(text), '每项日报应为一句话'), taskIds: z.array(id).min(1) }).strict()).max(1000).optional(), markdown: z.string().trim().min(1).max(100_000).optional() }).strict() },
+  { name: 'save_report', title: '保存助手撰写报告', description: `先读取完整素材，再提供revision及materialVersion保存。日报items按项目或目标归类，多成果分类可传topic和subItems分子项，单成果直接传text；保留不同工作成果与实际状态，篇幅随工作量调整，最多${dailyReportItemMaxLength}字符；完整覆盖普通工作日志，管理日志由服务合并。周月报传markdown。保存视为人工编辑，自动流程不覆盖；先在对话中展示拟保存内容，用户要求保存时调用。`, write: true, schema: z.object({ ...report, revision: z.number().int().nonnegative(), materialVersion: z.string().length(64), items: z.array(dailyReportItemSchema).max(1000).optional(), markdown: z.string().trim().min(1).max(100_000).optional() }).strict() },
 ] as const
 export type McpToolName = typeof mcpTools[number]['name']
 export function mcpSchema<Name extends McpToolName>(name: Name) {
@@ -32,7 +33,7 @@ export function mcpSchema<Name extends McpToolName>(name: Name) {
 }
 export const mcpPrompts = [
   { name: 'work_review', title: '工作回顾', text: '查询指定期间工作概览及工作事项，按项目归纳进展、交付成果、阻塞和需跟进事项。需要核实时再读取证据。不要把日志归档等同于工作完成，也不要从消息量推断投入时长。' },
-  { name: 'write_report', title: '报告撰写', text: '分页读取完整报告素材，按项目或工作目标合并同一项工作的开发、修复和验证，写简洁中文报告，不罗列命令、构建历史或测试数量。保留阻塞和未完成状态，不编造明日计划。先展示草稿，用户要求保存后才调用 save_report。' },
+  { name: 'write_report', title: '报告撰写', text: '分页读取完整报告素材，按项目或工作目标合并同一项工作的开发、修复和验证，保留各项不同工作成果和实际状态，篇幅随工作量调整，不只挑一两项成果，不罗列命令、构建历史或测试数量。保留阻塞和未完成状态，不编造明日计划。先展示草稿，用户要求保存后才调用 save_report。' },
   { name: 'plan_today', title: '今日工作安排', text: '查询当前待办、周期待办计划、禅道管理风险和资料更新时间，结合截止时间、严重程度和已有进展提出今日工作顺序。区分事实和建议；用户要求新增或更新待办时再调用写入工具。' },
   { name: 'risk_analysis', title: '管理风险分析', text: '查询禅道管理指标、成员、历史趋势和风险列表，按项目或执行解释风险依据、资料缺口及建议行动。不可读字段和过期数据不能解释为正常，不推断成员绩效，不修改禅道远端。' },
 ] as const

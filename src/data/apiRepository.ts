@@ -45,7 +45,7 @@ export const testZentaoConnection = (connection: NonNullable<SettingsUpdate['cha
 export const inspectZentaoFields = (connection: NonNullable<SettingsUpdate['channels'][number]['zentao']>) => request<ManagementFieldPreview>(
   '/settings/inspect-zentao-fields', { method: 'POST', body: JSON.stringify(connection) }, 70000)
 // 模型总结需要比普通数据请求更长的等待时间；关闭预览时可取消前端等待。
-export const generateDailyReport = (day: string, signal?: AbortSignal, mode: 'initial' | 'append' = 'initial') => request<DailyReport>('/daily-reports',
+export const generateDailyReport = (day: string, signal?: AbortSignal, mode: 'initial' | 'append' | 'regenerate' = 'initial') => request<DailyReport>('/daily-reports',
   { method: 'POST', body: JSON.stringify(mode === 'initial' ? { day } : { day, mode }), signal }, 240000)
 export const fetchDailyReport = (day: string, signal?: AbortSignal) => request<DailyReport | null>(`/daily-reports/${encodeURIComponent(day)}`, { signal })
 export async function loadOrCreateDailyReport(day: string, signal?: AbortSignal): Promise<DailyReport> {

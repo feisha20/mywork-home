@@ -47,7 +47,7 @@ describe('旧缓存迁移与请求失败', () => {
     controller.abort()
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
   })
-  it('已有日报再次打开只读取保存内容，未保存时才生成，补充使用明确模式', async () => {
+  it('已有日报再次打开只读取保存内容，未保存时才生成，补充及重新整理使用明确模式', async () => {
     const saved = { day: '2026-10-01', revision: 1 }
     const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => saved })
     vi.stubGlobal('fetch', fetch)
@@ -60,5 +60,7 @@ describe('旧缓存迁移与请求失败', () => {
     expect(fetch.mock.calls[2][1].method).toBe('POST')
     await generateDailyReport(saved.day, undefined, 'append')
     expect(JSON.parse(fetch.mock.calls[3][1].body)).toEqual({ day: saved.day, mode: 'append' })
+    await generateDailyReport(saved.day, undefined, 'regenerate')
+    expect(JSON.parse(fetch.mock.calls[4][1].body)).toEqual({ day: saved.day, mode: 'regenerate' })
   })
 })
