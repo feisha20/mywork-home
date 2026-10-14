@@ -91,24 +91,18 @@ docker compose down
 
 `WORKBENCH_PORT` 修改宿主机访问端口，默认 `8787`。若数据库部署在其他位置，修改 `WORKBENCH_DB_HOST` 和 `WORKBENCH_DB_PORT`；本机直接运行使用 `DATABASE_URL`。默认端口只对本机开放。
 
-### 数据备份与恢复
+### 运维、备份与恢复
 
-当前本机 PostgreSQL 容器名是 `postgres18`，其他环境请替换成实际名称。备份覆盖工作台 schema，包括任务、来源证据、游标、抽取批次、日报、周月报、自动报告执行记录及检查点与迁移版本。
-
-```bash
-mkdir -p .runtime/backups
-docker exec postgres18 pg_dump -U postgres -d mywork_home -Fc --schema=workbench > .runtime/backups/workbench.dump
-```
-
-恢复会覆盖该工作台 schema，操作前保留当前备份并停止工作台：
+完整说明见 [运维说明](docs/operations.md)，包含部署结构、日常检查、更新回退、定时备份与故障处理。
 
 ```bash
-docker compose stop workbench
-docker exec -i postgres18 pg_restore -U postgres -d mywork_home --clean --if-exists --exit-on-error < .runtime/backups/workbench.dump
-docker compose up -d workbench
+# 一键备份：工作台数据库 schema、服务器设置和 .env
+bash scripts/backup.sh
+# 一键恢复：校验备份，并先自动备份当前数据；--yes 表示确认覆盖
+bash scripts/restore.sh /绝对路径/backup-目录 --yes
 ```
 
-同时妥善保留本机 `.env` 和运行目录中的 `settings/workbench.json`，它们不包含在镜像或数据库备份中。设置文件包含模型密钥、禅道连接凭据和采集路径，仅服务端运行用户可读写；本机开发位于 `.runtime/settings/workbench.json`，Docker 部署位于 `harness-runtime` 卷的 `/app/.runtime/settings/workbench.json`。恢复到新 PostgreSQL 时先运行初始化程序创建同名专属用户及数据库，再恢复工作台备份。
+需在宿主机安装 Node.js 24；PostgreSQL 客户端优先使用本机 `pg_dump`、`pg_restore`，缺少时自动复用已有的 `postgres:18` Docker 镜像，无需额外安装客户端。默认备份到 `backups/`，备份期间短暂停止工作台，结束后恢复原运行状态；恢复失败时保持停机。备份包含凭据，请受控保存。原始会话目录需另行备份；恢复保留目标环境 `.env`，完整步骤和新机迁移限制请先阅读运维说明。
 
 ## 本机开发
 

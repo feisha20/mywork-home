@@ -32,3 +32,8 @@ tmp/imagegen
 test-artifacts
 *.heapsnapshot
 *.cpuprofile
+
+# 数据备份和维护锁包含私有数据或运行状态
+backups/
+.maintenance.lock/
+*.dump
