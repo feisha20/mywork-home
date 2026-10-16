@@ -7,7 +7,7 @@ import { dateKey } from '../src/domain/workbench.js'
 const dayMs = 86_400_000
 export const storyRuleIds = ['release', 'dates', 'coverage', 'review', 'changed-cases'] as const
 export type RiskCandidate = Pick<ManagementTask, 'key' | 'ruleId' | 'instance' | 'account' | 'projectId' | 'project' |
-  'executionId' | 'execution' | 'scopeIds' | 'severity' | 'reason' | 'action' | 'entities' | 'dates'>
+  'executionId' | 'execution' | 'scopeIds' | 'severity' | 'reason' | 'action' | 'entities' | 'dates' | 'dateChecks'>
 export interface ManagementEvaluation {
   risks: RiskCandidate[]; evaluatedKeys: string[]; completeScopeIds: string[]; presentStoryIds: string[]
   metrics: ManagementMetrics[]; members: ManagementMember[]
@@ -160,6 +160,42 @@ export function evaluateManagement(batch: ManagementBatch, settings: ZentaoManag
         String(changed.length) + ' 条关联用例被禅道标记为需求变更待确认。', undefined, scopeIds)
     }
   }
+  // 上线延期数量仍按需求统计，不随待办汇总减少。
+  const releaseRisks = [...risks.values()].filter((risk) => risk.ruleId === 'release')
+  // 日期核对和上线跟进按所属冲刺汇总，各需求的日期依据保留在展开详情中。
+  const dateGroups = new Map<string, RiskCandidate[]>()
+  for (const risk of risks.values()) {
+    if (!['dates', 'release'].includes(risk.ruleId)) continue
+    const groupKey = riskKey(risk.ruleId, 'execution:' + risk.executionId)
+    const group = dateGroups.get(groupKey) ?? []
+    group.push(risk)
+    dateGroups.set(groupKey, group)
+  }
+  for (const [key, group] of dateGroups) {
+    for (const risk of group) risks.delete(risk.key)
+    const first = group[0]
+    const release = first.ruleId === 'release'
+    const overdue = group.filter((risk) => risk.severity === 'red').length
+    risks.set(key, { ...first, key, dates: undefined,
+      severity: release ? overdue ? 'red' : 'yellow' : 'gray',
+      action: release ? '跟进「' + first.execution + '」的' + (overdue ? '上线延期' : '上线准备')
+        : '核对「' + first.execution + '」的需求上线日期依据',
+      reason: release ? group.length + ' 项需求尚无实际上线节点，其中 ' + overdue + ' 项已延期、' + (group.length - overdue) + ' 项临近计划上线日期，请统一跟进。'
+        : group.length + ' 项需求的上线日期缺失、格式非法或实际上线时间在未来，请统一核对需求字段及冲刺日期。',
+      scopeIds: [...new Set(group.flatMap((risk) => risk.scopeIds))],
+      entities: group.flatMap((risk) => risk.entities),
+      dateChecks: group.map((risk) => ({ storyId: risk.entities[0].id, dates: risk.dates! })),
+    })
+  }
+  // 只有需求范围和日期判断完整时，才确认旧的冲刺汇总事项已解除。
+  for (const scope of batch.scopes) {
+    for (const rule of ['dates', 'release']) {
+      if (scope.execution.removed || scope.readable.stories && monitoredRelationsComplete &&
+        scope.stories.every((story) => evaluated.has(riskKey(rule, story.id)))) {
+        evaluated.add(riskKey(rule, 'execution:' + scope.execution.id))
+      }
+    }
+  }
   const metrics: ManagementMetrics[] = [], members: ManagementMember[] = []
   for (const scope of batch.scopes) {
     const execution = scope.execution
@@ -228,7 +264,7 @@ export function evaluateManagement(batch: ManagementBatch, settings: ZentaoManag
         scopeRisks.length ? 'yellow' : 'green',
       storyCount: activeStories.length, released: released.length,
       inferredReleased: released.filter((entry) => datesByStory.get(entry.id)!.actual.source === 'execution').length,
-      overdue: scopeRisks.filter((entry) => entry.ruleId === 'release' && entry.severity === 'red').length,
+      overdue: releaseRisks.filter((entry) => entry.scopeIds.includes(execution.id) && entry.severity === 'red').length,
       closed: activeStories.filter((entry) => closed(entry.status)).length,
       covered: activeStories.filter((entry) => cases.some((testcase) => testcase.storyId === entry.id)).length,
       reviewPending: cases.filter((entry) => entry.status === 'wait').length, severeBugs: severe.length,

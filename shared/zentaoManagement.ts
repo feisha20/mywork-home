@@ -37,6 +37,7 @@ export interface ManagementTask {
   projectId: string; project: string; executionId: string; execution: string; scopeIds: string[]
   severity: ManagementSeverity; reason: string; action: string; entities: ManagementEntity[]
   dates?: ReleaseDates
+  dateChecks?: { storyId: string; dates: ReleaseDates }[]
   riskState: 'active' | 'resolved'; handlingState: ManagementHandling
   firstSeenAt: string; lastVerifiedAt: string; handledAt: string | null
   resolvedAt: string | null; resolutionReason: string | null; occurrence: number

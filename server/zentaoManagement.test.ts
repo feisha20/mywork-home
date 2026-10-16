@@ -87,6 +87,100 @@ describe('禅道上线日期口径', () => {
   })
 })
 describe('测试经理规则与统计', () => {
+  it('同一冲刺的上线准备合并一条，保留每个需求的节点和旧键评估', () => {
+    const batch = managementBatch()
+    batch.scopes[0].stories.push({ ...batch.scopes[0].stories[0], id: '102', title: '支付需求',
+      plannedReleaseAt: valueDate('2026-10-08') })
+    batch.associations['102'] = ['10']
+    const evaluation = evaluateManagement(batch, config)
+    const release = evaluation.risks.filter((risk) => risk.ruleId === 'release')
+    expect(release).toHaveLength(1)
+    expect(release[0]).toMatchObject({ key: 'release:execution:10', severity: 'yellow', scopeIds: ['10'] })
+    expect(release[0].action).toBe('跟进「十月冲刺」的上线准备')
+    expect(release[0].entities.map((entity) => entity.id)).toEqual(['101', '102'])
+    expect(release[0].dateChecks?.map((entry) => entry.dates.planned.value)).toEqual(['2026-10-07', '2026-10-08'])
+    expect(evaluation.evaluatedKeys).toEqual(expect.arrayContaining(['release:101', 'release:102', 'release:execution:10']))
+  })
+  it('混合延期与临期时仍一条待办，取红色提醒且延期统计按需求计数', () => {
+    const batch = managementBatch()
+    for (const id of ['102', '103']) {
+      batch.scopes[0].stories.push({ ...batch.scopes[0].stories[0], id, plannedReleaseAt: valueDate('2026-10-05') })
+      batch.associations[id] = ['10']
+    }
+    for (const stories of [batch.scopes[0].stories, [...batch.scopes[0].stories].reverse()]) {
+      batch.scopes[0].stories = stories
+      const evaluation = evaluateManagement(batch, config)
+      const release = evaluation.risks.filter((risk) => risk.ruleId === 'release')
+      expect(release).toHaveLength(1)
+      expect(release[0].severity).toBe('red')
+      expect(release[0].action).toContain('上线延期')
+      expect(release[0].reason).toContain('2 项已延期、1 项临近')
+      expect(evaluation.metrics[0].overdue).toBe(2)
+    }
+  })
+  it('同名不同冲刺的上线准备独立汇总', () => {
+    const batch = managementBatch()
+    const other = managementBatch(undefined, { id: '102', executionIds: ['11'] }, { id: '11' })
+    batch.scopes.push(other.scopes[0]); batch.executions.push(other.executions[0]); batch.associations['102'] = ['11']
+    expect(rules(batch).filter((risk) => risk.ruleId === 'release').map((risk) => risk.key))
+      .toEqual(['release:execution:10', 'release:execution:11'])
+  })
+  it('上线后解除冲刺上线跟进，未知数据不确认解除', () => {
+    const batch = managementBatch(undefined, { actualReleaseAt: valueDate('2026-10-05') })
+    const evaluation = evaluateManagement(batch, config)
+    expect(evaluation.risks.some((risk) => risk.ruleId === 'release')).toBe(false)
+    expect(evaluation.evaluatedKeys).toContain('release:execution:10')
+    batch.scopes[0].stories[0].actualReleaseAt = { state: 'unavailable', value: '' }
+    expect(evaluateManagement(batch, config).evaluatedKeys).not.toContain('release:execution:10')
+    batch.scopes[0].stories = []; batch.scopes[0].readable.stories = false
+    expect(evaluateManagement(batch, config).evaluatedKeys).not.toContain('release:execution:10')
+  })
+  it('同一冲刺的日期核对合并为一条，保留各需求日期并收起旧键', () => {
+    const batch = managementBatch(undefined, { actualReleaseAt: valueDate('2026-10-07') })
+    batch.scopes[0].stories.push({ ...batch.scopes[0].stories[0], id: '102', title: '支付需求',
+      plannedReleaseAt: valueDate('非法日期') })
+    batch.associations['102'] = ['10']
+    const evaluation = evaluateManagement(batch, config)
+    const dates = evaluation.risks.filter((risk) => risk.ruleId === 'dates')
+    expect(dates).toHaveLength(1)
+    expect(dates[0]).toMatchObject({ key: 'dates:execution:10', executionId: '10', severity: 'gray' })
+    expect(dates[0].reason).toContain('2 项需求')
+    expect(dates[0].entities.map((entity) => entity.id)).toEqual(['101', '102'])
+    expect(dates[0].dates).toBeUndefined()
+    expect(dates[0].dateChecks).toEqual([
+      { storyId: '101', dates: evaluation.datesByStory['101'] },
+      { storyId: '102', dates: evaluation.datesByStory['102'] },
+    ])
+    expect(evaluation.evaluatedKeys).toEqual(expect.arrayContaining(['dates:101', 'dates:102', 'dates:execution:10']))
+  })
+  it('不同冲刺的日期核对分别汇总，同名冲刺也不混合', () => {
+    const batch = managementBatch(undefined, { actualReleaseAt: valueDate('2026-10-07') })
+    const other = managementBatch(undefined, { id: '102', executionIds: ['11'], actualReleaseAt: valueDate('2026-10-07') }, { id: '11' })
+    batch.scopes.push(other.scopes[0]); batch.executions.push(other.executions[0]); batch.associations['102'] = ['11']
+    expect(rules(batch).filter((risk) => risk.ruleId === 'dates').map((risk) => risk.key)).toEqual(['dates:execution:10', 'dates:execution:11'])
+  })
+  it('日期修正后解除冲刺汇总，读取不完整时不确认解除', () => {
+    const batch = managementBatch()
+    let evaluation = evaluateManagement(batch, config)
+    expect(evaluation.risks.some((risk) => risk.ruleId === 'dates')).toBe(false)
+    expect(evaluation.evaluatedKeys).toContain('dates:execution:10')
+    batch.scopes[0].stories[0].actualReleaseAt = { state: 'unavailable', value: '' }
+    expect(evaluateManagement(batch, config).evaluatedKeys).not.toContain('dates:execution:10')
+    batch.scopes[0].stories = []; batch.scopes[0].readable.stories = false
+    expect(evaluateManagement(batch, config).evaluatedKeys).not.toContain('dates:execution:10')
+    batch.scopes[0].readable.stories = true
+    evaluation = evaluateManagement(batch, config)
+    expect(evaluation.evaluatedKeys).toContain('dates:execution:10')
+  })
+  it('跨冲刺关联的同一需求只归入一个日期核对事项', () => {
+    const batch = managementBatch(undefined, { actualReleaseAt: valueDate('2026-10-07') })
+    const scope = structuredClone(batch.scopes[0]); scope.execution.id = '11'
+    batch.scopes.push(scope); batch.executions.push(scope.execution); batch.associations['101'].push('11')
+    const dates = rules(batch).filter((risk) => risk.ruleId === 'dates')
+    expect(dates).toHaveLength(1)
+    expect(dates[0]).toMatchObject({ key: 'dates:execution:11', scopeIds: ['10', '11'] })
+    expect(dates[0].entities).toHaveLength(1)
+  })
   it('历史关联缺口不可能改变最晚兜底时继续判断；可能改变时保留未知', () => {
     const batch = managementBatch()
     batch.relationsComplete = false; batch.associationGaps = ['2']

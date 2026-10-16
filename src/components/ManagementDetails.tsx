@@ -16,6 +16,11 @@ export function ManagementDetails({ task, actions }: { task: Task; actions?: Rea
     <ul>{management.entities.map((entity) => <li key={entity.type + entity.id}>
       <a href={/^https?:\/\//.test(entity.url) ? entity.url : undefined} target="_blank" rel="noopener noreferrer">{entity.title}</a>
       {entity.owner && <span> · {entity.owner}</span>}
+      {management.dateChecks?.filter((check) => entity.type === 'story' && check.storyId === entity.id).map((check) =>
+        <dl className="management-dates" key={check.storyId}>
+          <div><dt>计划节点</dt><dd>{displayDate(check.dates.planned)}<small>{check.dates.planned.sourceLabel}</small></dd></div>
+          <div><dt>实际节点</dt><dd>{displayDate(check.dates.actual)}<small>{check.dates.actual.sourceLabel}</small></dd></div>
+        </dl>)}
     </li>)}</ul>
     <p>最近核实：{new Date(management.lastVerifiedAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
       {management.stale ? ' · 数据待更新' : ''}</p>

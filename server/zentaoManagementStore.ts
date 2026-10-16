@@ -142,7 +142,8 @@ export class ZentaoManagementStore {
             const metadata: ManagementTask = row.management;
             if (currentKeys.has(metadata.key))
               continue;
-            const storyId = storyRuleIds.some((id) => id === metadata.ruleId) ? metadata.key.slice(metadata.ruleId.length + 1) : undefined;
+            const storyId = storyRuleIds.some((id) => id === metadata.ruleId) && !metadata.key.startsWith(metadata.ruleId + ':execution:')
+              ? metadata.key.slice(metadata.ruleId.length + 1) : undefined;
             const absent = storyRuleIds.some((id) => id === metadata.ruleId) && !!storyId && !evaluation.presentStoryIds.includes(storyId) &&
               metadata.scopeIds.every((id) => evaluation.completeScopeIds.includes(id));
             if (evaluated.has(metadata.key) || absent) {
@@ -153,8 +154,13 @@ export class ZentaoManagementStore {
               metadata.riskState = 'resolved';
               metadata.resolvedAt = batch.collectedAt;
               metadata.lastVerifiedAt = batch.collectedAt;
-              metadata.resolutionReason = metadata.ruleId === 'release'
-                ? dates?.actual.state === 'valid' ? '已取得上线节点' : '计划或关联范围已调整' : absent ? '已确认移出监控范围' : '触发条件已解除';
+              const merged = storyId && ['dates', 'release'].includes(metadata.ruleId) && evaluation.risks.some((risk) =>
+                risk.ruleId === metadata.ruleId && risk.entities.some((entity) => entity.type === 'story' && entity.id === storyId));
+              metadata.resolutionReason = merged
+                ? metadata.ruleId === 'release' ? '已合并为冲刺上线跟进待办' : '已合并为冲刺日期核对待办'
+                : metadata.ruleId === 'release'
+                ? dates?.actual.state === 'valid' ? '已取得上线节点' : '计划或关联范围已调整'
+                : absent ? '已确认移出监控范围' : '触发条件已解除';
               metadata.stale = false;
             }
             else
