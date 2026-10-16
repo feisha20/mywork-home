@@ -1,12 +1,13 @@
 import { aggregatePeriodData, periodBounds, synthesizePeriodicReport, periodicMarkdownSections } from '../src/domain/periodicReport.js'
 import type { Store } from './store.js'
+import type { PeriodicReportGenerator } from './periodicReportSummary.js'
 
 export class PeriodicReportError extends Error {
   constructor(message: string, readonly statusCode: number) { super(message) }
 }
 type PeriodStore = Pick<Store, 'periodTasks' | 'dailyReports' | 'periodicReport' | 'periodicReports' | 'savePeriodicReport'>
 export class PeriodicReportService {
-  constructor(private store: PeriodStore) {}
+  constructor(private store: PeriodStore, private generator?: PeriodicReportGenerator) {}
   private bounds(type: 'weekly' | 'monthly', key: string) {
     try { return periodBounds(type, key) } catch { throw new PeriodicReportError('报告周期无效', 400) }
   }
@@ -40,6 +41,18 @@ export class PeriodicReportService {
     if (automatic && previous?.edited) return previous
     const { bounds, tasks, dailyReports } = await this.material(type, key)
     const report = synthesizePeriodicReport(type, bounds, dailyReports, tasks)
+    const data = aggregatePeriodData(bounds.startDate, bounds.endDate, dailyReports, tasks)
+    if (this.generator && (data.matchedReports.length || data.completedTasks.length || data.pendingTasks.length)) {
+      try {
+        report.sections = await this.generator.generatePeriodicReport(type, data)
+        report.markdown = [report.markdown.split('\n').slice(0, 2).join('\n'), ...report.sections.map((section) =>
+          `### ${section.title}\n\n${section.items.map((item, index) => `${index + 1}. ${item}`).join('\n')}`)].join('\n\n')
+      } catch (error) {
+        const message = error instanceof Error ? error.message : ''
+        throw new PeriodicReportError(message.includes('密钥') ? '尚未配置可用模型，请在设置中配置后重新整理'
+          : '周月报归纳失败，原有报告已保留，请稍后重新整理', /密钥/.test(message) ? 503 : 502)
+      }
+    }
     const saved = await this.store.savePeriodicReport(report, previous?.revision ?? 0, tasks)
     if (!saved) throw new PeriodicReportError('报告已被其他请求更新，请重新载入后再整理', 409)
     return saved
@@ -64,4 +77,5 @@ export class PeriodicReportService {
       }
     }
   }
+  async close() { await this.generator?.close() }
 }

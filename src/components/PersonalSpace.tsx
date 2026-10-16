@@ -339,7 +339,12 @@ export function PersonalSpace({ clock, onClose, onOpenSettings }: PersonalSpaceP
                         {section.items.map((item, itemIdx) => (
                           <li key={itemIdx} className="section-list-item">
                             <span className="bullet-num">{itemIdx + 1}</span>
-                            <span className="bullet-text">{item}</span>
+                            <div className="bullet-text">
+                              {item.includes('\n   - ') ? <>
+                                <span>{item.split('\n   - ')[0]}</span>
+                                <ul>{item.split('\n   - ').slice(1).map((text, index) => <li key={index}>{text}</li>)}</ul>
+                              </> : item}
+                            </div>
                           </li>
                         ))}
                       </ul>

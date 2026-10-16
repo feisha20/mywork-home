@@ -15,6 +15,8 @@ import { dailyReportGroupingGuidance, dailyReportGuidance, dailyReportCompactGui
   dailyReportSummaryRepairInput, parseDailyReportGroups, parseDailyReportSummaries, parseDailyReportSummaryDrafts,
   parseDailyReportCompactSummaries } from './dailyReport.js'
 import type { DailyReport } from '../shared/contracts.js'
+import { periodicReportGuidance, periodicReportSummaryInput, parsePeriodicReportSummary } from './periodicReportSummary.js'
+import type { AggregatedPeriodData } from '../src/domain/periodicReport.js'
 
 const resultSchema = z.object({ items: z.array(z.object({
   taskId: z.preprocess((value) => value === '' || value === null ? undefined : value, z.string().min(1).optional()), title: z.string().trim().min(1).max(60),
@@ -166,6 +168,13 @@ export class HarnessExtractor implements Extractor {
     return parseDailyReportSummaries(JSON.stringify({ items: drafts }), groups, records, previous)
       .map((item) => ({ ...item, text: redact(item.text, secrets),
         ...(item.subItems ? { subItems: item.subItems.map((text) => redact(text, secrets)) } : {}) }))
+  }
+  async generatePeriodicReport(type: 'weekly' | 'monthly', data: AggregatedPeriodData) {
+    const config = this.currentConfig()
+    const secrets = [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password), ...config.sourceSecrets, ...(config.models ?? []).map((model) => model.apiKey)]
+    const input = periodicReportSummaryInput(type, data, secrets)
+    return this.runPrompt(JSON.stringify(input), periodicReportGuidance, (raw) => parsePeriodicReportSummary(raw, input)
+      .map((section) => ({ ...section, items: section.items.map((text) => redact(text, secrets)) })), config.WORKBENCH_BATCH_TIMEOUT_MS, 3, config)
   }
   private async runPrompt<T>(prompt: string, systemPrompt: string, parse: (raw: string) => T,
     timeoutMs = this.config.WORKBENCH_BATCH_TIMEOUT_MS, maxAttempts = 2, config = this.currentConfig()): Promise<T> {

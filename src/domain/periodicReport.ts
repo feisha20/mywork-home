@@ -290,6 +290,11 @@ export function periodicMarkdownSections(markdown: string): PeriodicReportSectio
   const hasSections = /^#{3,6}\s+/m.test(markdown)
   for (const line of markdown.split('\n')) {
     if (!line.trim()) continue
+    // 缩进子项归属于上一成果，编辑保存后仍保持项目与子项的层级。
+    if (/^\s+[-*]\s+/.test(line) && current?.items.length) {
+      current.items[current.items.length - 1] += `\n${line}`
+      continue
+    }
     const heading = /^#{1,6}\s+(.+)$/.exec(line)
     if (hasSections && /^#{1,2}\s+/.test(line)) continue
     if (heading) { current = { title: heading[1],items: [] }; sections.push(current); continue }

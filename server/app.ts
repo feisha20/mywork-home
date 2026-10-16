@@ -21,9 +21,10 @@ const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), sour
 
 export async function createApp(config: Config, store: Store, sync: SyncService,
   reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config)),
-  periodic = new PeriodicReportService(store), automation?: ReportAutomation, scheduled = new ScheduledTasks(store)) {
+  periodic = new PeriodicReportService(store, new HarnessExtractor(config, 'periodic-report-harness', () => sync.settings?.runtimeConfig() ?? config)), automation?: ReportAutomation, scheduled = new ScheduledTasks(store)) {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 })
   app.addHook('onClose', () => reports.close())
+  app.addHook('onClose', () => periodic.close())
   app.addHook('onClose', () => scheduled.close())
   app.addHook('onRequest', async (request, reply) => {
     if (!request.url.startsWith('/api/')) return

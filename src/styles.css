@@ -2336,6 +2336,18 @@ button:focus-visible, input:focus-visible {
 
 .bullet-text {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bullet-text > ul {
+  margin: 8px 0 0;
+  padding-left: 1.3em;
+  list-style: disc;
+}
+
+.bullet-text > ul > li + li {
+  margin-top: 6px;
 }
 
 .space-editor-container {

@@ -20,8 +20,7 @@ const settings = await SettingsService.open(config)
 const sync = new SyncService(store, config, new HarnessExtractor(config), settings)
 // 日报与同步使用独立模型运行目录，避免同时生成时互相覆盖提示词配置。
 const reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => settings.runtimeConfig()))
-const periodic = new PeriodicReportService(store)
-await periodic.restoreOriginalFormat()
+const periodic = new PeriodicReportService(store, new HarnessExtractor(config, 'periodic-report-harness', () => settings.runtimeConfig()))
 const automation = new ReportAutomation(store, settings, reports, periodic, () => sync.waitForIdle())
 const scheduled = new ScheduledTasks(store)
 const app = await createApp(config, store, sync, reports, periodic, automation, scheduled)
@@ -30,7 +29,7 @@ async function shutdown() {
   if (closing) return
   closing = true
   console.log('正在停止工作台，保存同步进度')
-  try { await Promise.all([reports.close(), automation.close(), sync.close(), app.close()]); await pool.end() }
+  try { await Promise.all([reports.close(), periodic.close(), automation.close(), sync.close(), app.close()]); await pool.end() }
   catch { console.error('关闭时发生异常，请检查运行日志'); process.exitCode = 1 }
 }
 process.on('SIGTERM', () => void shutdown())
