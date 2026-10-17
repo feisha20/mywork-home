@@ -1,9 +1,21 @@
 import type { SyncRun } from '../../shared/contracts.js'
 import type { Config } from '../config.js'
 import { extractionFailureReason, type Extractor } from '../harness.js'
+import { ModelConnectionError } from '../modelRouting.js'
 import { redact } from '../redact.js'
 import type { SourceMessage } from '../records.js'
 import type { Store } from '../store.js'
+
+// 是否停掉整轮只看错误码。连接失败和缺少密钥继续重试没有意义；超时、校验和关闭只跳过当前会话。
+// 无法归类的异常仍停止整轮，避免在未知故障上连续请求。
+export function extractionBatchFailure(error: unknown, secrets: string[]): { reason: string; unavailable: boolean } {
+  const validation = extractionFailureReason(error)
+  if (validation) return { reason: validation, unavailable: false }
+  if (error instanceof ModelConnectionError) {
+    return { reason: redact(error.message, secrets), unavailable: error.code === 'CONNECTION' || error.code === 'NO_API_KEY' }
+  }
+  return { reason: '模型接入或抽取失败，请检查配置及套餐额度', unavailable: true }
+}
 
 export function messageBatches(messages: SourceMessage[], maxCharacters = 30000): SourceMessage[][] {
   const result: SourceMessage[][] = []
@@ -66,12 +78,12 @@ export class ExtractionBatcher {
           run.processedBatches = (run.processedBatches ?? 0) + 1
           await onProgress(run)
         } catch (error) {
-          // 不存储上游完整错误，避免 SDK 把提示词或请求头带入日志。
-          const reason = extractionFailureReason(error) ?? (error instanceof Error && /超时|校验|密钥|正在关闭/.test(error.message) ? redact(error.message, secrets) : '模型接入或抽取失败，请检查配置及套餐额度')
-          await this.store.failBatch(id, reason)
+          // 不存储上游完整错误，避免 SDK 把提示词或请求头带入运行记录。
+          const failure = extractionBatchFailure(error, secrets)
+          await this.store.failBatch(id, failure.reason)
           run.failedBatches++
-          onError(run, reason)
-          if (/密钥|模型接入/.test(reason)) modelUnavailable = true
+          onError(run, failure.reason)
+          if (failure.unavailable) modelUnavailable = true
           // 当前会话依赖前文；本批失败后不继续处理该会话的后续消息。
           blockedGroups.add(key)
           break

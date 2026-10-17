@@ -68,7 +68,7 @@ describe('原生结构化输出协议', () => {
     vi.stubGlobal('fetch', vi.fn((_url, request) => new Promise((_resolve, reject) => request.signal.addEventListener('abort', () => reject(new Error('模拟中断'))))))
     const current = { ...config(), WORKBENCH_LLM_API_FORMAT: 'gemini_native' as const, WORKBENCH_BATCH_TIMEOUT_MS: 100 }
     const extractor = new HarnessExtractor(current)
-    await expect(extractor.extract([message], [], [])).rejects.toThrow('模型连接失败或超时')
+    await expect(extractor.extract([message], [], [])).rejects.toMatchObject({ message: '模型请求超时', code: 'TIMEOUT' })
     await extractor.close()
     await expect(extractor.extract([message], [], [])).rejects.toThrow()
   })

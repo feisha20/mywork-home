@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { ScheduledTasks } from './scheduledTasks.js'
 import { scheduledTaskSchema } from '../shared/scheduledTasks.js'
@@ -16,25 +17,40 @@ import { isRecordInReport } from '../shared/dailyReports.js'
 import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
 import { registerMcp } from './mcp.js'
 import { WorkbenchEventStream } from './events.js'
+import { loggedError, loggerOptions, type LogStream } from './logger.js'
+
+export interface AppLogOptions { logLevel?: string; logStream?: LogStream }
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
   title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable(), isPersonal: z.boolean().optional() })
 
 export async function createApp(config: Config, store: Store, sync: SyncService,
   reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config)),
-  periodic = new PeriodicReportService(store, new HarnessExtractor(config, 'periodic-report-harness', () => sync.settings?.runtimeConfig() ?? config)), automation?: ReportAutomation, scheduled = new ScheduledTasks(store)) {
-  const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 })
-  const events = new WorkbenchEventStream(store, sync, () => {
-    const runtime = sync.settings?.runtimeConfig() ?? config
-    return [runtime.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(runtime.DATABASE_URL).password),
-      ...runtime.sourceSecrets, ...(runtime.models ?? []).map((model) => model.apiKey)]
+  periodic = new PeriodicReportService(store, new HarnessExtractor(config, 'periodic-report-harness', () => sync.settings?.runtimeConfig() ?? config)), automation?: ReportAutomation, scheduled = new ScheduledTasks(store),
+  options?: AppLogOptions) {
+  const app = Fastify({
+    logger: { ...loggerOptions(options?.logLevel ?? (options?.logStream ? 'info' : undefined)), ...(options?.logStream ? { stream: options.logStream } : {}) },
+    genReqId: (request) => {
+      const header = request.headers['x-request-id']
+      const incoming = Array.isArray(header) ? header[0] : header
+      return incoming && /^[A-Za-z0-9_-]{1,80}$/.test(incoming) ? incoming : randomUUID()
+    },
+    bodyLimit: 2 * 1024 * 1024,
   })
+  const secretValues = () => {
+    const runtime = sync.settings?.runtimeConfig() ?? config
+    let password = ''
+    try { password = decodeURIComponent(new URL(runtime.DATABASE_URL).password) } catch { password = '' }
+    return [runtime.WORKBENCH_LLM_API_KEY, password, ...runtime.sourceSecrets, ...(runtime.models ?? []).map((model) => model.apiKey)].filter(Boolean)
+  }
+  const events = new WorkbenchEventStream(store, sync, secretValues)
   // 必须在等待 HTTP 连接关闭之前结束长连接，否则关停会一直等待 SSE。
   app.addHook('preClose', () => events.close())
   app.addHook('onClose', () => reports.close())
   app.addHook('onClose', () => periodic.close())
   app.addHook('onClose', () => scheduled.close())
   app.addHook('onRequest', async (request, reply) => {
+    reply.header('x-request-id', request.id)
     if (!request.url.startsWith('/api/')) return
     const origin = request.headers.origin
     let allowed = !origin
@@ -49,24 +65,36 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
       return reply.code(415).send({ error: '请使用 JSON 请求' })
     }
   })
-  app.setErrorHandler((error, _request, reply) => {
-    if (error instanceof SettingsError || error instanceof PeriodicReportError) return reply.code(error.statusCode).send({ error: error.message })
+  app.setErrorHandler((error, request, reply) => {
+    const safe = loggedError(error, secretValues())
+    if (error instanceof SettingsError || error instanceof PeriodicReportError) {
+      request.log.warn({ failure: safe, statusCode: error.statusCode }, '请求被拒绝')
+      return reply.code(error.statusCode).send({ error: error.message })
+    }
     const status = error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 500
+    if (status >= 500) request.log.error({ failure: safe, statusCode: status }, '请求处理失败')
+    else request.log.warn({ failure: safe, statusCode: status }, '请求被拒绝')
     void reply.code(status).send({ error: status === 400 ? '请求数据无效，请检查输入内容' : status === 409 && error instanceof Error ? error.message : '请求失败，请检查服务或数据库连接后重试' })
   })
-  app.get('/api/health', async (_request, reply) => {
+  app.get('/api/health', async (request, reply) => {
     try { await store.pool.query('SELECT 1'); return { status: 'ok' } }
-    catch { return reply.code(503).send({ status: 'unavailable' }) }
+    catch (error) {
+      request.log.error({ failure: loggedError(error, secretValues()) }, '数据库健康检查失败')
+      return reply.code(503).send({ status: 'unavailable' })
+    }
   })
   app.get('/api/workbench', () => sync.snapshot())
-  app.get('/api/events', async (_request, reply) => {
+  app.get('/api/events', async (request, reply) => {
     let initial
     try { await events.ready(); initial = sync.realtimeStatus(await store.latestRun()) }
-    catch { return reply.code(503).send({ error: '实时连接暂不可用，工作台将使用低频刷新' }) }
+    catch (error) {
+      request.log.error({ failure: loggedError(error, secretValues()) }, '实时连接初始化失败')
+      return reply.code(503).send({ error: '实时连接暂不可用，工作台将使用低频刷新' })
+    }
     if (reply.raw.destroyed) return reply
     reply.hijack()
     reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache, no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
+      'Cache-Control': 'no-cache, no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no', 'x-request-id': request.id })
     reply.raw.flushHeaders()
     events.attach(reply.raw, initial)
   })

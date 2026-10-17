@@ -2,8 +2,18 @@ import { modelApiFormat } from '../shared/modelApi.js'
 import type { ModelRuntimeStatus } from '../shared/settings.js'
 import type { Config } from './config.js'
 
-// 连接错误允许切换；输出校验失败保留原模型的纠错流程。
-export class ModelConnectionError extends Error {}
+export const MODEL_ERROR_CODES = ['TIMEOUT', 'CONNECTION', 'NO_API_KEY', 'VALIDATION', 'SHUTTING_DOWN'] as const
+export type ModelErrorCode = typeof MODEL_ERROR_CODES[number]
+
+// 连接和超时允许切换备用模型；关闭与输出校验必须原样抛出，避免把停机当成故障转移。
+export class ModelConnectionError extends Error {
+  readonly code: ModelErrorCode
+  constructor(message: string, code: ModelErrorCode = 'CONNECTION') {
+    super(message)
+    this.name = 'ModelConnectionError'
+    this.code = code
+  }
+}
 type Model = NonNullable<Config['models']>[number]
 export class ModelRouter {
   private listeners = new Set<(event: { from?: string; to?: string }) => void>()
@@ -54,8 +64,9 @@ export class ModelRouter {
   }
   async run<T>(config: Config, timeoutMs: number, request: (config: Config, timeoutMs: number) => Promise<T>, mode: 'default' | 'long-form' = 'default'): Promise<T> {
     const models = this.candidates(config)
-    if (!models.length) throw new Error((config.models ?? []).some((model) => model.enabled && model.apiKey)
-      ? '所有模型暂时不可用，请在一分钟后重试' : '尚未配置可用的模型密钥')
+    if (!models.length) throw new ModelConnectionError((config.models ?? []).some((model) => model.enabled && model.apiKey)
+      ? '所有模型暂时不可用，请在一分钟后重试' : '尚未配置可用的模型密钥',
+      (config.models ?? []).some((model) => model.enabled && model.apiKey) ? 'CONNECTION' : 'NO_API_KEY')
     const deadline = Date.now() + timeoutMs
     let lastError: unknown
     for (const [index, model] of models.entries()) {
@@ -78,7 +89,7 @@ export class ModelRouter {
         this.scheduleRecovery()
         return result
       } catch (error) {
-        if (!(error instanceof ModelConnectionError)) throw error
+        if (!(error instanceof ModelConnectionError) || error.code === 'SHUTTING_DOWN' || error.code === 'VALIDATION') throw error
         this.failures.set(this.identity(model), Date.now() + 60_000)
         this.scheduleRecovery()
         lastError = error
@@ -89,7 +100,7 @@ export class ModelRouter {
         this.changed()
       }
     }
-    throw lastError ?? new ModelConnectionError('模型请求超时')
+    throw lastError ?? new ModelConnectionError('模型请求超时', 'TIMEOUT')
   }
 }
 export const modelRouter = new ModelRouter()

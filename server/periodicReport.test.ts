@@ -99,7 +99,8 @@ describe('周期报告保存和并发保护', () => {
 
 describe('周月报失败原因提示', () => {
   it('区分超时、连接、冷却与缺少配置，不泄漏上游原文', () => {
-    expect(periodicReportFailure(new ModelConnectionError('模型抽取超时，下次同步将重试')).message).toContain('生成超时')
+    expect(periodicReportFailure(new ModelConnectionError('上游没有按时返回', 'TIMEOUT')).message).toContain('生成超时')
+    expect(periodicReportFailure(new ModelConnectionError('模型抽取超时，下次同步将重试', 'CONNECTION')).message).toContain('连接失败')
     expect(periodicReportFailure(new ModelConnectionError('私有密钥和上游正文')).message).toContain('连接失败')
     expect(periodicReportFailure(new Error('尚未配置可用的模型密钥')).statusCode).toBe(503)
     expect(periodicReportFailure(new Error('所有模型暂时不可用，请在一分钟后重试')).message).toContain('一分钟')

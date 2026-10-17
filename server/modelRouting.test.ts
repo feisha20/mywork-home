@@ -73,6 +73,17 @@ describe('模型自动切换', () => {
     expect(await router.run(value, 180_000, async (candidate) => candidate.WORKBENCH_LLM_MODEL)).toBe('office')
     expect(router.status(value).lastUsedModelId).toBe('office')
   })
+  it('关闭中的错误不切换备用模型，超时仍会切换', async () => {
+    const stopping = vi.fn(async () => { throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN') })
+    await expect(new ModelRouter().run(config(), 180_000, stopping)).rejects.toMatchObject({ code: 'SHUTTING_DOWN' })
+    expect(stopping).toHaveBeenCalledTimes(1)
+    const timeout = vi.fn(async (candidate) => {
+      if (candidate.WORKBENCH_LLM_MODEL === 'office') throw new ModelConnectionError('上游没有按时返回', 'TIMEOUT')
+      return '成功'
+    })
+    await expect(new ModelRouter().run(config(), 180_000, timeout)).resolves.toBe('成功')
+    expect(timeout).toHaveBeenCalledTimes(2)
+  })
   it('关闭自动切换时不调用备用模型；输出校验失败也不切换', async () => {
     const request = vi.fn(async () => { throw new ModelConnectionError('模型连接失败') })
     await expect(new ModelRouter().run({ ...config(), autoSwitchModels: false }, 180_000, request)).rejects.toThrow('模型连接失败')

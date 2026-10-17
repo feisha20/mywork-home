@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { modelApiEndpoint, modelApiFormat } from '../shared/modelApi.js'
 import type { Config } from './config.js'
+import { loggedError, logger } from './logger.js'
 import { ModelConnectionError } from './modelRouting.js'
 
 // strict 模式要求字段全部必填；新事项的 taskId 用 null 表示，由本地校验恢复为未提供。
@@ -71,20 +72,20 @@ export class NativeModelClient {
   private stopped = false
   close() { this.stopped = true; for (const controller of this.active) controller.abort() }
   async run<T>(prompt: string, system: string, parse: (raw: string) => T, timeoutMs: number, attempts: number, config: Config, schema?: object): Promise<T> {
-    if (this.stopped) throw new Error('抽取服务正在关闭')
+    if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     this.active.add(controller)
     let feedback = ''
     try {
       for (let attempt = 0; attempt < attempts; attempt++) {
-        if (controller.signal.aborted) throw new ModelConnectionError('模型请求超时')
+        if (controller.signal.aborted) throw new ModelConnectionError('模型请求超时', 'TIMEOUT')
         const request = nativeRequest(config, `${prompt}${attempt ? `\n上次输出未通过校验：${feedback}。请重新按约定输出，新事项必须省略 taskId 或使用 null。` : ''}`, system, schema)
         let result: unknown
         try {
           const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body),
             signal: controller.signal, redirect: 'error' })
-          if (!response.ok) { await response.body?.cancel(); throw new ModelConnectionError('模型连接失败，请检查协议支持、密钥及额度') }
+          if (!response.ok) { await response.body?.cancel(); throw new ModelConnectionError('模型连接失败，请检查协议支持、密钥及额度', 'CONNECTION') }
           const reader = response.body!.getReader()
           const chunks: Uint8Array[] = []
           let length = 0
@@ -93,14 +94,17 @@ export class NativeModelClient {
               const part = await reader.read()
               if (part.done) break
               length += part.value.length
-              if (length > 2 * 1024 * 1024) throw new ModelConnectionError('模型响应超过大小限制')
+              if (length > 2 * 1024 * 1024) throw new ModelConnectionError('模型响应超过大小限制', 'CONNECTION')
               chunks.push(part.value)
             }
-          } finally { await reader.cancel().catch(() => {}) }
+          } finally { await reader.cancel().catch(() => { /* 响应已读完时取消失败可以忽略。 */ }) }
           result = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         } catch (error) {
-          if (this.stopped) throw new Error('抽取服务正在关闭')
-          throw error instanceof ModelConnectionError ? error : new ModelConnectionError('模型连接失败或超时')
+          if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
+          if (error instanceof ModelConnectionError) throw error
+          logger.warn({ failure: loggedError(error, [config.WORKBENCH_LLM_API_KEY]) }, '原生模型请求失败')
+          const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')
+          throw new ModelConnectionError(aborted ? '模型请求超时' : '模型连接失败', aborted ? 'TIMEOUT' : 'CONNECTION')
         }
         try { return parse(responseText(result, config)) }
         catch (error) {

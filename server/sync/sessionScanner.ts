@@ -1,4 +1,5 @@
 import { DirectoryCache } from '../directoryCache.js'
+import { loggedError, logger } from '../logger.js'
 import { stat } from 'node:fs/promises'
 import type { SyncRun, WorkbenchSnapshot } from '../../shared/contracts.js'
 import type { ChannelConfig } from '../../shared/settings.js'
@@ -84,13 +85,15 @@ export class SessionScanner {
               const data = mapped(delta, path)
               run.newMessages += await this.store.ingest(data.messages, data.cursor)
               run.skippedRecords = (run.skippedRecords ?? 0) + delta.invalid
-            } catch {
+            } catch (error) {
+              logger.warn({ failure: loggedError(error, secrets), source, sessionId: session.id }, '部分会话读取失败，下次同步重试')
               onError(run, `${source}：部分会话读取失败，下次同步重试`)
             }
           }
           run.scannedFiles++
-        } catch {
+        } catch (error) {
           sources[source].error = '会话数据库不存在、无法读取或格式不兼容'
+          logger.warn({ failure: loggedError(error, secrets), source, root }, sources[source].error)
           onError(run, `${source}：${sources[source].error}`)
         } finally {
           reader?.close()
@@ -128,7 +131,8 @@ export class SessionScanner {
               }
               if (file) files.push(file)
               else unsupported++
-            } catch {
+            } catch (error) {
+              logger.warn({ failure: loggedError(error, secrets), source, path }, '记录文件未识别或无法读取')
               unsupported++
             }
           }
@@ -142,8 +146,9 @@ export class SessionScanner {
             : (await listRecordFiles(root, readDirectory)).map((path) => ({ path, projectPath: '', parentSessionId: null }))
         }
         sources[source].available = true
-      } catch {
+      } catch (error) {
         sources[source].error = '记录目录不存在或无法读取'
+        logger.warn({ failure: loggedError(error, secrets), source, root }, sources[source].error)
         onError(run, `${source}：记录目录不存在或无法读取`)
         continue
       }
@@ -154,7 +159,8 @@ export class SessionScanner {
         let info
         try {
           info = await stat(file)
-        } catch {
+        } catch (error) {
+          logger.warn({ failure: loggedError(error, secrets), source, file }, '记录文件无法读取')
           await onFailRecord(run, source, cursorKey(file), 'unreadable')
           continue
         }
@@ -184,7 +190,8 @@ export class SessionScanner {
               : collector === 'gemini'
                 ? await readGeminiDelta(record, cursor, cutoff, secrets)
                 : await readDelta(file, collector as 'codex' | 'claude' | 'workbuddy', cursor, cutoff, secrets)
-          } catch {
+          } catch (error) {
+            logger.warn({ failure: loggedError(error, secrets), source, file }, '记录增量读取失败')
             await onFailRecord(run, source, key, fingerprint)
             failed = true
             break

@@ -13,7 +13,7 @@ export function periodicReportFailure(error: unknown): { message: string; status
   const message = error instanceof Error ? error.message : ''
   if (/尚未配置.*(?:密钥|模型)/.test(message)) return { message: `尚未配置可用模型，请在设置中配置后重新整理${suffix}`, statusCode: 503 }
   if (message === '所有模型暂时不可用，请在一分钟后重试') return { message: `模型服务暂时不可用，请一分钟后重试${suffix}`, statusCode: 503 }
-  if (error instanceof ModelConnectionError) return { message: `${/超时/.test(message) ? '周月报生成超时，模型未在时限内完成' : '周月报模型连接失败，请检查模型服务及额度'}${suffix}`, statusCode: 502 }
+  if (error instanceof ModelConnectionError) return { message: `${error.code === 'TIMEOUT' ? '周月报生成超时，模型未在时限内完成' : '周月报模型连接失败，请检查模型服务及额度'}${suffix}`, statusCode: 502 }
   if (error instanceof Error && 'validationFeedback' in error && typeof error.validationFeedback === 'string') {
     const feedback = error.validationFeedback
     const reason = feedback.includes('遗漏成果素材') ? '模型遗漏了部分成果素材'

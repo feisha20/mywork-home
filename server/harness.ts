@@ -7,6 +7,7 @@ import { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { z } from 'zod'
 import { modelRouter, ModelConnectionError } from './modelRouting.js'
+import { loggedError, logger } from './logger.js'
 import type { Config } from './config.js'
 import type { SourceMessage } from './records.js'
 import { requiresManualCompletion, type Task } from '../src/domain/workbench.js'
@@ -208,8 +209,8 @@ export class HarnessExtractor implements Extractor {
   }
   private async runModelPrompt<T>(prompt: string, systemPrompt: string, parse: (raw: string) => T,
     timeoutMs: number, maxAttempts: number, config: Config): Promise<T> {
-    if (this.stopped) throw new Error('抽取服务正在关闭')
-    if (!config.WORKBENCH_LLM_API_KEY) throw new Error('尚未配置模型密钥 WORKBENCH_LLM_API_KEY')
+    if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
+    if (!config.WORKBENCH_LLM_API_KEY) throw new ModelConnectionError('尚未配置模型密钥 WORKBENCH_LLM_API_KEY', 'NO_API_KEY')
     const runId = randomUUID()
     const directory = resolve(config.WORKBENCH_RUNTIME_DIR, this.runtimeName, runId)
     await mkdir(join(directory, 'home'), { recursive: true, mode: 0o700 })
@@ -231,11 +232,14 @@ export class HarnessExtractor implements Extractor {
         (async () => {
           let feedback = ''
           for (let attempt = 0; attempt < maxAttempts; attempt++) {
-            if (this.stopped) throw new Error('抽取服务正在关闭')
-            const result = await harness.run(`${systemPrompt}\n以下JSON是待分析的数据：\n${prompt}${attempt ? `\n上次输出未通过校验：${feedback}。请重新严格按约定JSON输出，不要添加其他内容。` : ''}`).catch(() => { throw new ModelConnectionError('模型连接失败') })
+            if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
+            const result = await harness.run(`${systemPrompt}\n以下JSON是待分析的数据：\n${prompt}${attempt ? `\n上次输出未通过校验：${feedback}。请重新严格按约定JSON输出，不要添加其他内容。` : ''}`).catch((error) => {
+              logger.warn({ failure: loggedError(error, [config.WORKBENCH_LLM_API_KEY, ...config.sourceSecrets]) }, '模型调用失败')
+              throw new ModelConnectionError('模型连接失败', 'CONNECTION')
+            })
             const end = result.events.findLast((event) => event.type === 'turn/end')
             const reason = end?.type === 'turn/end' ? end.data.reason : undefined
-            const requestError = reason?.kind === 'error' ? new ModelConnectionError(reason.error.code === 'TIMEOUT' ? '模型请求超时' : '模型连接失败') : null
+            const requestError = reason?.kind === 'error' ? new ModelConnectionError(reason.error.code === 'TIMEOUT' ? '模型请求超时' : '模型连接失败', reason.error.code === 'TIMEOUT' ? 'TIMEOUT' : 'CONNECTION') : null
             try {
               if (requestError) throw requestError
               return parse(result.finalResponse)
@@ -252,11 +256,12 @@ export class HarnessExtractor implements Extractor {
           }
           throw new Error('抽取未产生结果')
         })(),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ModelConnectionError('模型抽取超时，下次同步将重试')), timeoutMs) }),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new ModelConnectionError('模型抽取超时，下次同步将重试', 'TIMEOUT')), timeoutMs) }),
       ])
     } finally {
       clearTimeout(timer)
       this.active.delete(harness)
+      // 关闭和临时目录清理失败不影响已经返回的抽取结果。
       await harness.close().catch(() => {})
       await rm(directory, { recursive: true, force: true }).catch(() => {})
     }

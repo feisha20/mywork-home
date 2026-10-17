@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { recordTimestamp, type Task } from '../src/domain/workbench.js'
 import type { DailyReport, DailyReportItem } from '../shared/contracts.js'
 import type { Store } from './store.js'
+import { ModelConnectionError } from './modelRouting.js'
 import { redact } from './redact.js'
 import { dailyReportItemMaxLength, dailyReportItemSchema, dailyReportItemText, isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 
@@ -252,6 +253,13 @@ export class DailyReportService {
       return saved
     } catch (error) {
       if (error instanceof DailyReportError) throw error
+      if (error instanceof ModelConnectionError) {
+        if (error.code === 'NO_API_KEY') throw new DailyReportError('尚未配置模型密钥，配置后即可生成工作日报', 503)
+        if (error.message === '所有模型暂时不可用，请在一分钟后重试') throw new DailyReportError('模型服务暂时不可用，请一分钟后重试', 503)
+        if (error.code === 'TIMEOUT') throw new DailyReportError('工作日报生成超时，请重新生成', 504)
+        if (error.code === 'SHUTTING_DOWN') throw new DailyReportError('日报服务正在关闭，请稍后重试', 503)
+        throw new DailyReportError('模型连接中断，请稍后重试', 502)
+      }
       if (error instanceof Error && error.message.includes('尚未配置模型密钥')) {
         throw new DailyReportError('尚未配置模型密钥，配置后即可生成工作日报', 503)
       }

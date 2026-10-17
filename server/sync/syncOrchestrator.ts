@@ -8,6 +8,7 @@ import { isCompatibleDatabase } from '../compatibleRecords.js'
 import type { Config } from '../config.js'
 import type { Extractor } from '../harness.js'
 import { modelRouter } from '../modelRouting.js'
+import { loggedError, logger } from '../logger.js'
 import { redact } from '../redact.js'
 import type { Source } from '../records.js'
 import { initialChannels, type SettingsService } from '../settings.js'
@@ -155,7 +156,9 @@ export class SyncOrchestrator {
     this.nextSyncAt = new Date(Date.now() + interval).toISOString()
     this.timer = setTimeout(() => {
       this.timer = null
-      void this.trigger().catch(() => {}).finally(() => {
+      void this.trigger().catch((error) => {
+        logger.warn({ failure: loggedError(error, this.logSecrets()) }, '定时同步未能启动')
+      }).finally(() => {
         if (!this.stopping && this.currentConfig().SYNC_ENABLED === 'true' && !this.timer) this.schedule()
       })
     }, interval)
@@ -167,7 +170,9 @@ export class SyncOrchestrator {
     if (this.active && this.run) {
       if (this.run.status === 'running') return Promise.resolve(this.run)
       // 完成记录先于锁释放写入；此时的新请求等待清理结束再启动新一轮。
-      return this.active.catch(() => {}).then(() => this.trigger(onlySource))
+      return this.active.catch((error) => {
+        logger.warn({ failure: loggedError(error, this.logSecrets()), runId: this.run?.id }, '等待上一轮同步结束时出现异常')
+      }).then(() => this.trigger(onlySource))
     }
     if (this.starting) return this.starting
     this.starting = this.beginTrigger(onlySource).finally(() => { this.starting = null })
@@ -219,7 +224,9 @@ export class SyncOrchestrator {
     const run = this.run
     this.active = this.execute(run, lock, onlySource).finally(() => { this.active = null })
     // 后台运行的错误已保存在执行记录，避免未处理的拒绝。
-    void this.active.catch(() => {})
+    void this.active.catch((error) => {
+      logger.error({ failure: loggedError(error, this.logSecrets()), runId: run.id }, '同步收尾失败')
+    })
     return run
   }
 
@@ -235,11 +242,19 @@ export class SyncOrchestrator {
     else this.error(run, `${source}：日志读取失败，将重试一次；再次失败后自动忽略`)
   }
 
+  private logSecrets() {
+    const config = this.currentConfig()
+    let password = ''
+    try { password = decodeURIComponent(new URL(config.DATABASE_URL).password) } catch { password = '' }
+    return [this.config.WORKBENCH_LLM_API_KEY, config.WORKBENCH_LLM_API_KEY, password, ...config.sourceSecrets].filter(Boolean)
+  }
+
   private saveRunProgress(run: SyncRun): Promise<void> {
+    const note = (error: unknown) => { logger.warn({ failure: loggedError(error, this.logSecrets()), runId: run.id }, '同步进度保存失败，继续后续步骤') }
     this.runSavePromise = this.runSavePromise
-      .catch(() => {})
+      .catch(note)
       .then(() => this.store.saveRun(run))
-      .catch(() => {})
+      .catch(note)
     return this.runSavePromise
   }
 
@@ -305,9 +320,10 @@ export class SyncOrchestrator {
 
       await this.runSavePromise
       run.status = this.stopping ? 'interrupted' : run.errors.length ? 'partial_failed' : 'succeeded'
-    } catch {
+    } catch (error) {
       run.status = 'failed'
       this.error(run, '同步失败，请检查数据库连接；已有记录和进度已保留')
+      logger.error({ failure: loggedError(error, this.logSecrets()), runId: run.id }, '同步执行失败，已有记录和进度已保留')
     } finally {
       run.phase = 'idle'
       run.activeSource = null

@@ -7,6 +7,7 @@ import { dailyReportInput, parseDailyReport, parseDailyReportGroups, parseDailyR
 import { dailyReportItemMaxLength, excludePersonalReportItems, isRecordInReport, reportRecordVersion } from '../shared/dailyReports.js'
 import type { DailyReportGenerator } from './dailyReport.js'
 import { createApp } from './app.js'
+import { ModelConnectionError } from './modelRouting.js'
 import { loadConfig } from './config.js'
 import type { Store } from './store.js'
 import type { SyncService } from './sync.js'
@@ -253,6 +254,10 @@ describe('工作日报的汇总范围与完整性', () => {
     expect(model.generateDailyReport).not.toHaveBeenCalled()
     vi.mocked(model.generateDailyReport).mockRejectedValueOnce(new Error('模型请求超时'))
     await expect(service.generate(day)).rejects.toMatchObject({ statusCode: 504 })
+    vi.mocked(model.generateDailyReport).mockRejectedValueOnce(new ModelConnectionError('上游没有按时返回', 'TIMEOUT'))
+    await expect(service.generate(day)).rejects.toMatchObject({ statusCode: 504 })
+    vi.mocked(model.generateDailyReport).mockRejectedValueOnce(new ModelConnectionError('请检查密钥配置', 'CONNECTION'))
+    await expect(service.generate(day)).rejects.toMatchObject({ statusCode: 502, message: '模型连接中断，请稍后重试' })
     expect((await service.generate(day)).items).toEqual(grouped)
     await service.close()
   })
