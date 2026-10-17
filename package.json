@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "build": "npm run build:web && npm run build:server",
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true }); fs.rmSync('dist-server', { recursive: true, force: true });\"",
+    "build": "npm run clean && npm run build:web && npm run build:server",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "dev:server": "tsx watch server/main.ts",
