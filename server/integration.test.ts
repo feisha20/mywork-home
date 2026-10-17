@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify'
 import { loadConfig } from './config.js'
 import { migrate } from './migrations.js'
 import { Store } from './store.js'
+import { McpData, mcpItem } from './mcpData.js'
 import { ScheduledTasks } from './scheduledTasks.js'
 import type { ScheduledTaskInput } from '../shared/scheduledTasks.js'
 import { SyncService } from './sync.js'
@@ -104,6 +105,7 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     const generated = (await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)
     expect(generated).toHaveLength(3)
     expect(generated.every((task) => task.isPersonal && !task.completedAt && task.source === 'manual')).toBe(true)
+    expect(generated.every((task) => task.recordedAt === task.scheduledPlan?.scheduledAt)).toBe(true)
     expect((await store.snapshotTasks('2026-01-03')).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(3)
     await store.setCompleted(generated[0].id, true)
     await store.deleteTask(generated[1].id)
@@ -134,6 +136,48 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await store.tasks()).filter((task) => task.scheduledPlan?.id === plan.id)).toHaveLength(1)
     expect((await service.list()).find((item) => item.id === plan.id)?.nextAt).toBeNull()
     await service.remove(plan.id)
+  })
+  it('计划日报周报补完成归到原计划日期，API、日历、报告素材与 MCP 保持一致', async () => {
+    const planned = '2026-10-16T09:30:00.000Z', clicked = '2026-10-19T01:48:00.000Z'
+    const mcp = new McpData(store, () => null)
+    for (const title of ['提交日报', '提交周报']) {
+      const id = randomUUID()
+      await pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,scheduled_plan)
+        VALUES($1,$2,'manual',$3,$4,$5)`, [id, 'PLAN-' + id, title, planned, JSON.stringify({ id: '计划日期测试', scheduledAt: planned })])
+      expect((await store.reportRecords('2026-10-16')).some((task) => task.id === id)).toBe(false)
+      const completed = (await app.inject({ method: 'PATCH', url: '/api/tasks/' + id, payload: { completed: true } })).json()
+      expect(completed.recordedAt).toBe(planned)
+      // 模拟周一补交后的持久状态，重复点完成仍保留真实完成时间。
+      await pool.query('UPDATE workbench.tasks SET completed_at=$2 WHERE id=$1', [id, clicked])
+      const repeated = (await app.inject({ method: 'PATCH', url: '/api/tasks/' + id, payload: { completed: true } })).json()
+      expect(repeated.completedAt).toBe(clicked)
+      expect((await store.recordedDays())).toContain('2026-10-16')
+      expect((await store.snapshotTasks('2026-10-16')).some((task) => task.id === id)).toBe(true)
+      expect((await store.snapshotTasks('2026-10-19')).some((task) => task.id === id)).toBe(false)
+      expect((await store.recordPage({ startDate: '2026-10-16', endDate: '2026-10-16', onlyRecords: true, limit: 100 })).tasks.some((task) => task.id === id)).toBe(true)
+      expect((await store.reportRecords('2026-10-16')).find((task) => task.id === id)).toMatchObject({ scheduledPlan: { scheduledAt: planned } })
+      expect((await store.reportRecords('2026-10-19')).some((task) => task.id === id)).toBe(false)
+      const item = mcpItem(await mcp.item(id))
+      expect(item.recordedAt).toBe(planned); expect(item.completedAt).toBe(clicked)
+      const material = await mcp.material({ type: 'daily', key: '2026-10-16' }, { offset: 0, limit: 100 })
+      expect(material.items.some((task) => task.id === id)).toBe(true)
+      await mcp.update({ id, version: item.version, completed: false })
+      expect((await store.recordPage({ startDate: '2026-10-16', endDate: '2026-10-16', onlyRecords: true, limit: 100 })).tasks.some((task) => task.id === id)).toBe(false)
+      const pending = mcpItem(await mcp.item(id))
+      await mcp.update({ id, version: pending.version, completed: true })
+      expect((mcpItem(await mcp.item(id))).recordedAt).toBe(planned)
+    }
+  })
+  it('升级补齐旧计划的归档日期，保留标题、分类和实际完成时间，跨月归集一致', async () => {
+    const id = randomUUID(), planned = '2026-09-30T09:30:00.000Z', completed = '2026-10-01T01:00:00.000Z'
+    await pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,completed_at,is_personal,scheduled_plan)
+      VALUES($1,$2,'manual','提交日报',$3,$4,true,$5)`, [id, 'PLAN-' + id, planned, completed, JSON.stringify({ id: '旧计划', scheduledAt: planned })])
+    await pool.query('DELETE FROM workbench.schema_migrations WHERE version=16')
+    await migrate(pool); await migrate(pool)
+    const saved = (await store.tasks()).find((task) => task.id === id)!
+    expect(saved).toMatchObject({ title: '提交日报', isPersonal: true, completedAt: completed, recordedAt: planned })
+    expect((await store.recordPage({ startDate: '2026-09-30', endDate: '2026-09-30', onlyRecords: true, limit: 100 })).tasks.some((task) => task.id === id)).toBe(true)
+    expect(recordsForDate({ version: 1, tasks: [saved] }, '2026-10-01')).toHaveLength(0)
   })
   it('数据库持久化、重复完成与恢复未完成', async () => {
     expect((await app.inject({ url: '/api/health' })).statusCode).toBe(200)

@@ -38,8 +38,8 @@ export class ScheduledTasks {
           const occurrence = await client.query(`INSERT INTO workbench.scheduled_task_occurrences(plan_id,scheduled_at,task_id)
             VALUES($1,$2,$3) ON CONFLICT(plan_id,scheduled_at) DO NOTHING RETURNING task_id`, [plan.id, next, id])
           if (occurrence.rowCount) {
-            await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,status_origin,is_personal,personal_origin,scheduled_plan)
-              VALUES($1,$2,'manual',$3,$4,'manual',$5,'manual',$6)`,
+            await client.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,recorded_at,status_origin,is_personal,personal_origin,scheduled_plan)
+              VALUES($1,$2,'manual',$3,$4,$4,'manual',$5,'manual',$6)`,
             [id, `PLAN-${id.slice(0, 8).toUpperCase()}`, plan.title, next, plan.isPersonal, JSON.stringify({ id: plan.id, scheduledAt: next })])
           }
           next = nextOccurrence(plan, new Date(new Date(next).getTime() + 1))

@@ -8,13 +8,14 @@ import type { McpClientView } from '../shared/mcp.js'
 import { parseDailyReport } from './dailyReport.js'
 import { McpError, mcpHash } from './mcpAuth.js'
 import { Store, taskFromRow } from './store.js'
+import { recordTimestampSql, scheduledRecordTimestampSql } from './repositories/db.js'
 
 type Queryable = Pool | PoolClient
 type Page = { offset: number; limit: number }
 type Period = { type: 'daily' | 'weekly' | 'monthly'; key: string }
 type Identity = { instance: string; account: string } | null
 const base = 'deleted_at IS NULL AND NOT is_personal'
-const recordAt = "CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END"
+const recordAt = recordTimestampSql
 const recordDay = `(${recordAt} AT TIME ZONE 'Asia/Shanghai')::date`
 const pending = "source IN ('manual','zentao') AND completed_at IS NULL AND (management IS NULL OR management->>'riskState'='active' AND management->>'handlingState'='pending')"
 const completionProof = `NOT evidence_stale AND (source IN ('manual','zentao') OR EXISTS(SELECT 1 FROM jsonb_array_elements(evidence) proof
@@ -214,6 +215,7 @@ export class McpData {
       if (input.isPinned !== undefined && completed) throw new McpError('仅可置顶或取消置顶未完成待办', 409, 'INVALID_STATE')
       await db.query(`UPDATE workbench.tasks SET title=coalesce($2,title),
         completed_at=CASE WHEN $3::boolean IS NULL THEN completed_at WHEN $3 THEN coalesce(completed_at,now()) ELSE NULL END,
+        recorded_at=CASE WHEN $3::boolean IS NULL THEN recorded_at ELSE ${scheduledRecordTimestampSql} END,
         status_origin=CASE WHEN $3::boolean IS NULL THEN status_origin ELSE 'manual' END,
         is_pinned=coalesce($4,is_pinned),updated_at=clock_timestamp() WHERE id=$1`,
         [input.id, input.title ?? null, input.completed ?? null, input.isPinned ?? null])

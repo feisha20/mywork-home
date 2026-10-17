@@ -106,9 +106,13 @@ export function pendingTasks(tasks: readonly Task[]): Task[] {
     || a.id.localeCompare(b.id))
 }
 
-// 自动工作记录归到来源日期；归档时间与真实完成状态分开保存。
+// 计划待办完成后归到原计划日期；普通手工待办归到完成当天，真实完成时间不改写。
 export function recordTimestamp(task: Task): string | null {
-  if (requiresManualCompletion(task.source)) return task.completedAt
+  if (requiresManualCompletion(task.source)) {
+    if (!task.completedAt) return null
+    if (task.source === 'manual' && task.scheduledPlan) return task.recordedAt ?? task.scheduledPlan.scheduledAt
+    return task.completedAt
+  }
   return task.recordedAt ?? task.evidence?.reduce<string | null>((latest, entry) => !latest || entry.timestamp > latest ? entry.timestamp : latest, null) ?? task.completedAt ?? task.createdAt
 }
 

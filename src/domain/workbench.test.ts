@@ -8,6 +8,20 @@ const fixture = () => {
 }
 
 describe('工作台记录', () => {
+  it('计划日报与周报补完成按原计划日期归档，未完成和恢复待办不进入日志', () => {
+    const completedAt = new Date('2026-10-19T01:48:00Z')
+    for (const title of ['提交日报', '提交周报']) {
+      const task = { id: title, reference: 'PLAN-1', source: 'manual' as const, title, createdAt: '2026-10-16T09:30:00Z',
+        completedAt: null, scheduledPlan: { id: 'plan', scheduledAt: '2026-10-16T09:30:00Z' } }
+      const state = { version: 1 as const, tasks: [task] }
+      expect(recordTimestamp(task)).toBeNull()
+      const finished = completeTask(state, task.id, completedAt)
+      expect(finished.tasks[0].completedAt).toBe(completedAt.toISOString())
+      expect(recordsForDate(finished, '2026-10-16')).toHaveLength(1)
+      expect(recordsForDate(finished, '2026-10-19')).toHaveLength(0)
+      expect(recordTimestamp({ ...finished.tasks[0], recordedAt: task.scheduledPlan.scheduledAt, completedAt: null })).toBeNull()
+    }
+  })
   it('多个禅道和自定义待办可置顶，取消后回到时间顺序，已完成和自动记录不进入待办', () => {
     const base = fixture().tasks[0]
     const manual = { ...base, id: 'manual-pin', source: 'manual' as const, createdAt: '2026-09-20T01:00:00Z', isPinned: true }

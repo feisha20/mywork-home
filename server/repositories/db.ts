@@ -3,7 +3,13 @@ import type { Task } from '../../src/domain/workbench.js'
 import type { ReportJob } from '../../shared/contracts.js'
 import { visibleManagementSql } from '../zentaoManagementStore.js'
 
-export const recordDateSql = `(CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END AT TIME ZONE 'Asia/Shanghai')::date`
+// 计划待办完成后按计划日期归档；completed_at 始终保留真实完成时间。
+export const recordTimestampSql = `CASE WHEN source='manual' AND scheduled_plan IS NOT NULL AND completed_at IS NOT NULL
+  THEN coalesce(recorded_at,completed_at) WHEN source IN ('manual','zentao') THEN completed_at
+  ELSE coalesce(recorded_at,completed_at,created_at) END`
+export const recordDateSql = `(${recordTimestampSql} AT TIME ZONE 'Asia/Shanghai')::date`
+export const scheduledRecordTimestampSql = `CASE WHEN source='manual' AND scheduled_plan->>'scheduledAt' IS NOT NULL
+  THEN (scheduled_plan->>'scheduledAt')::timestamptz ELSE recorded_at END`
 export const taskSummaryColumns = 'id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_pinned,is_personal,personal_origin,evidence_stale,zentao,management,scheduled_plan,jsonb_array_length(evidence) AS evidence_count'
 export { visibleManagementSql }
 

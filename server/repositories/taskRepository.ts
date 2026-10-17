@@ -5,7 +5,7 @@ import { excludePersonalReportItems } from '../../shared/dailyReports.js'
 import type { RecordQuery, RecordPage } from '../../shared/contracts.js'
 import type { ZentaoSnapshot, ZentaoTrackedItem } from '../zentao.js'
 import type { ZentaoManagementStore } from '../zentaoManagementStore.js'
-import { taskFromRow, recordDateSql, taskSummaryColumns, visibleManagementSql, withTransaction } from './db.js'
+import { taskFromRow, recordDateSql, scheduledRecordTimestampSql, taskSummaryColumns, visibleManagementSql, withTransaction } from './db.js'
 
 export class TaskRepository {
   constructor(
@@ -126,7 +126,7 @@ export class TaskRepository {
       }
     }
     const { rows } = await this.pool.query(`UPDATE workbench.tasks SET completed_at=CASE WHEN $2 THEN coalesce(completed_at,now()) ELSE NULL END,
-      status_origin='manual',updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *`, [id, completed])
+      recorded_at=${scheduledRecordTimestampSql},status_origin='manual',updated_at=now() WHERE id=$1 AND deleted_at IS NULL RETURNING *`, [id, completed])
     return rows[0] ? taskFromRow(rows[0]) : null
   }
 

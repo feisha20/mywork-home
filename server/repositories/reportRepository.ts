@@ -2,18 +2,17 @@ import type { Pool } from 'pg'
 import type { DailyReport } from '../../shared/contracts.js'
 import type { Task } from '../../src/domain/workbench.js'
 import type { PeriodicReportModel } from '../../src/domain/periodicReport.js'
-import { taskFromRow, withTransaction } from './db.js'
+import { taskFromRow, recordDateSql, recordTimestampSql, withTransaction } from './db.js'
 
 export class ReportRepository {
   constructor(private readonly pool: Pool) {}
 
   async reportRecords(day: string): Promise<Task[]> {
     // 日报只读取简介与归档信息，不查询会话证据内容。
-    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,management
+    const { rows } = await this.pool.query(`SELECT id,reference,source,title,created_at,completed_at,recorded_at,project_path,status_origin,is_personal,personal_origin,evidence_stale,management,scheduled_plan
       FROM workbench.tasks WHERE deleted_at IS NULL AND NOT is_personal AND
-      ((CASE WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at) END)
-        AT TIME ZONE 'Asia/Shanghai')::date=$1::date
-      ORDER BY coalesce(recorded_at,completed_at,created_at) DESC,id`, [day])
+      ${recordDateSql}=$1::date
+      ORDER BY ${recordTimestampSql} DESC,id`, [day])
     return rows.map(taskFromRow)
   }
 

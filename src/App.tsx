@@ -1,5 +1,5 @@
 import { createRef, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { dateKey, recordsForDate, pendingTasks } from './domain/workbench'
+import { dateKey, recordTimestamp, recordsForDate, pendingTasks } from './domain/workbench'
 import type { Task, WorkbenchState } from './domain/workbench'
 import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
 import { mergeDailyReports } from '../shared/dailyReports'
@@ -173,15 +173,22 @@ export default function App() {
       setState((current) => ({ ...current, tasks: current.tasks.map((task) => task.id === taskId ? saved : task) }))
       captureBaseline.current = captureBaseline.current?.map((task) => task.id === taskId ? saved : task) ?? null
     }
-    const now = new Date(); setClock(now); setRecentId(taskId)
+    const now = new Date(), archivedAt = saved && recordTimestamp(saved)
+    const archivedDay = archivedAt ? dateKey(new Date(archivedAt)) : dateKey(now)
+    setClock(now); setRecentId(archivedDay === dateKey(now) ? taskId : null)
+    if (archivedDay !== dateKey(now)) setNotice(`已完成，已归档至 ${archivedDay} 的工作日志，可从日历查看。`)
     setPhase('idle'); setJob(null); setChangingId(null); completedTask.current = null; busy.current = false
     mutationVersion.current++
+    void pollerRef.current?.refreshNow()
   }, [])
   const handleComplete = useCallback(async (task: Task, button: HTMLButtonElement) => {
     if (busy.current) return
     busy.current = true; mutationVersion.current++; setChangingId(task.id); setError(null)
     try {
       completedTask.current = await updateTask(task.id, true)
+      const archivedAt = recordTimestamp(completedTask.current)
+      // 历史计划归到对应日期，避免播放进入“今天日志”的误导动画。
+      if (archivedAt && dateKey(new Date(archivedAt)) !== dateKey(new Date())) { finishTransfer(task.id); return }
       if (document.hidden || window.matchMedia('(prefers-reduced-motion: reduce)').matches || window.innerWidth < 1100 || !panelRef.current || !deckRef.current || !button.isConnected) { finishTransfer(task.id); return }
       const nextJob = createTransferJob(task.id, task.reference, button, processorRefs, panelRef.current, deckRef.current)
       if (!nextJob) { finishTransfer(task.id); return }

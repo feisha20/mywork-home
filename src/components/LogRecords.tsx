@@ -6,6 +6,7 @@ import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 import type { DailyReport } from '../../shared/contracts'
 import { isRecordInReport } from '../../shared/dailyReports'
 import { PersonalTaskToggle } from './PersonalTaskToggle'
+import { ScheduledTaskDate } from './ScheduledTaskDate'
 import { ManagementDetails } from './ManagementDetails'
 
 const logTime = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false })
@@ -31,12 +32,13 @@ export function LogRecords({ records, dailyReport, recentId, onReopen, onToggleP
     {records.map((task) => <article key={task.id} className={`daily-log-card${task.id === recentId ? ' just-arrived' : ''}`}>
       <div className="daily-log-top">
         <div className="daily-log-source-group">
-          <span className="daily-log-source">{task.sourceLabel ?? sourceInfo(task.source).label}</span>
+          <span className="daily-log-source">{task.scheduledPlan ? '计划任务' : task.sourceLabel ?? sourceInfo(task.source).label}</span>
           <TaskReference task={task} />
         </div>
-        <time className="daily-log-time" dateTime={recordTimestamp(task)!}>{logTime.format(new Date(recordTimestamp(task)!))}</time>
+        <time className="daily-log-time" dateTime={task.scheduledPlan ? task.completedAt! : recordTimestamp(task)!}>{logTime.format(new Date(task.scheduledPlan ? task.completedAt! : recordTimestamp(task)!))}</time>
       </div>
       <p className="daily-log-text" title={task.title}>{task.title}</p>
+      <ScheduledTaskDate task={task} />
       {task.management && <ManagementDetails task={task} actions={renderActions(task)} />}
       {!task.management && <div className="daily-log-actions">
         <ZentaoTaskDetails task={task} />

@@ -6,6 +6,7 @@ import { Icon } from './Icon'
 import { TaskEvidence } from './TaskEvidence'
 import { TaskReference, ZentaoTaskDetails } from './TaskReference'
 import { PersonalTaskToggle } from './PersonalTaskToggle'
+import { ScheduledTaskDate } from './ScheduledTaskDate'
 import { ManagementDetails } from './ManagementDetails'
 
 interface TaskPanelProps {
@@ -60,7 +61,7 @@ export const TaskPanel = memo(function TaskPanel({ tasks, panelRef, activeId, de
               </button>
             </div>
             <p className="daily-log-text" title={task.title}>{task.title}</p>
-            {task.scheduledPlan && <p className="scheduled-task-date">计划时间：{new Date(task.scheduledPlan.scheduledAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}</p>}
+            <ScheduledTaskDate task={task} />
             <ZentaoTaskDetails task={task} />
             <ManagementDetails task={task} />
             <div className="daily-log-actions">

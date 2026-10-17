@@ -201,6 +201,16 @@ CREATE TRIGGER management_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench
   FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
 CREATE TRIGGER sync_runs_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench.sync_runs
   FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
+` }, { version: 16, sql: `
+-- 已生成的计划待办也补齐归档依据，不改标题、公私属性或真实完成时间。
+UPDATE workbench.tasks SET recorded_at=(scheduled_plan->>'scheduledAt')::timestamptz,updated_at=now()
+ WHERE source='manual' AND scheduled_plan->>'scheduledAt' IS NOT NULL
+ AND recorded_at IS DISTINCT FROM (scheduled_plan->>'scheduledAt')::timestamptz;
+DROP INDEX IF EXISTS workbench.tasks_log_day_idx;
+CREATE INDEX tasks_log_day_idx ON workbench.tasks(((CASE
+ WHEN source='manual' AND scheduled_plan IS NOT NULL AND completed_at IS NOT NULL THEN coalesce(recorded_at,completed_at)
+ WHEN source IN ('manual','zentao') THEN completed_at ELSE coalesce(recorded_at,completed_at,created_at)
+ END AT TIME ZONE 'Asia/Shanghai')::date)) WHERE deleted_at IS NULL;
 ` }]
 
 export async function migrate(pool: Pool) {
