@@ -62,7 +62,7 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
       reportInputs.push(records.map((task) => task.id))
       return [{ text: '完善测试计划，汇总相关工作进展。', topic: '测试计划', taskIds: [...new Set([...(previous?.items.flatMap((item) => item.taskIds) ?? []), ...records.map((task) => task.id)])] }]
     }, async close() {} })
-    sync = new SyncService(store, config, fake); await sync.start(); app = await createApp(config, store, sync, reports)
+    sync = new SyncService(store, config, fake); await sync.start(); app = await createApp(config, store, sync, reports, new PeriodicReportService(store))
   })
   afterAll(async () => { await app?.close(); await sync?.close(); await pool?.end(); if (directory) await rm(directory, { recursive: true, force: true }) })
   it('旧自动记录按来源时间迁移，保留原完成状态并可重复执行迁移', async () => {

@@ -5,6 +5,8 @@ import type { DailyReport, WorkbenchSnapshot } from '../shared/contracts'
 import { mergeDailyReports } from '../shared/dailyReports'
 import { createTask, deleteTask, fetchWorkbench, handleManagementTask, migrateLegacyTasks, startSync, updateTask, updateTaskPersonal, updateTaskPinned } from './data/apiRepository'
 import { createAdaptivePolling } from './data/adaptivePolling'
+import { subscribeWorkbenchEvents } from './data/realtimeEvents'
+import { RealtimeModelContext } from './data/realtimeContext'
 import { useTaskNotifications } from './data/useTaskNotifications'
 import { changedCaptureDestinations } from './domain/captureFlow'
 import { CaptureOutput } from './components/CaptureOutput'
@@ -20,7 +22,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { PerpetualCalendar } from './components/PerpetualCalendar'
 import { UserMenu } from './components/UserMenu'
 import { modelUsage } from '../shared/modelUsage'
-import type { WorkbenchSettings } from '../shared/settings'
+import type { ModelRuntimeStatus, WorkbenchSettings } from '../shared/settings'
 
 const ScheduledTasksDialog = lazy(() => import('./components/ScheduledTasksDialog').then((module) => ({ default: module.ScheduledTasksDialog })))
 const PersonalSpace = lazy(() => import('./components/PersonalSpace').then((module) => ({ default: module.PersonalSpace })))
@@ -37,6 +39,8 @@ export default function App() {
   const [scheduledTasksOpen, setScheduledTasksOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [connected, setConnected] = useState(false)
+  const [realtimeConnected, setRealtimeConnected] = useState(false)
+  const [liveModelRuntime, setLiveModelRuntime] = useState<ModelRuntimeStatus>()
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
@@ -59,6 +63,7 @@ export default function App() {
   const busy = useRef(false)
   const mutationVersion = useRef(0)
   const refreshing = useRef(false)
+  const statusVersion = useRef(0)
   const connectionError = useRef(false)
   const completedTask = useRef<Task | null>(null)
   const panelRef = useRef<HTMLElement>(null), deckRef = useRef<HTMLDivElement>(null)
@@ -69,11 +74,13 @@ export default function App() {
     if (refreshing.current) return null
     refreshing.current = true
     const version = mutationVersion.current
+    const currentStatusVersion = statusVersion.current
     try {
       const result = await fetchWorkbench()
       notify(result.tasks)
       setSnapshot((current) => {
-        const next = { ...result, dailyReports: mergeDailyReports(current?.dailyReports ?? [], result.dailyReports ?? []) }
+        const next = { ...result, harness: current && currentStatusVersion !== statusVersion.current ? current.harness : result.harness,
+          dailyReports: mergeDailyReports(current?.dailyReports ?? [], result.dailyReports ?? []) }
         return JSON.stringify(current) === JSON.stringify(next) ? current : next
       }); setConnected(true)
       if (connectionError.current) { setError(null); connectionError.current = false }
@@ -97,6 +104,7 @@ export default function App() {
   }, [])
   useEffect(() => {
     let disposed = false, ready = false
+    let unsubscribe = () => {}
     const poller = createAdaptivePolling(async () => {
       const result = await refresh()
       if (!disposed) {
@@ -120,14 +128,32 @@ export default function App() {
     void (async () => {
       try { const migrationNotice = await migrateLegacyTasks(); if (!disposed) setNotice(migrationNotice) }
       catch (cause) { if (!disposed) setNotice(cause instanceof Error ? `旧记录暂未迁移：${cause.message}` : '旧记录暂未迁移，刷新页面后重试') }
-      if (!disposed) { ready = true; await poller.refreshNow() }
+      if (!disposed) {
+        ready = true
+        unsubscribe = subscribeWorkbenchEvents({
+          connection: (live) => { poller.setRealtime(live); setRealtimeConnected(live) },
+          changed: () => { void poller.refreshNow() },
+          status: ({ harness, modelRuntime }) => {
+            statusVersion.current++
+            setLiveModelRuntime(modelRuntime)
+            setSnapshot((current) => current ? { ...current, harness } : current)
+          },
+        })
+        await poller.refreshNow()
+      }
     })()
     return () => {
-      disposed = true; poller.stop(); pollerRef.current = null
+      disposed = true; unsubscribe(); poller.stop(); pollerRef.current = null
       document.removeEventListener('visibilitychange', visibilityChanged)
       window.removeEventListener('focus', resume)
     }
   }, [refresh, canNotify])
+  useEffect(() => {
+    // SSE 空闲时没有请求；仍在北京时间跨日时更新日期与当日视图。
+    const nextDay = Date.parse(`${today}T00:00:00+08:00`) + 86400000
+    const timer = window.setTimeout(() => { setClock(new Date()); void pollerRef.current?.refreshNow() }, Math.max(1, nextDay - Date.now() + 50))
+    return () => window.clearTimeout(timer)
+  }, [today])
   useEffect(() => {
     if (previousNotificationsActive.current === notificationsActive) return
     previousNotificationsActive.current = notificationsActive
@@ -243,20 +269,20 @@ export default function App() {
 
   if (spaceOpen) {
     return (
-      <div className={`app-shell is-space-mode${pageVisible ? '' : ' is-background'}`}>
+      <RealtimeModelContext.Provider value={{ connected: realtimeConnected, usage: snapshot?.harness.modelUsage }}><div className={`app-shell is-space-mode${pageVisible ? '' : ' is-background'}`}>
         <Suspense fallback={<p role="status">正在打开个人空间…</p>}><PersonalSpace
           clock={clock}
           onClose={() => setSpaceOpen(false)}
           onOpenSettings={() => setSettingsOpen(true)}
         /></Suspense>
         {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
-      {settingsOpen && <SettingsDialog notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
-      </div>
+      {settingsOpen && <SettingsDialog liveModelRuntime={liveModelRuntime} realtimeConnected={realtimeConnected} notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+      </div></RealtimeModelContext.Provider>
     )
   }
 
   return (
-    <div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
+    <RealtimeModelContext.Provider value={{ connected: realtimeConnected, usage: snapshot?.harness.modelUsage }}><div className={`app-shell${pageVisible ? '' : ' is-background'}`}>
       <header className="top-bar">
         <div className="brand-section"><div className="brand-badge" aria-hidden="true"><img src="/icons/workbench-192.png" alt="" width="40" height="40" /></div><div className="brand-title"><h1>我的工作台</h1><p>汇聚待办，沉淀每一天的进展</p></div><span className={`live-indicator${connected ? '' : ' is-disconnected'}`} role="status"><span className="live-dot" aria-hidden="true" />{connected ? '本机工作台' : '服务未连接'}</span></div>
         <div className="top-meta">
@@ -278,9 +304,9 @@ export default function App() {
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
       {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
-      {settingsOpen && <SettingsDialog notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+      {settingsOpen && <SettingsDialog liveModelRuntime={liveModelRuntime} realtimeConnected={realtimeConnected} notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
-    </div>
+    </div></RealtimeModelContext.Provider>
   )
 }

@@ -15,6 +15,7 @@ import { SettingsError } from './settings.js'
 import { isRecordInReport } from '../shared/dailyReports.js'
 import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
 import { registerMcp } from './mcp.js'
+import { WorkbenchEventStream } from './events.js'
 
 const legacyTask = z.object({ id: z.uuid(), reference: z.string().max(100), source: z.literal('manual'),
   title: z.string().trim().min(1).max(300), createdAt: z.iso.datetime({ offset: true }), completedAt: z.iso.datetime({ offset: true }).nullable(), isPersonal: z.boolean().optional() })
@@ -23,6 +24,13 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
   reports = new DailyReportService(store, new HarnessExtractor(config, 'daily-report-harness', () => sync.settings?.runtimeConfig() ?? config)),
   periodic = new PeriodicReportService(store, new HarnessExtractor(config, 'periodic-report-harness', () => sync.settings?.runtimeConfig() ?? config)), automation?: ReportAutomation, scheduled = new ScheduledTasks(store)) {
   const app = Fastify({ logger: false, bodyLimit: 2 * 1024 * 1024 })
+  const events = new WorkbenchEventStream(store, sync, () => {
+    const runtime = sync.settings?.runtimeConfig() ?? config
+    return [runtime.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(runtime.DATABASE_URL).password),
+      ...runtime.sourceSecrets, ...(runtime.models ?? []).map((model) => model.apiKey)]
+  })
+  // 必须在等待 HTTP 连接关闭之前结束长连接，否则关停会一直等待 SSE。
+  app.addHook('preClose', () => events.close())
   app.addHook('onClose', () => reports.close())
   app.addHook('onClose', () => periodic.close())
   app.addHook('onClose', () => scheduled.close())
@@ -51,6 +59,17 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     catch { return reply.code(503).send({ status: 'unavailable' }) }
   })
   app.get('/api/workbench', () => sync.snapshot())
+  app.get('/api/events', async (_request, reply) => {
+    let initial
+    try { await events.ready(); initial = sync.realtimeStatus(await store.latestRun()) }
+    catch { return reply.code(503).send({ error: '实时连接暂不可用，工作台将使用低频刷新' }) }
+    if (reply.raw.destroyed) return reply
+    reply.hijack()
+    reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-store, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' })
+    reply.raw.flushHeaders()
+    events.attach(reply.raw, initial)
+  })
   app.get('/api/scheduled-tasks', () => scheduled.list())
   app.post('/api/scheduled-tasks', async (request, reply) => {
     const plan = await scheduled.save(scheduledTaskSchema.parse(request.body))

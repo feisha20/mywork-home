@@ -170,6 +170,37 @@ CREATE TABLE workbench.mcp_audit (
  tool text NOT NULL, object_id text, result text NOT NULL, occurred_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX mcp_audit_time_idx ON workbench.mcp_audit(occurred_at);
+` }, { version: 15, sql: `
+-- PostgreSQL 在事务提交后投递通知；回滚、MCP 和其他服务实例遵循相同边界。
+-- 通知正文只含种类与记录 ID，避免 pg_notify 的大小限制及业务正文扩散。
+CREATE FUNCTION workbench.notify_change() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_notify('workbench_events', json_build_object('kind',
+    CASE WHEN TG_TABLE_NAME='sync_runs' THEN 'sync' ELSE 'changed' END)::text);
+  RETURN NULL;
+END;
+$$;
+CREATE FUNCTION workbench.notify_task_created() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.deleted_at IS NULL AND NEW.completed_at IS NULL AND NOT NEW.is_personal
+    AND (NEW.source='zentao' OR NEW.scheduled_plan IS NOT NULL) THEN
+    PERFORM pg_notify('workbench_events', json_build_object('kind','created','id',NEW.id)::text);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+CREATE TRIGGER tasks_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench.tasks
+  FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
+CREATE TRIGGER tasks_created_realtime AFTER INSERT ON workbench.tasks
+  FOR EACH ROW EXECUTE FUNCTION workbench.notify_task_created();
+CREATE TRIGGER daily_reports_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench.daily_reports
+  FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
+CREATE TRIGGER periodic_reports_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench.periodic_reports
+  FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
+CREATE TRIGGER management_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench.zentao_management_status
+  FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
+CREATE TRIGGER sync_runs_realtime AFTER INSERT OR UPDATE OR DELETE ON workbench.sync_runs
+  FOR EACH STATEMENT EXECUTE FUNCTION workbench.notify_change();
 ` }]
 
 export async function migrate(pool: Pool) {

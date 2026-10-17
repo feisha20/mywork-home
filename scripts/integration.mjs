@@ -18,7 +18,7 @@ try {
   const env = { ...process.env, TEST_DATABASE_URL: testUrl, RUN_DATABASE_TESTS: 'true' }
   delete env.WORKBENCH_ADMIN_DATABASE_URL
   process.exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', 'server/integration.test.ts', 'server/mcp.integration.test.ts', '--no-file-parallelism'], { env, stdio: 'inherit' })
+    const child = spawn(process.execPath, ['node_modules/vitest/vitest.mjs', 'run', 'server/integration.test.ts', 'server/mcp.integration.test.ts', 'server/events.integration.test.ts', '--no-file-parallelism', ...process.argv.slice(2)], { env, stdio: 'inherit' })
     child.on('error', reject); child.on('exit', (code) => resolve(code ?? 1))
   })
 } catch { console.error('集成测试未完成：请检查隔离测试数据库和临时管理员配置。'); process.exitCode = 1 }

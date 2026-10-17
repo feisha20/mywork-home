@@ -8,6 +8,23 @@ const config = () => ({ ...loadConfig({ DATABASE_URL: 'postgresql://app:test@loc
 ] })
 afterEach(() => vi.useRealTimers())
 describe('模型自动切换', () => {
+  it('冷却结束时主动通知界面恢复状态，不需要前端轮询', async () => {
+    vi.useFakeTimers()
+    const router = new ModelRouter(), value = config(), listener = vi.fn()
+    const unsubscribe = router.subscribe(listener)
+    await router.run(value, 180000, async (candidate) => {
+      if (candidate.WORKBENCH_LLM_MODEL === 'office') throw new ModelConnectionError('模拟故障')
+      return '成功'
+    })
+    expect(listener).toHaveBeenCalledWith({ from: 'office', to: 'home' })
+    listener.mockClear()
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(listener).toHaveBeenCalledOnce()
+    expect(router.status(value).nextModelId).toBe('office')
+    unsubscribe(); listener.mockClear()
+    await router.run(value, 180000, async () => '成功')
+    expect(listener).not.toHaveBeenCalled()
+  })
   it('跨协议故障切换保留每个候选模型的 API 格式，修改格式后解除旧协议冷却', async () => {
     const router = new ModelRouter()
     const value = { ...config(), models: config().models.map((model, index) => ({ ...model,

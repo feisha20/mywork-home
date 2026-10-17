@@ -2,12 +2,20 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { modelUsage, modelChipDisplay } from '../../shared/modelUsage'
 import { ModelStatus } from './ModelStatus'
+import { RealtimeModelContext } from '../data/realtimeContext'
 
 const profiles = [
   { id: 'first', label: '个人 DeepSeek', name: 'deepseek-flash', apiKey: '机密密钥', baseUrl: '机密地址' },
   { id: 'backup', label: '火山个人', name: 'glm-5.3-flash', apiKey: '备用密钥', baseUrl: '备用地址' },
 ]
 describe('工作流模型信息', () => {
+  it('日报弹窗直接显示共享 SSE 的备用模型调用状态', () => {
+    const usage = modelUsage(profiles, { preferredModelId: 'first', nextModelId: 'backup', lastUsedModelId: null,
+      activeModelIds: ['backup'], coolingModelIds: ['first'] }, true)
+    const html = renderToStaticMarkup(<RealtimeModelContext.Provider value={{ connected: true, usage }}><ModelStatus live compact /></RealtimeModelContext.Provider>)
+    expect(html).toContain('正在调用'); expect(html).toContain('glm-5.3-flash')
+    expect(html).not.toContain('读取模型状态'); expect(html).not.toContain('机密')
+  })
   it('芯片使用实际调用模型的别名，缺少别名时显示配置名称，提示保留完整型号', () => {
     const models = [{ ...profiles[0], alias: 'DeepSeek' }, { ...profiles[1], alias: 'GLM' }]
     const usage = modelUsage(models, { preferredModelId: 'first', nextModelId: 'first', lastUsedModelId: null, activeModelIds: ['backup'], coolingModelIds: [] }, true)

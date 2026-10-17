@@ -376,6 +376,7 @@ export class SyncService {
             run.phase = 'saving'; await this.saveRunProgress(run)
             const counts = await this.store.applyExtraction(id, batch, context, items)
             run.newTasks += counts.created; run.updatedTasks += counts.updated
+            run.processedBatches = (run.processedBatches ?? 0) + 1
             await this.saveRunProgress(run)
           } catch (error) {
             // 不存储上游完整错误，避免 SDK 把提示词或请求头带入日志。
@@ -432,7 +433,6 @@ export class SyncService {
     }
     const { tasks, dailyReports, days } = this.snapshotCache
     const run = await this.store.latestRun()
-    const config = this.currentConfig()
     const channels = this.currentChannels()
     const sources = await this.sourceStatuses(channels)
     const counts = await (this.sourceCounts ??= this.store.sourceCounts().catch((error) => { this.sourceCounts = null; throw error }))
@@ -443,8 +443,14 @@ export class SyncService {
       if (dbCount > 0) sources.zentao.sessionCount = dbCount
     }
     return { version: 1, recordedDays: days, dataVersion: version, tasks: tasks.map((task) => ({ ...task, sourceLabel: channels.find((channel) => channel.id === task.source)?.name })), dailyReports,
-      harness: { modelUsage: modelUsage(config.models ?? [{ id: 'default', label: '默认模型', name: config.WORKBENCH_LLM_MODEL }], modelRouter.status(config), config.autoSwitchModels ?? true), run, nextSyncAt: this.nextSyncAt, model: modelRouter.candidates(config)[0]?.name ?? config.WORKBENCH_LLM_MODEL, intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' },
+      harness: this.realtimeStatus(run).harness,
       sources, channels: this.settings?.summaries() }
+  }
+  realtimeStatus(run: SyncRun | null = this.run) {
+    const config = this.currentConfig(), modelRuntime = modelRouter.status(config)
+    return { modelRuntime, harness: { modelUsage: modelUsage(config.models ?? [{ id: 'default', label: '默认模型', name: config.WORKBENCH_LLM_MODEL }], modelRuntime, config.autoSwitchModels ?? true),
+      run, nextSyncAt: this.nextSyncAt, model: modelRouter.candidates(config)[0]?.name ?? config.WORKBENCH_LLM_MODEL,
+      intervalMs: config.SYNC_INTERVAL_MS, autoSyncEnabled: config.SYNC_ENABLED === 'true' } }
   }
   async waitForIdle() { await this.starting; await this.active }
   async close() {

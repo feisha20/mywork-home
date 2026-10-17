@@ -22,6 +22,8 @@ const collectorOptions = Object.entries(COLLECTORS).map(([value, label]) => ({ v
 const compatibleOptions = collectorOptions.filter((option) => ['auto', 'generic', 'none'].includes(option.value))
 
 interface SettingsDialogProps {
+  liveModelRuntime?: ModelRuntimeStatus
+  realtimeConnected?: boolean
   onClose: () => void
   onSaved: (settings: WorkbenchSettings) => void
   notificationsEnabled: boolean
@@ -31,7 +33,7 @@ interface SettingsDialogProps {
 }
 
 export function SettingsDialog({ onClose, onSaved, notificationsEnabled, requestingNotifications,
-  notificationDescription, onToggleNotifications }: SettingsDialogProps) {
+  notificationDescription, onToggleNotifications, liveModelRuntime, realtimeConnected }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const uploadRef = useRef<HTMLInputElement>(null)
   const [saved, setSaved] = useState<WorkbenchSettings | null>(null)
@@ -45,6 +47,7 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   const [testing, setTesting] = useState(false)
   const [scanning, setScanning] = useState<string | null>(null)
   const [modelRuntime, setModelRuntime] = useState<ModelRuntimeStatus | undefined>()
+  const displayedRuntime = realtimeConnected && liveModelRuntime ? liveModelRuntime : modelRuntime
   const [deletingModelId, setDeletingModelId] = useState<string | null>(null)
   const [selectedModelId, setSelectedModelId] = useState('default')
   const [showKey, setShowKey] = useState(false)
@@ -93,12 +96,15 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
   }, [loadVersion])
 
   useEffect(() => {
-    if (tab !== 'model' || loading) return
+    if (liveModelRuntime) setModelRuntime(liveModelRuntime)
+  }, [liveModelRuntime])
+  useEffect(() => {
+    if (tab !== 'model' || loading || realtimeConnected) return
     const controller = new AbortController()
     const refresh = () => { void fetchSettings(controller.signal).then((settings) => setModelRuntime(settings.modelRuntime)).catch(() => {}) }
-    const timer = window.setInterval(refresh, 10_000)
+    const timer = window.setInterval(refresh, 30_000)
     return () => { controller.abort(); window.clearInterval(timer) }
-  }, [tab, loading])
+  }, [tab, loading, realtimeConnected])
 
   function requestClose() {
     if (busy) return
@@ -254,14 +260,14 @@ export function SettingsDialog({ onClose, onSaved, notificationsEnabled, request
               <div className="settings-model-policy"><div><strong>自动故障切换</strong><p>连接失败后尝试下一模型，1 分钟后重试首选模型。</p></div><button type="button" className={`settings-switch${draft.autoSwitchModels ? ' is-on' : ''}`} role="switch" aria-checked={!!draft.autoSwitchModels} aria-label="自动故障切换" onClick={() => { setDraft({ ...draft, autoSwitchModels: !draft.autoSwitchModels }); setFeedback(null) }}><span /></button></div>
               {modelDirty && <p className="settings-model-pending"><Icon name="clock" />修改尚未生效，保存后首选：{draftPreferred?.label ?? '暂无可用模型'}</p>}
               <div className="settings-model-columns">
-                <div className="settings-model-library"><div className="settings-model-list-heading"><strong>我的模型</strong><small>{modelRuntime && !modelRuntime.nextModelId ? '暂无可用模型' : '按备用顺序排列'}</small></div>
+                <div className="settings-model-library"><div className="settings-model-list-heading"><strong>我的模型</strong><small>{displayedRuntime && !displayedRuntime.nextModelId ? '暂无可用模型' : '按备用顺序排列'}</small></div>
                   <ol className="settings-model-list" aria-label="模型优先顺序">
                     {draft.models?.map((entry, index) => {
                       const states = [
-                        modelRuntime?.activeModelIds?.includes(entry.id) ? '正在调用' : '',
-                        modelRuntime?.nextModelId === entry.id ? modelRuntime.preferredModelId === entry.id ? '下次优先' : '备用接管' : '',
-                        modelRuntime?.lastUsedModelId === entry.id ? '最近使用' : '',
-                        modelRuntime?.coolingModelIds.includes(entry.id) ? '连接失败 · 等待恢复' : '',
+                        displayedRuntime?.activeModelIds?.includes(entry.id) ? '正在调用' : '',
+                        displayedRuntime?.nextModelId === entry.id ? displayedRuntime.preferredModelId === entry.id ? '下次优先' : '备用接管' : '',
+                        displayedRuntime?.lastUsedModelId === entry.id ? '最近使用' : '',
+                        displayedRuntime?.coolingModelIds.includes(entry.id) ? '连接失败 · 等待恢复' : '',
                       ].filter(Boolean)
                       return <li key={entry.id} className={entry.id === model?.id ? 'is-editing' : ''}>
                       <button type="button" className="settings-model-select" aria-pressed={entry.id === model?.id} onClick={() => { setSelectedModelId(entry.id); setShowKey(false); setFeedback(null); setModelTestResult(null); setDeletingModelId(null) }}><span className="settings-model-row-title"><strong>{entry.label || '未命名模型'}</strong><span className={`settings-badge${entry.id === draftPreferred?.id ? ' is-preferred' : ''}`}>{!entry.enabled ? '已停用' : !saved || !draftModelReady(entry, saved) ? '待配置' : entry.id === draftPreferred?.id ? '首选' : '备用'}</span></span><small>{entry.name || '待填写模型名称'}</small><span className="settings-model-row-state" title="调用状态基于已保存配置；首选顺序修改需保存后生效">{states.length ? states.map((state) => <span key={state} className={state.startsWith('连接失败') ? 'is-warning' : 'is-runtime'}>{state}</span>) : entry.id === model?.id ? '正在编辑' : '点击编辑配置'}</span></button>

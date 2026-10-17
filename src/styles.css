@@ -563,8 +563,8 @@ body {
   z-index: 2;
 }
 .chip-ring-svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.chip-ring-track { stroke: rgba(16, 185, 129, .55); stroke-width: 1.5; stroke-dasharray: 8 12; stroke-linecap: round; transition: stroke .3s ease; }
-.chip-ring-flow { stroke: #ffba92; stroke-width: 2.5; stroke-dasharray: 44 556; stroke-linecap: round; opacity: 0; }
+.chip-ring-track { stroke: rgba(16, 185, 129, .55); stroke-width: 1.5; stroke-dasharray: 13.333 20; stroke-linecap: round; transition: stroke .3s ease; }
+.chip-ring-flow { stroke: #ffba92; stroke-width: 2.5; stroke-dasharray: 73 927; stroke-linecap: round; opacity: 0; }
 
 .holo-scale-ring {
   position: absolute;
@@ -584,10 +584,10 @@ body {
   box-shadow: 0 0 25px rgba(255, 104, 56, 0.7), inset 0 0 15px rgba(255, 104, 56, 0.3);
   filter: brightness(1.25);
 }
-/* 沿圆角方框顺时针绕行，每秒更新 20 次，空闲不播放。 */
-.processor-chip.energized .chip-ring-track { stroke: var(--accent-orange); stroke-width: 2; animation: chipRingFlow 6s steps(120, end) infinite; }
-.processor-chip.energized .chip-ring-flow { opacity: 1; animation: chipRingFlow 6s steps(120, end) infinite; }
-@keyframes chipRingFlow { from { stroke-dashoffset: 0; } to { stroke-dashoffset: -600; } }
+/* CSS 连续驱动描边；空闲不播放，隐藏与减少动态效果设置继续生效。 */
+.processor-chip.energized .chip-ring-track { stroke: var(--flow-color); stroke-width: 2; animation: chip-flow var(--flow-duration, 6s) linear infinite; }
+.processor-chip.energized .chip-ring-flow { opacity: 1; animation: chip-flow var(--flow-duration, 6s) linear infinite; }
+@keyframes chip-flow { from { stroke-dashoffset: 1000; } to { stroke-dashoffset: 0; } }
 .processor-chip.energized .holo-scale-ring {
   border-color: rgba(255, 104, 56, 0.35);
   animation: holoRotate 12s linear infinite;
@@ -1187,21 +1187,20 @@ button:focus-visible, input:focus-visible {
 /* 已接入渠道的绿色能量脉冲动效：静态时节奏平稳平滑，工作时加速 */
 .source-transfer-beam {
   fill: none;
-  stroke: #10b981;
+  stroke: var(--flow-color, #10b981);
   stroke-width: 2.5;
   stroke-linecap: round;
-  stroke-dasharray: 48 492;
+  stroke-dasharray: 89 911;
   opacity: .85;
   filter: drop-shadow(0 0 3px rgba(16, 185, 129, .45));
-  animation: sourcePhotonFlow 7s cubic-bezier(.4, 0, .2, 1) infinite;
+  animation: chip-flow var(--flow-duration, 16s) linear infinite;
+  animation-delay: var(--flow-delay, 0s);
 }
 
 /* 工作中状态：脉冲加速流动 */
 .source-transfer-layer.is-working .source-transfer-beam {
   opacity: .95;
   stroke-width: 2.8;
-  animation-duration: 2.2s;
-  animation-timing-function: linear;
 }
 
 /* 当前处于采集中/活动状态的线路：高亮橙色脉冲加粗 */
@@ -1210,13 +1209,10 @@ button:focus-visible, input:focus-visible {
 .source-transfer-layer .source-circuit-group.circuit-active .source-transfer-beam {
   stroke: var(--accent-orange);
   stroke-width: 3;
-  stroke-dasharray: 60 480;
+  stroke-dasharray: 111 889;
   opacity: 1;
   filter: drop-shadow(0 0 4px rgba(255, 104, 56, .6));
-  animation-duration: 1.6s;
-  animation-timing-function: linear;
 }
-@keyframes sourcePhotonFlow { from { stroke-dashoffset: 540; } to { stroke-dashoffset: 0; } }
 
 /* 后台标签页暂停装饰动效，不占用持续绘制资源。 */
 .app-shell.is-background *, .app-shell.is-background *::before, .app-shell.is-background *::after { animation-play-state: paused !important; transition: none !important; }

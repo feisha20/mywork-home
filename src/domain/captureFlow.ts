@@ -13,7 +13,7 @@ export function changedCaptureDestinations(previous: Task[] | null, next: Task[]
   const before = new Map(previous.map((task) => [task.id, captureSignature(task)]))
   const destinations = new Set<CaptureDestination>()
   for (const task of next) {
-    if (task.source === 'manual' || before.get(task.id) === captureSignature(task)) continue
+    if ((task.source === 'manual' && !task.scheduledPlan) || before.get(task.id) === captureSignature(task)) continue
     if (task.management && !recordTimestamp(task) && !isPendingTask(task)) continue
     destinations.add(recordTimestamp(task) ? 'logs' : 'tasks')
   }

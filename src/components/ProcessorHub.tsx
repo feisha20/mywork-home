@@ -87,7 +87,8 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
           <span className="pcb-test-point tp-top-left">待办分发</span>
           <span className="pcb-test-point tp-bottom-right">日报归档</span>
         </div>
-        <div className={`processor-chip${energized ? ' energized' : ''}`} ref={refs.chip}>
+        <div className={`processor-chip${energized ? ' energized' : ''}`} ref={refs.chip}
+          style={{ '--flow-duration': '6s', '--flow-color': 'var(--accent-orange)' } as CSSProperties}>
           <div className="chip-pins-top" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <span className="chip-pin" key={index} />)}</div>
           <div className="chip-pins-bottom" aria-hidden="true">{slots.map((slot, index) => <span ref={bottomPins[index]} className={`chip-pin${activeSource && slot.sources.includes(activeSource) ? ' pin-active' : ''}`} key={slot.id} />)}</div>
           <div className="chip-pins-left" aria-hidden="true">
@@ -99,8 +100,8 @@ export function ProcessorHub({ refs, phase, routing, activePin, pendingCount, co
           <div className="holo-scale-ring" aria-hidden="true" />
           <div className="chip-accelerator-ring" ref={refs.ring} aria-hidden="true">
             <svg className="chip-ring-svg" viewBox="0 0 144 144" fill="none">
-              <rect className="chip-ring-track" x="1" y="1" width="142" height="142" rx="27" pathLength="600" />
-              <rect className="chip-ring-flow" x="1" y="1" width="142" height="142" rx="27" pathLength="600" />
+              <rect className="chip-ring-track" x="1" y="1" width="142" height="142" rx="27" pathLength="1000" />
+              <rect className="chip-ring-flow" x="1" y="1" width="142" height="142" rx="27" pathLength="1000" />
             </svg>
           </div>
           <div className="chip-core">

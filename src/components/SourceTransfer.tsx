@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import type { RefObject } from 'react'
+import type { CSSProperties, RefObject } from 'react'
 import type { WorkbenchSnapshot } from '../../shared/contracts'
+import { createFrameMeasurement } from '../domain/frameMeasurement'
 import { channelStatus, type CaptureSource, type ChannelSlot } from '../domain/channelDock'
 
 interface SourceTransferProps {
@@ -17,7 +18,7 @@ interface SourceTransferProps {
   visible: boolean
 }
 interface Point { x: number; y: number }
-interface Circuit { slot: ChannelSlot; path: string; start: Point; end: Point; connected: boolean; active: boolean }
+interface Circuit { slot: ChannelSlot; path: string; start: Point; end: Point }
 
 // 折角使用短斜线，与背景电路线保持一致。
 function circuitPath(points: Point[]): string {
@@ -69,30 +70,29 @@ export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, botto
         const points = horizontal
           ? [start, { x: start.x, y: topLane }, { x: gutter, y: topLane }, { x: gutter, y: bottomLane }, { x: end.x, y: bottomLane }, end]
           : [start, { x: start.x, y: bridge }, { x: end.x, y: bridge }, end]
-        // 检查当前渠道是否已接入
-        const states = slot.sources.map((entry) => channelStatus(entry, sources, activeSource, runErrors))
-        const connected = states.some((entry) => entry.kind === 'connected' || entry.kind === 'warning' || entry.kind === 'active')
-        const active = !!activeSource && slot.sources.includes(activeSource)
-        // 路径起点固定为采集渠道，终点固定为芯片；递减偏移沿起点向终点传输。
-        return { slot, path: circuitPath(points), start: points[0], end: points.at(-1)!, connected, active }
+        // 路径固定为采集渠道到芯片，状态变化只改 CSS，不重新测量布局。
+        return { slot, path: circuitPath(points), start: points[0], end: points.at(-1)! }
       })
       const next = { circuits, width: bounds.width, height: bounds.height }
       setGeometry((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next)
     }
-    measure()
-    const observer = new ResizeObserver(measure)
+    const measurement = createFrameMeasurement(measure)
+    measurement.schedule()
+    const observer = new ResizeObserver(measurement.schedule)
     observer.observe(frame); observer.observe(target); observer.observe(layer)
     for (const element of [...elements, ...ports, ...pins]) observer.observe(element!)
     // 状态文案高度变化会移动整组卡片，即使卡片自身尺寸没有变化。
     frame.querySelectorAll('.hub-top-hud, .chip-carrier-board, .engine-matrix-wrap').forEach((element) => observer.observe(element))
-    window.addEventListener('resize', measure)
-    return () => { observer.disconnect(); window.removeEventListener('resize', measure) }
-  }, [slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, activeSource, sources, runErrors, visible])
+    window.addEventListener('resize', measurement.schedule)
+    return () => { measurement.stop(); observer.disconnect(); window.removeEventListener('resize', measurement.schedule) }
+  }, [slots, frameRef, sourceRefs, sourcePorts, bottomPins, targetRef, visible])
 
   return <svg ref={layerRef} className={`source-transfer-layer${working ? ' is-working' : ''}`} viewBox={geometry ? `0 0 ${geometry.width} ${geometry.height}` : undefined} preserveAspectRatio="none" aria-hidden="true">
     {geometry?.circuits.map((circuit, index) => {
-      const isCircuitActive = visible && circuit.active
-      const isConnected = circuit.connected
+      const states = circuit.slot.sources.map((entry) => channelStatus(entry, sources, activeSource, runErrors))
+      const isCircuitActive = visible && !!activeSource && circuit.slot.sources.includes(activeSource)
+      const isConnected = states.some((entry) => ['connected', 'warning', 'active'].includes(entry.kind))
+      const duration = isCircuitActive ? 2 : working ? 4 : 16
       const classNames = [
         'source-circuit-group',
         isConnected ? 'is-connected' : 'is-pending',
@@ -100,15 +100,15 @@ export function SourceTransfer({ slots, frameRef, sourceRefs, sourcePorts, botto
       ].filter(Boolean).join(' ')
 
       return (
-        <g key={circuit.slot.id} className={classNames}>
-          <path className="source-transfer-track" d={circuit.path} />
+        <g key={circuit.slot.id} className={classNames} style={{ '--flow-duration': `${duration}s`,
+          '--flow-color': isCircuitActive ? 'var(--accent-orange)' : '#10b981', '--flow-delay': `${-index * duration / 5}s` } as CSSProperties}>
+          <path className="source-transfer-track" d={circuit.path} pathLength="1000" />
           <circle className="circuit-terminal" cx={circuit.end.x} cy={circuit.end.y} r="2.5" />
           {visible && isConnected && (
             <path
               className="source-transfer-beam"
               d={circuit.path}
-              pathLength="540"
-              style={{ animationDelay: `${-index * (working ? 0.8 : 2.5)}s` }}
+              pathLength="1000"
             />
           )}
         </g>
