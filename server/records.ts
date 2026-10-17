@@ -1,3 +1,4 @@
+import type { DirectoryReader } from './directoryCache.js'
 import { createHash } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
@@ -107,11 +108,11 @@ export function isSkippableRecordLine(line: Buffer, source: JsonlSource): boolea
   return line.includes('"channel":"analysis"') || line.includes('"channel":"reasoning"')
 }
 
-export async function listRecordFiles(root: string): Promise<string[]> {
+export async function listRecordFiles(root: string, readDirectory: DirectoryReader = (path) => readdir(path, { withFileTypes: true })): Promise<string[]> {
   const files: string[] = []
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+  for (const entry of await readDirectory(root)) {
     const path = join(root, entry.name)
-    if (entry.isDirectory()) files.push(...await listRecordFiles(path))
+    if (entry.isDirectory()) files.push(...await listRecordFiles(path, readDirectory))
     else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(path)
   }
   return files.sort()

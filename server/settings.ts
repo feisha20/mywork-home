@@ -67,7 +67,7 @@ export class SettingsService {
         ...(channel.collector === 'zentao' ? { zentao: { baseUrl: zentao?.baseUrl ?? '', account: zentao?.account ?? '', hasPassword: !!zentaoPassword,
           management: zentao?.management ?? defaultZentaoManagement } } : {}) }))
       await chmod(file, 0o600)
-      const models = input.models?.map((model) => ({ id: model.id, label: model.label, alias: model.alias ?? '', enabled: model.enabled, baseUrl: model.baseUrl, name: model.name, apiFormat: modelApiFormat(model.apiFormat), apiKey: model.apiKey ?? '' }))
+      const models = input.models?.map((model) => ({ id: model.id, label: model.label, alias: model.alias ?? '', enabled: model.enabled, baseUrl: model.baseUrl, name: model.name, apiFormat: modelApiFormat(model.apiFormat), structuredOutputs: model.structuredOutputs, apiKey: model.apiKey ?? '' }))
         ?? [{ id: 'default', label: '默认模型', enabled: true, ...input.model, apiKey }]
       const service = new SettingsService(config, { ...input, channels, models, apiKey, zentaoPassword }, sourcePaths)
       if (legacy || !parsed.models) await service.persist(service.data)
@@ -142,7 +142,7 @@ export class SettingsService {
         const saved = this.data.models.find((entry) => entry.id === model.id)
         const baseUrl = model.baseUrl.replace(/\/+$/, '')
         const sameEndpoint = saved?.baseUrl === baseUrl && modelApiFormat(saved.apiFormat) === modelApiFormat(model.apiFormat)
-        return { id: model.id, label: model.label, alias: model.alias ?? '', enabled: model.enabled, baseUrl, name: model.name, apiFormat: modelApiFormat(model.apiFormat),
+        return { id: model.id, label: model.label, alias: model.alias ?? '', enabled: model.enabled, baseUrl, name: model.name, apiFormat: modelApiFormat(model.apiFormat), structuredOutputs: model.structuredOutputs,
           apiKey: model.clearApiKey ? '' : model.apiKey || (sameEndpoint ? saved.apiKey : '') }
       })
       const next: SavedSettings = { revision: this.data.revision + 1,
@@ -225,13 +225,16 @@ export class SettingsService {
     const format = modelApiFormat(model.apiFormat)
     const headers: Record<string, string> = format === 'anthropic-messages'
       ? { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }
+      : format === 'gemini_native' ? { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey }
       : { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
-    const body = format === 'openai-responses'
+    const body = format === 'gemini_native'
+      ? { contents: [{ role: 'user', parts: [{ text: '请只回复 OK' }] }], generationConfig: { maxOutputTokens: 64 } }
+      : format === 'openai-responses'
       ? { model: model.name, input: '请只回复 OK', max_output_tokens: 64, stream: false }
       : { model: model.name, messages: [{ role: 'user', content: '请只回复 OK' }], max_tokens: 64, stream: false }
     let response: Response
     try {
-      response = await fetch(modelApiEndpoint(model.baseUrl, format), { method: 'POST',
+      response = await fetch(modelApiEndpoint(model.baseUrl, format, model.name), { method: 'POST',
         headers, signal: AbortSignal.timeout(15_000), body: JSON.stringify(body) })
     } catch { throw new SettingsError('模型连接失败或超时，请检查地址与网络', 502) }
     if (!response.ok) {
@@ -259,7 +262,8 @@ export class SettingsService {
       throw new SettingsError(reasons[response.status] ?? `上游模型请求失败（HTTP ${response.status}），请检查 API 格式、模型名称与上游服务`, 502)
     }
     const result = await response.json().catch(() => null)
-    const compatible = format === 'anthropic-messages' ? result?.type === 'message' && Array.isArray(result.content)
+    const compatible = format === 'gemini_native' ? Array.isArray(result?.candidates) && result.candidates.some((candidate: any) => candidate.content?.parts?.some((part: any) => typeof part.text === 'string' && !part.thought))
+      : format === 'anthropic-messages' ? result?.type === 'message' && Array.isArray(result.content)
       : format === 'openai-responses' ? result?.object === 'response' && Array.isArray(result.output) : !!result?.choices?.length
     if (!compatible) throw new SettingsError('接口未返回兼容的模型响应，请检查基础地址', 502)
     return { message: '连接成功，模型可以正常响应' }

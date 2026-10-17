@@ -30,11 +30,11 @@ export class ModelRouter {
     }, Math.max(1, next - Date.now()))
     this.recoveryTimer.unref?.()
   }
-  private identity(model: Model) { return JSON.stringify([model.id, model.baseUrl, model.name, model.apiKey, modelApiFormat(model.apiFormat)]) }
+  private identity(model: Model) { return JSON.stringify([model.id, model.baseUrl, model.name, model.apiKey, modelApiFormat(model.apiFormat), model.structuredOutputs]) }
   candidates(config: Config): Model[] {
     for (const [key, until] of this.failures) if (until <= Date.now()) this.failures.delete(key)
     const models = (config.models ?? [{ id: 'default', label: '默认模型', enabled: true,
-      apiFormat: config.WORKBENCH_LLM_API_FORMAT, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }])
+      apiFormat: config.WORKBENCH_LLM_API_FORMAT, structuredOutputs: config.structuredOutputs, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }])
       .filter((model) => model.enabled && model.apiKey)
     if (!config.autoSwitchModels) return models.slice(0, 1)
     const ready = models.filter((model) => (this.failures.get(this.identity(model)) ?? 0) <= Date.now())
@@ -43,7 +43,7 @@ export class ModelRouter {
   status(config: Config): ModelRuntimeStatus {
     const next = this.candidates(config)[0]
     const models = config.models ?? [{ id: 'default', label: '默认模型', enabled: true,
-      apiFormat: config.WORKBENCH_LLM_API_FORMAT, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }]
+      apiFormat: config.WORKBENCH_LLM_API_FORMAT, structuredOutputs: config.structuredOutputs, baseUrl: config.WORKBENCH_LLM_BASE_URL, name: config.WORKBENCH_LLM_MODEL, apiKey: config.WORKBENCH_LLM_API_KEY }]
     return {
       ...(this.active.size ? { activeModelIds: models.filter((model) => this.active.has(this.identity(model))).map((model) => model.id) } : {}),
       preferredModelId: models.find((model) => model.enabled && model.apiKey)?.id ?? null,
@@ -52,7 +52,7 @@ export class ModelRouter {
       coolingModelIds: models.filter((model) => (this.failures.get(this.identity(model)) ?? 0) > Date.now()).map((model) => model.id),
     }
   }
-  async run<T>(config: Config, timeoutMs: number, request: (config: Config, timeoutMs: number) => Promise<T>): Promise<T> {
+  async run<T>(config: Config, timeoutMs: number, request: (config: Config, timeoutMs: number) => Promise<T>, mode: 'default' | 'long-form' = 'default'): Promise<T> {
     const models = this.candidates(config)
     if (!models.length) throw new Error((config.models ?? []).some((model) => model.enabled && model.apiKey)
       ? '所有模型暂时不可用，请在一分钟后重试' : '尚未配置可用的模型密钥')
@@ -61,14 +61,18 @@ export class ModelRouter {
     for (const [index, model] of models.entries()) {
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
-      // 为备用模型保留时间，多个模型时优先服务最多等待 30 秒。
-      const budget = index === models.length - 1 ? remaining : Math.min(30_000, Math.max(1, Math.floor(remaining / (models.length - index))))
+      // 周月报给候选模型最多 90 秒，并为每个后续模型保留 15 秒；总预算不变。
+      const count = models.length - index
+      const reserve = Math.min(15_000, Math.floor(remaining / count))
+      const budget = index === models.length - 1 ? remaining : mode === 'long-form'
+        ? Math.min(90_000, Math.max(1, remaining - reserve * (count - 1)))
+        : Math.min(30_000, Math.max(1, Math.floor(remaining / count)))
       const identity = this.identity(model)
       this.active.set(identity, (this.active.get(identity) ?? 0) + 1)
       this.changed(index > 0 ? { from: models[index - 1].id, to: model.id } : {})
       try {
         const result = await request({ ...config, WORKBENCH_LLM_BASE_URL: model.baseUrl,
-          WORKBENCH_LLM_MODEL: model.name, WORKBENCH_LLM_API_FORMAT: modelApiFormat(model.apiFormat), WORKBENCH_LLM_API_KEY: model.apiKey }, budget)
+          WORKBENCH_LLM_MODEL: model.name, WORKBENCH_LLM_API_FORMAT: modelApiFormat(model.apiFormat), WORKBENCH_LLM_API_KEY: model.apiKey, structuredOutputs: model.structuredOutputs }, budget)
         this.lastUsedIdentity = this.identity(model)
         this.failures.delete(this.identity(model))
         this.scheduleRecovery()

@@ -83,4 +83,49 @@ describe('工作台自适应轮询', () => {
     await vi.advanceTimersByTimeAsync(60000); expect(refresh).toHaveBeenCalledOnce()
     poller.stop()
   })
+  it('SSE 漏掉完成事件时每 30 秒核对，读到结束后恢复零空闲轮询', async () => {
+    let running = false
+    const refresh = vi.fn(async () => ({ running }))
+    const poller = createAdaptivePolling(refresh, () => true)
+    poller.setRealtime(true)
+    await poller.refreshNow()
+    await vi.advanceTimersByTimeAsync(120000)
+    expect(refresh).toHaveBeenCalledOnce()
+    running = true; poller.setActivity(true)
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    running = false
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(refresh).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(120000)
+    expect(refresh).toHaveBeenCalledTimes(3)
+    poller.stop()
+  })
+  it('运行中核对失败会继续重试，完成事件则立即取消核对', async () => {
+    const refresh = vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ running: true })
+    const poller = createAdaptivePolling(refresh, () => true)
+    poller.setRealtime(true); poller.setActivity(true)
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    poller.setActivity(false)
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    poller.stop()
+  })
+
+  it('较早快照不能取消请求期间新收到的同步状态核对', async () => {
+    let resolve!: (value: { running: boolean }) => void
+    const refresh = vi.fn().mockImplementationOnce(() => new Promise((done) => { resolve = done })).mockResolvedValue({ running: false })
+    const poller = createAdaptivePolling(refresh, () => true)
+    poller.setRealtime(true)
+    const pending = poller.refreshNow()
+    poller.setActivity(true)
+    resolve({ running: false }); await pending
+    await vi.advanceTimersByTimeAsync(30000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(refresh).toHaveBeenCalledTimes(2)
+    poller.stop()
+  })
+
 })

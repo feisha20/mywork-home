@@ -22,6 +22,10 @@ describe.skipIf(!enabled).sequential('SSE 隔离数据库与真实 HTTP 流', ()
     pool = new Pool({ connectionString: process.env.TEST_DATABASE_URL, max: 6 })
     writer = new Pool({ connectionString: process.env.TEST_DATABASE_URL, max: 2 })
     await migrate(pool)
+    // 复现线上：旧迁移号已存在，但通知函数与触发器缺失。
+    await pool.query('DROP FUNCTION workbench.notify_change() CASCADE; DROP FUNCTION workbench.notify_task_created() CASCADE; DELETE FROM workbench.schema_migrations WHERE version=17')
+    await migrate(pool)
+    await migrate(pool)
     const store = new Store(pool)
     const sync = new SyncService(store, config, { async extract() { return [] }, async close() {} })
     const reports = new DailyReportService(store, { async generateDailyReport() { return [] }, async close() {} })
@@ -58,6 +62,13 @@ describe.skipIf(!enabled).sequential('SSE 隔离数据库与真实 HTTP 流', ()
   })
   const insert = async (id: string, title: string, personal = false) => writer.query(`INSERT INTO workbench.tasks
     (id,reference,source,title,created_at,is_personal) VALUES($1,'ZT-SSE','zentao',$2,now(),$3)`, [id, title, personal])
+  it('旧迁移号已登记但通知对象缺失时由新迁移补齐，重复启动保持幂等', async () => {
+    const { rows } = await pool.query(`SELECT count(*)::int AS count FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
+      JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='workbench' AND t.tgname IN
+      ('tasks_realtime','tasks_created_realtime','daily_reports_realtime','periodic_reports_realtime','management_realtime','sync_runs_realtime') AND t.tgenabled='O'`)
+    expect(rows[0].count).toBe(6)
+    expect((await pool.query('SELECT 1 FROM workbench.schema_migrations WHERE version=17')).rowCount).toBe(1)
+  })
   it('拒绝跨源订阅', async () => {
     const response = await fetch(`${address}/api/events`, { headers: { Origin: 'https://outside.example' } })
     expect(response.status).toBe(403)

@@ -8,7 +8,7 @@
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true }); fs.rmSync('dist-server', { recursive: true, force: true });\"",
     "build": "npm run clean && npm run build:web && npm run build:server",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "vitest run",
+    "test": "vitest run --exclude \"scripts/*.test.mjs\" && node --test scripts/*.test.mjs",
     "dev:server": "tsx watch server/main.ts",
     "build:web": "tsc -b && vite build",
     "build:server": "tsc -p tsconfig.server.json",

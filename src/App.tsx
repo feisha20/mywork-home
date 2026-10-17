@@ -134,6 +134,7 @@ export default function App() {
           connection: (live) => { poller.setRealtime(live); setRealtimeConnected(live) },
           changed: () => { void poller.refreshNow() },
           status: ({ harness, modelRuntime }) => {
+            poller.setActivity(harness.run?.status === 'running')
             statusVersion.current++
             setLiveModelRuntime(modelRuntime)
             setSnapshot((current) => current ? { ...current, harness } : current)

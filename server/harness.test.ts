@@ -95,3 +95,24 @@ describe('模型输出边界', () => {
     expect(serialized).toContain('openai-completions'); expect(serialized).toContain('glm-5.3-flash')
   })
 })
+
+describe('紧凑对话的证据边界', () => {
+  it('保留逐条别名、角色、时间，缩减重复元数据且可独立引用每条原消息', () => {
+    const messages = Array.from({ length: 5 }, (_, index) => ({ ...message, id: `real-${index}`, role: index % 2 ? 'assistant' as const : 'user' as const,
+      timestamp: new Date(Date.parse(message.timestamp) + index * 1000).toISOString(), text: `短消息${index}` }))
+    const input = extractionInput(messages, [], [])
+    const blocks = JSON.parse(input.prompt).newMessages
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].messages.map((entry: any) => entry.id)).toEqual(['M1', 'M2', 'M3', 'M4', 'M5'])
+    expect(blocks[0].messages[1]).toMatchObject({ role: 'assistant', timestamp: messages[1].timestamp, text: '短消息1' })
+    expect(input.prompt.length).toBeLessThan(JSON.stringify({ existingTasks: [], contextMessages: [], newMessages: messages.map((row, index) => ({ ...row, id: `M${index + 1}` })) }).length)
+    expect(parseExtraction(JSON.stringify({ items: [{ title: '处理独立事项', status: 'todo', isPersonal: false, evidenceIds: ['M4'] }] }), messages, [], [], input.references)[0].evidenceIds).toEqual(['real-3'])
+  })
+  it('不跨来源、项目、父子会话、时间边界或长消息压缩', () => {
+    for (const patch of [{ source: 'claude' }, { sessionId: 'child' }, { projectPath: '/other' }, { rootSessionId: 'other' },
+      { timestamp: '2026-10-01T01:03:00Z' }, { timestamp: 'invalid' }, { text: '长'.repeat(401) }]) {
+      const input = extractionInput([message, { ...message, id: 'next', ...patch } as SourceMessage], [], [])
+      expect(JSON.parse(input.prompt).newMessages).toHaveLength(2)
+    }
+  })
+})

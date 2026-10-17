@@ -1,3 +1,4 @@
+import type { DirectoryReader } from './directoryCache.js'
 import { createReadStream } from 'node:fs'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -19,11 +20,11 @@ function textContent(content: unknown): string {
 }
 
 // 只遍历 tmp 下每个项目的 chats；不扫描认证、设置、工具输出或检查点目录。
-export async function listGeminiRecordFiles(root: string): Promise<GeminiRecordFile[]> {
+export async function listGeminiRecordFiles(root: string, readDirectory: DirectoryReader = (path) => readdir(path, { withFileTypes: true })): Promise<GeminiRecordFile[]> {
   const files: GeminiRecordFile[] = []
   async function chats(directory: string, projectPath: string, parentSessionId: string | null) {
     let entries
-    try { entries = await readdir(directory, { withFileTypes: true }) }
+    try { entries = await readDirectory(directory) }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw error
@@ -35,7 +36,7 @@ export async function listGeminiRecordFiles(root: string): Promise<GeminiRecordF
         && (entry.name.startsWith('session-') || parentSessionId)) files.push({ path, projectPath, parentSessionId })
     }
   }
-  for (const entry of await readdir(root, { withFileTypes: true })) {
+  for (const entry of await readDirectory(root)) {
     if (!entry.isDirectory()) continue
     const project = join(root, entry.name)
     let projectPath = ''

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { PeriodicReportService } from './periodicReport.js'
+import { ModelConnectionError } from './modelRouting.js'
+import { periodicReportFailure, PeriodicReportService } from './periodicReport.js'
 import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
 import type { Task } from '../src/domain/workbench.js'
 import type { Store } from './store.js'
@@ -92,5 +93,25 @@ describe('周期报告保存和并发保护', () => {
     expect(await service.read('weekly','2026-W40')).toMatchObject({markdown:'我的人工正文',revision:2})
     await service.restoreOriginalFormat()
     expect((await service.read('monthly','2026-10'))?.revision).toBe(3)
+  })
+})
+
+
+describe('周月报失败原因提示', () => {
+  it('区分超时、连接、冷却与缺少配置，不泄漏上游原文', () => {
+    expect(periodicReportFailure(new ModelConnectionError('模型抽取超时，下次同步将重试')).message).toContain('生成超时')
+    expect(periodicReportFailure(new ModelConnectionError('私有密钥和上游正文')).message).toContain('连接失败')
+    expect(periodicReportFailure(new Error('尚未配置可用的模型密钥')).statusCode).toBe(503)
+    expect(periodicReportFailure(new Error('所有模型暂时不可用，请在一分钟后重试')).message).toContain('一分钟')
+    expect(JSON.stringify(periodicReportFailure(new Error('password=private-credential SQL')))).not.toContain('private-credential')
+  })
+  it('保留格式与素材校验类别，不返回模型正文或原始反馈', () => {
+    for (const [feedback, expected] of [['周期报告遗漏成果素材', '遗漏'], ['成果素材引用未知或重复', '未知或重复'],
+      ['相同项目主题必须合并', '重复项目'], ['风险或计划引用了未知素材', '不存在'], ['JSON格式无效', 'JSON'], ['items.0 private-detail', '格式要求']]) {
+      const failure = periodicReportFailure(Object.assign(new Error('模型输出多次未通过格式或来源证据校验'), { validationFeedback: feedback }))
+      expect(failure.message).toContain(expected)
+      expect(failure.message).toContain('原有报告已保留')
+      expect(failure.message).not.toContain('private-detail')
+    }
   })
 })

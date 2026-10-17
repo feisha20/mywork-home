@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { loadConfig } from './config.js'
 import { HarnessExtractor } from './harness.js'
 import type { SourceMessage } from './records.js'
+import { aggregatePeriodData } from '../src/domain/periodicReport.js'
 import type { Task } from '../src/domain/workbench.js'
 
 const enabled = process.env.RUN_HARNESS_TESTS === 'true'
@@ -18,6 +19,57 @@ async function listenFixtureServer(fixture: Server) {
   })
 }
 describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
+  it('复杂月报遗漏素材时给出精确别名并修复，不把原始日志或密钥发给模型', async () => {
+    const requests: any[] = []
+    const records = Array.from({ length: 75 }, (_, index) => ({ text: `合成成果${index + 1}`, taskIds: [`task-${index}`] }))
+    const data = aggregatePeriodData('2026-10-01', '2026-10-31', [{ day: '2026-10-01', generatedAt: '2026-10-01T00:00:00Z', revision: 1, recordCount: 75, recordVersions: {}, items: records }], [])
+    server = createServer(async (request, response) => {
+      let raw = ''; for await (const chunk of request) raw += chunk
+      requests.push(JSON.parse(raw))
+      const result = { achievements: [{ topic: '合成项目', outcomes: ['完成合成月报校验'], sourceIds: Array.from({ length: requests.length === 1 ? 74 : 75 }, (_, index) => `R${index + 1}`) }], omittedSourceIds: [], inProgress: [], nextPlan: [] }
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      response.write(`data: ${JSON.stringify({ id: 'monthly-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: JSON.stringify(result) }, finish_reason: null }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ id: 'monthly-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
+      response.end('data: [DONE]\n\n')
+    })
+    await listenFixtureServer(server)
+    runtime = await mkdtemp(join(tmpdir(), 'workbench-monthly-'))
+    const config = loadConfig({ DATABASE_URL: 'postgresql://app:database-secret@localhost/test', WORKBENCH_RUNTIME_DIR: runtime, WORKBENCH_LLM_API_KEY: 'monthly-fixture-key', WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1` })
+    extractor = new HarnessExtractor(config)
+    const sections = await extractor.generatePeriodicReport('monthly', data)
+    expect(sections[0].items).toEqual(['【合成项目】完成合成月报校验'])
+    expect(requests).toHaveLength(2)
+    expect(JSON.stringify(requests[1])).toContain('周期报告遗漏成果素材：缺少 1 条，请补齐 R75')
+    expect(JSON.stringify(requests)).not.toContain('database-secret')
+    expect(JSON.stringify(requests)).not.toContain('monthly-fixture-key')
+  }, 60000)
+  it.each(['openai-completions', 'openai-responses', 'anthropic-messages', 'gemini_native'] as const)('%s 原生约束通过本地 HTTP 桩完成证据还原', async (format) => {
+    const requests: any[] = []
+    const output = { items: [{ taskId: null, title: '完成结构化抽取验证', status: 'completed', isPersonal: false, evidenceIds: ['M1'] }] }
+    const text = JSON.stringify(output)
+    server = createServer(async (request, response) => {
+      let raw = ''; for await (const chunk of request) raw += chunk
+      requests.push({ url: request.url, headers: request.headers, body: JSON.parse(raw) })
+      const result = format === 'gemini_native' ? { candidates: [{ finishReason: 'STOP', content: { parts: [{ text }] } }] }
+        : format === 'anthropic-messages' ? { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'workbench_extract', input: output }] }
+          : format === 'openai-responses' ? { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text }] }] }
+            : { choices: [{ finish_reason: 'stop', message: { content: text } }] }
+      response.writeHead(200, { 'Content-Type': 'application/json' }); response.end(JSON.stringify(result))
+    })
+    await listenFixtureServer(server)
+    const config = loadConfig({ DATABASE_URL: 'postgresql://app:database-secret@localhost/test', WORKBENCH_LLM_API_FORMAT: format,
+      WORKBENCH_LLM_API_KEY: 'native-fixture-key', WORKBENCH_LLM_MODEL: 'gemini-2.5-flash',
+      WORKBENCH_LLM_BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1beta` })
+    config.structuredOutputs = true
+    extractor = new HarnessExtractor(config)
+    const message: SourceMessage = { id: 'native-evidence', source: 'codex', sessionId: 'fixture', rootSessionId: 'fixture', projectPath: '/fixture', role: 'user', timestamp: new Date().toISOString(), text: '验证结构化抽取。password=private-fixture-password' }
+    expect((await extractor.extract([message], [], []))[0].evidenceIds).toEqual(['native-evidence'])
+    expect(requests).toHaveLength(1)
+    expect(JSON.stringify(requests[0].body)).not.toContain('private-fixture-password')
+    expect(JSON.stringify(requests[0].body)).not.toContain('database-secret')
+    expect(JSON.stringify(requests[0].body)).not.toContain('native-fixture-key')
+  })
+
   it.each(['anthropic-messages', 'openai-responses'] as const)('%s 使用实际 Harness 完成模拟事项抽取', async (format) => {
     const requests: { url: string; headers: Record<string, unknown>; body: any }[] = []
     const text = JSON.stringify({ items: [{ title: '完成协议接入验证', status: 'completed', isPersonal: false, evidenceIds: ['M1'] }] })

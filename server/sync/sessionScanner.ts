@@ -1,3 +1,4 @@
+import { DirectoryCache } from '../directoryCache.js'
 import { stat } from 'node:fs/promises'
 import type { SyncRun, WorkbenchSnapshot } from '../../shared/contracts.js'
 import type { ChannelConfig } from '../../shared/settings.js'
@@ -27,17 +28,32 @@ export interface SessionScannerContext {
 }
 
 export class SessionScanner {
+  private directories = new DirectoryCache()
+  private completedFiles = new Map<string, string>()
+  private cacheSince = Date.now()
   private fileFormats = new Map<string, { fingerprint: string; file: CompatibleRecordFile }>()
 
   constructor(private readonly store: Store) {}
 
   clearFormatsCache() {
     this.fileFormats.clear()
+    this.directories.clear()
+    this.completedFiles.clear()
+    this.cacheSince = Date.now()
   }
 
   async scanChannel(ctx: SessionScannerContext): Promise<void> {
     const { run, channel, cutoff, secrets, sources, isStopping, onError, onFailRecord, onProgress } = ctx
+    if (Date.now() - this.cacheSince >= 3_600_000) this.clearFormatsCache()
     const source = channel.id as Source
+    const modeKey = JSON.stringify([channel.collector, channel.mapping])
+    const completedKey = (path: string) => JSON.stringify([source, path, modeKey])
+    const fingerprintOf = (info: Awaited<ReturnType<typeof stat>>) => digest(`${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`)
+    const remember = (path: string, fingerprint: string) => {
+      if (this.completedFiles.size >= 10_000) this.completedFiles.clear()
+      this.completedFiles.set(completedKey(path), fingerprint)
+    }
+    const readDirectory = (path: string) => this.directories.read(path)
 
     for (const root of channel.paths) {
       if (isStopping()) break
@@ -89,9 +105,10 @@ export class SessionScanner {
         if (universal) {
           files = []
           let unsupported = 0
-          for (const path of await listCompatibleCandidates(root)) {
+          for (const path of await listCompatibleCandidates(root, readDirectory)) {
             try {
               const info = await stat(path)
+              if (this.completedFiles.get(completedKey(path)) === fingerprintOf(info)) continue
               const key = cursorKey(path)
               const fingerprint = digest(`${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}:${collector}:${JSON.stringify(channel.mapping)}`)
               let file = this.fileFormats.get(key)?.fingerprint === fingerprint ? this.fileFormats.get(key)!.file : null
@@ -121,8 +138,8 @@ export class SessionScanner {
           }
         } else {
           files = collector === 'gemini'
-            ? await listGeminiRecordFiles(root)
-            : (await listRecordFiles(root)).map((path) => ({ path, projectPath: '', parentSessionId: null }))
+            ? await listGeminiRecordFiles(root, readDirectory)
+            : (await listRecordFiles(root, readDirectory)).map((path) => ({ path, projectPath: '', parentSessionId: null }))
         }
         sources[source].available = true
       } catch {
@@ -141,6 +158,8 @@ export class SessionScanner {
           await onFailRecord(run, source, cursorKey(file), 'unreadable')
           continue
         }
+        const completedFingerprint = fingerprintOf(info)
+        if (this.completedFiles.get(completedKey(file)) === completedFingerprint) continue
         const key = cursorKey(file)
         let cursor = await this.store.cursor(key)
         if (!cursor && info.mtimeMs < Date.parse(cutoff)) continue
@@ -152,6 +171,7 @@ export class SessionScanner {
         }
         if (cursor && cursor.inode === String(info.ino) && cursor.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)
           && (!signature || cursor.context.readerSignature === signature)) {
+          remember(file, completedFingerprint)
           continue
         }
 
@@ -192,6 +212,7 @@ export class SessionScanner {
 
         if (!failed && !isStopping()) {
           await this.store.clearRecordFailure(key)
+          if (cursor?.offset === info.size && cursor.modifiedAt === Math.trunc(info.mtimeMs)) remember(file, completedFingerprint)
         }
         run.scannedFiles++
         if (run.scannedFiles % 20 === 0) {

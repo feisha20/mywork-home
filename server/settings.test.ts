@@ -27,6 +27,24 @@ beforeEach(async () => {
 afterEach(async () => { vi.unstubAllGlobals(); await rm(directory, { recursive: true, force: true }) })
 
 describe('设置持久化与密钥边界', () => {
+  it('Gemini 原生协议及结构化开关保存重开后保留，连接测试使用原生请求', async () => {
+    const input = settingsDraft(settings.view())
+    Object.assign(input.models![0], { apiFormat: 'gemini_native', structuredOutputs: true, baseUrl: 'https://gemini-fixture.example/v1beta', name: 'gemini-2.5-flash', apiKey: 'native-settings-secret' })
+    await settings.save(input)
+    const reopened = await SettingsService.open(config)
+    expect(reopened.view().models![0]).toMatchObject({ apiFormat: 'gemini_native', structuredOutputs: true, hasApiKey: true })
+    expect(reopened.runtimeConfig().models![0].structuredOutputs).toBe(true)
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ candidates: [{ content: { parts: [{ text: 'OK' }] } }] }))
+    vi.stubGlobal('fetch', fetcher)
+    await reopened.testModel(settingsDraft(reopened.view()).models![0])
+    expect(fetcher.mock.calls[0][0]).toBe('https://gemini-fixture.example/v1beta/models/gemini-2.5-flash:generateContent')
+    expect(fetcher.mock.calls[0][1].headers['x-goog-api-key']).toBe('native-settings-secret')
+    expect(JSON.parse(fetcher.mock.calls[0][1].body).contents[0].parts[0].text).toBe('请只回复 OK')
+    expect(JSON.stringify(reopened.view())).not.toContain('native-settings-secret')
+    fetcher.mockResolvedValueOnce(Response.json({ candidates: [{ content: { parts: [{ thought: true, text: '仅推理' }] } }] }))
+    await expect(reopened.testModel(settingsDraft(reopened.view()).models![0])).rejects.toThrow('兼容的模型响应')
+  })
+
   it('禅道密码仅在服务端保存，留空保留、修改身份重填、停用后可清除，重启保留配置', async () => {
     const input = settingsDraft(settings.view()), channel = input.channels.find((entry) => entry.id === 'zentao')!
     channel.enabled = true; channel.zentao = { baseUrl: 'https://pm.example/zentao/', account: 'linjt', password: '禅道测试专用密码' }

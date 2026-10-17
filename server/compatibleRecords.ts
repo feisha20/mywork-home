@@ -1,5 +1,6 @@
+import type { DirectoryReader } from './directoryCache.js'
 import { createReadStream } from 'node:fs'
-import { opendir, readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { COLLECTORS, EMPTY_RECORD_MAPPING } from '../shared/settings.js'
@@ -111,12 +112,12 @@ export function detectRecordFormat(rows: unknown[], mapping = EMPTY_RECORD_MAPPI
   return null
 }
 
-export async function listCompatibleCandidates(root: string) {
+export async function listCompatibleCandidates(root: string, readDirectory: DirectoryReader = (path) => readdir(path, { withFileTypes: true })) {
   const files: string[] = []
   let checkedEntries = 0
   async function walk(directory: string, depth: number) {
     if (depth > 32 || files.length >= 10_000) throw new Error('会话目录过大，请选择更具体的目录')
-    for await (const entry of await opendir(directory)) {
+    for (const entry of await readDirectory(directory)) {
       if (++checkedEntries > 50_000 || files.length >= 10_000) throw new Error('会话目录过大，请选择更具体的目录')
       if (entry.isDirectory() && compatibleDirectoryName(entry.name)) await walk(join(directory, entry.name), depth + 1)
       else if (entry.isFile() && compatibleFileName(entry.name)) files.push(join(directory, entry.name))

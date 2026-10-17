@@ -11,8 +11,8 @@ function stream() {
     emit: (name: string, data = '{}') => listeners.get(name)?.({ data } as MessageEvent) }
 }
 describe('工作台实时订阅与轮询降级', () => {
-  it('连通后停止周期请求，断线低频刷新，重连补读快照且不叠加连接', async () => {
-    const source = stream(), refresh = vi.fn(async () => ({ running: true }))
+  it('连通空闲后停止周期请求，断线低频刷新，重连补读快照且不叠加连接', async () => {
+    const source = stream(), refresh = vi.fn(async () => ({ running: false }))
     const poller = createAdaptivePolling(refresh, () => true)
     const stop = subscribeWorkbenchEvents({ connection: poller.setRealtime, changed: () => { void poller.refreshNow() }, status: vi.fn() }, () => source)
     source.onopen?.({} as Event)
@@ -54,7 +54,7 @@ describe('工作台实时订阅与轮询降级', () => {
   })
   it('刷新未完成时连上 SSE，不再安排后台轮询；事件仍能排队补读', async () => {
     let resolve!: (value: { running: boolean }) => void
-    const refresh = vi.fn().mockImplementationOnce(() => new Promise((done) => { resolve = done })).mockResolvedValue({ running: true })
+    const refresh = vi.fn().mockImplementationOnce(() => new Promise((done) => { resolve = done })).mockResolvedValue({ running: false })
     const poller = createAdaptivePolling(refresh, () => true)
     const pending = poller.refreshNow()
     poller.setRealtime(true); await poller.refreshNow()

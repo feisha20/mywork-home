@@ -46,7 +46,10 @@ export function parsePeriodicReportSummary(raw: string, input: PeriodicReportSum
     if (!expected.has(id) || covered.has(id)) throw new Error('成果素材引用未知或重复，所有成果素材必须且只能归入一个主题或省略列表')
     covered.add(id)
   }
-  if (covered.size !== expected.size) throw new Error('周期报告遗漏成果素材')
+  if (covered.size !== expected.size) {
+    const missing = [...expected].filter((id) => !covered.has(id))
+    throw new Error(`周期报告遗漏成果素材：缺少 ${missing.length} 条，请补齐 ${missing.join('、')}`)
+  }
   if (new Set(result.achievements.map((item) => item.topic.toLowerCase())).size !== result.achievements.length) throw new Error('相同项目主题必须合并')
   const allIds = new Set([...expected, ...input.pending.map((item) => item.sourceId)])
   for (const item of [...result.inProgress, ...result.nextPlan]) {

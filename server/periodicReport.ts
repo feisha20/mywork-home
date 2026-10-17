@@ -1,9 +1,30 @@
 import { aggregatePeriodData, periodBounds, synthesizePeriodicReport, periodicMarkdownSections } from '../src/domain/periodicReport.js'
 import type { Store } from './store.js'
 import type { PeriodicReportGenerator } from './periodicReportSummary.js'
+import { ModelConnectionError } from './modelRouting.js'
 
 export class PeriodicReportError extends Error {
   constructor(message: string, readonly statusCode: number) { super(message) }
+}
+
+// 仅使用固定类别提示，不向页面或日志回显上游正文、地址或凭证。
+export function periodicReportFailure(error: unknown): { message: string; statusCode: number } {
+  const suffix = '；原有报告已保留'
+  const message = error instanceof Error ? error.message : ''
+  if (/尚未配置.*(?:密钥|模型)/.test(message)) return { message: `尚未配置可用模型，请在设置中配置后重新整理${suffix}`, statusCode: 503 }
+  if (message === '所有模型暂时不可用，请在一分钟后重试') return { message: `模型服务暂时不可用，请一分钟后重试${suffix}`, statusCode: 503 }
+  if (error instanceof ModelConnectionError) return { message: `${/超时/.test(message) ? '周月报生成超时，模型未在时限内完成' : '周月报模型连接失败，请检查模型服务及额度'}${suffix}`, statusCode: 502 }
+  if (error instanceof Error && 'validationFeedback' in error && typeof error.validationFeedback === 'string') {
+    const feedback = error.validationFeedback
+    const reason = feedback.includes('遗漏成果素材') ? '模型遗漏了部分成果素材'
+      : feedback.includes('未知或重复') ? '模型引用了未知或重复的成果素材'
+        : feedback.includes('相同项目主题') ? '模型没有合并重复项目主题'
+          : feedback.includes('未知素材') ? '模型引用了不存在的计划或风险依据'
+            : feedback.includes('JSON格式无效') ? '模型未返回完整有效的 JSON'
+              : '模型输出未满足月报格式要求'
+    return { message: `周月报归纳校验失败：${reason}${suffix}`, statusCode: 502 }
+  }
+  return { message: `周月报归纳失败，请稍后重新整理${suffix}`, statusCode: 502 }
 }
 type PeriodStore = Pick<Store, 'periodTasks' | 'dailyReports' | 'periodicReport' | 'periodicReports' | 'savePeriodicReport'>
 export class PeriodicReportService {
@@ -48,9 +69,9 @@ export class PeriodicReportService {
         report.markdown = [report.markdown.split('\n').slice(0, 2).join('\n'), ...report.sections.map((section) =>
           `### ${section.title}\n\n${section.items.map((item, index) => `${index + 1}. ${item}`).join('\n')}`)].join('\n\n')
       } catch (error) {
-        const message = error instanceof Error ? error.message : ''
-        throw new PeriodicReportError(message.includes('密钥') ? '尚未配置可用模型，请在设置中配置后重新整理'
-          : '周月报归纳失败，原有报告已保留，请稍后重新整理', /密钥/.test(message) ? 503 : 502)
+        const failure = periodicReportFailure(error)
+        console.warn('周月报归纳失败', JSON.stringify({ type, periodKey: key, reason: failure.message }))
+        throw new PeriodicReportError(failure.message, failure.statusCode)
       }
     }
     const saved = await this.store.savePeriodicReport(report, previous?.revision ?? 0, tasks)

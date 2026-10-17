@@ -110,4 +110,24 @@ describe('模型自动切换', () => {
     await new ModelRouter().run(config(), 180_000, request)
     expect(request).toHaveBeenCalledTimes(1)
   })
+  it('复杂周月报给首选模型 90 秒并为全部备用保留时间，总预算不超过 180 秒', async () => {
+    vi.useFakeTimers()
+    const value = config()
+    value.models.push(...value.models.map((model) => ({ ...model, id: `${model.id}-extra` })))
+    const budgets: number[] = []
+    await expect(new ModelRouter().run(value, 180000, async (_candidate, budget) => {
+      budgets.push(budget); vi.advanceTimersByTime(budget)
+      throw new ModelConnectionError('模型请求超时')
+    }, 'long-form')).rejects.toThrow('模型请求超时')
+    expect(budgets).toEqual([90000, 60000, 15000, 15000])
+    expect(budgets.reduce((sum, budget) => sum + budget, 0)).toBe(180000)
+  })
+  it('周月报首选模型超过 30 秒仍可成功，不发起不必要的切换', async () => {
+    vi.useFakeTimers()
+    const request = vi.fn(async () => { vi.advanceTimersByTime(45000); return '成功' })
+    expect(await new ModelRouter().run(config(), 180000, request, 'long-form')).toBe('成功')
+    expect(request).toHaveBeenCalledOnce()
+    expect(request.mock.calls[0][1]).toBe(90000)
+  })
+
 })
