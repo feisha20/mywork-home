@@ -4,13 +4,13 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { z } from 'zod'
 import { CAPTURE_SOURCES, SOURCES } from '../src/domain/workbench.js'
-import { builtinCollectors, defaultPeriodicReportSchedule, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema, zentaoSettingsSchema } from '../shared/settings.js'
-import type { ChannelConfig, ChannelSummary, CollectorKind, PathScanResult, SettingsUpdate, WorkbenchSettings, ZentaoConnection } from '../shared/settings.js'
+import { builtinCollectors, defaultPeriodicReportSchedule, modelSettingsSchema, pathCheckSchema, recordPreviewSchema, settingsUpdateSchema, zentaoIdentity, zentaoSettingsSchema, type ChannelConfig, type ChannelSummary, type CollectorKind, type PathScanResult, type SettingsUpdate, type WorkbenchSettings, type ZentaoConnection } from '../shared/settings.js'
 import type { Config } from './config.js'
 import { modelApiFormat, modelApiEndpoint } from '../shared/modelApi.js'
 import { modelRouter } from './modelRouting.js'
 import { SourcePaths } from './sourcePaths.js'
 import { previewCompatibleRecords } from './compatibleRecords.js'
+import { runtimeSecrets } from './secrets.js'
 import { ZentaoError, ZentaoV2Client } from './zentao.js'
 import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
 
@@ -133,8 +133,9 @@ export class SettingsService {
       const zentao = input.channels.find((channel) => channel.id === 'zentao')!
       const connection = zentao.zentao ?? { baseUrl: '', account: '', password: '', clearPassword: false, management: defaultZentaoManagement }
       const previous = this.data.channels.find((channel) => channel.id === 'zentao')?.zentao
-      const baseUrl = connection.baseUrl.replace(/\/+$/, '')
-      const sameIdentity = previous?.baseUrl === baseUrl && previous.account === connection.account
+      const identity = zentaoIdentity(connection)
+      const sameIdentity = !!previous && zentaoIdentity(previous).instance === identity.instance && zentaoIdentity(previous).account === identity.account
+      const baseUrl = identity.instance
       const zentaoPassword = connection.clearPassword ? '' : connection.password || (sameIdentity ? this.data.zentaoPassword : '')
       if (zentao.enabled && !zentaoPassword) throw new SettingsError('启用禅道采集前，请填写密码；更换地址或账号后需要重新填写密码')
       const profiles: NonNullable<SettingsUpdate['models']> = input.models ?? [{ id: this.data.models[0].id, label: this.data.models[0].label, enabled: true, ...input.model }, ...this.data.models.slice(1)]
@@ -215,7 +216,7 @@ export class SettingsService {
     if (locations.some((location) => location.unmounted)) throw new SettingsError('工作台尚未获准访问该本机目录，请在部署配置中添加目录后重试')
     const config = this.runtimeConfig()
     return previewCompatibleRecords(locations.map((location) => location.path), input.collector as 'auto' | 'generic', input.mapping,
-      [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password), ...config.sourceSecrets])
+      runtimeSecrets(config))
   }
   async testModel(raw: unknown): Promise<{ message: string }> {
     const model = modelSettingsSchema.parse(raw)
@@ -270,22 +271,22 @@ export class SettingsService {
   }
   async testZentao(raw: unknown): Promise<{ message: string; bugs: number; tasks: number }> {
     const input = zentaoSettingsSchema.parse(raw)
-    const saved = this.zentaoConnection(), baseUrl = input.baseUrl.replace(/\/+$/, '')
-    const sameIdentity = saved?.baseUrl === baseUrl && saved.account === input.account
+    const saved = this.zentaoConnection(), identity = zentaoIdentity(input)
+    const sameIdentity = !!saved && zentaoIdentity(saved).instance === identity.instance && zentaoIdentity(saved).account === identity.account
     const password = input.clearPassword ? '' : input.password || (sameIdentity ? saved!.password : '')
-    if (!baseUrl || !input.account || !password) throw new SettingsError('请填写禅道地址、账号和密码')
+    if (!identity.instance || !identity.account || !password) throw new SettingsError('请填写禅道地址、账号和密码')
     try {
-      const snapshot = await new ZentaoV2Client({ baseUrl, account: input.account, password }).readWork()
+      const snapshot = await new ZentaoV2Client({ baseUrl: identity.instance, account: identity.account, password }).readWork()
       return { message: `连接成功，发现 ${snapshot.bugs} 个待处理 Bug、${snapshot.tasks} 个待处理任务；保存后开始采集`, bugs: snapshot.bugs, tasks: snapshot.tasks }
     } catch (error) { throw new SettingsError(error instanceof ZentaoError ? error.message : '禅道连接测试失败，请检查配置', 502) }
   }
   async inspectZentaoManagement(raw: unknown) {
     const input = zentaoSettingsSchema.parse(raw)
-    const saved = this.zentaoConnection(), baseUrl = input.baseUrl.replace(/\/+$/, '')
-    const sameIdentity = saved?.baseUrl === baseUrl && saved.account === input.account
+    const saved = this.zentaoConnection(), identity = zentaoIdentity(input)
+    const sameIdentity = !!saved && zentaoIdentity(saved).instance === identity.instance && zentaoIdentity(saved).account === identity.account
     const password = input.clearPassword ? '' : input.password || (sameIdentity ? saved!.password : '')
-    if (!baseUrl || !input.account || !password) throw new SettingsError('请填写禅道地址、账号和密码')
-    try { return await new ZentaoV2Client({ baseUrl, account: input.account, password }).inspectManagementFields(input.management) }
+    if (!identity.instance || !identity.account || !password) throw new SettingsError('请填写禅道地址、账号和密码')
+    try { return await new ZentaoV2Client({ baseUrl: identity.instance, account: identity.account, password }).inspectManagementFields(input.management) }
     catch (error) { throw new SettingsError(error instanceof ZentaoError ? error.message : '需求字段核对失败，请检查连接和读取权限', 502) }
   }
 }

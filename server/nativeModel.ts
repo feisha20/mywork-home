@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { modelApiEndpoint, modelApiFormat } from '../shared/modelApi.js'
 import type { Config } from './config.js'
 import { loggedError, logger } from './logger.js'
+import { runtimeSecrets } from './secrets.js'
 import { ModelConnectionError } from './modelRouting.js'
 
 // strict 模式要求字段全部必填；新事项的 taskId 用 null 表示，由本地校验恢复为未提供。
@@ -102,7 +103,7 @@ export class NativeModelClient {
         } catch (error) {
           if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
           if (error instanceof ModelConnectionError) throw error
-          logger.warn({ failure: loggedError(error, [config.WORKBENCH_LLM_API_KEY]) }, '原生模型请求失败')
+          logger.warn({ failure: loggedError(error, runtimeSecrets(config)) }, '原生模型请求失败')
           const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')
           throw new ModelConnectionError(aborted ? '模型请求超时' : '模型连接失败', aborted ? 'TIMEOUT' : 'CONNECTION')
         }

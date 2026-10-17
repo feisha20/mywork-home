@@ -10,6 +10,9 @@ import type { Extractor } from '../harness.js'
 import { modelRouter } from '../modelRouting.js'
 import { loggedError, logger } from '../logger.js'
 import { redact } from '../redact.js'
+import { runtimeSecrets } from '../secrets.js'
+import { SYNC_LOCK_ID } from '../syncLock.js'
+import { zentaoIdentity } from '../../shared/settings.js'
 import type { Source } from '../records.js'
 import { initialChannels, type SettingsService } from '../settings.js'
 import { SourcePaths } from '../sourcePaths.js'
@@ -68,10 +71,10 @@ export class SyncOrchestrator {
     // 只有取得全局锁的实例才可把上次未完成执行标为中断。
     const client = await this.store.pool.connect()
     try {
-      const { rows } = await client.query('SELECT pg_try_advisory_lock(73921002) AS locked')
+      const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [SYNC_LOCK_ID])
       if (rows[0].locked) {
         await this.store.interruptRuns()
-        await client.query('SELECT pg_advisory_unlock(73921002)')
+        await client.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
       }
     } finally {
       client.release()
@@ -123,8 +126,9 @@ export class SyncOrchestrator {
         } else if (this.sources.zentao?.error && this.sources.zentao.error !== '尚未扫描') {
           state = { ...this.sources.zentao }
         } else {
+          const identity = zentaoIdentity(zentaoConnection)
           const dbCount = typeof this.store.zentaoPendingCount === 'function'
-            ? await this.store.zentaoPendingCount(zentaoConnection.baseUrl.replace(/\/+$/, ''), zentaoConnection.account).catch(() => 0)
+            ? await this.store.zentaoPendingCount(identity.instance, identity.account).catch(() => 0)
             : 0
           const count = this.sources.zentao?.available ? this.sources.zentao.sessionCount : dbCount
           state = { available: true, sessionCount: count, error: null }
@@ -183,7 +187,7 @@ export class SyncOrchestrator {
     const lock = await this.store.pool.connect()
     let rows: { locked: boolean }[]
     try {
-      ({ rows } = await lock.query('SELECT pg_try_advisory_lock(73921002) AS locked'))
+      ({ rows } = await lock.query('SELECT pg_try_advisory_lock($1) AS locked', [SYNC_LOCK_ID]))
     } catch (error) {
       lock.release(true)
       throw error
@@ -215,7 +219,7 @@ export class SyncOrchestrator {
       await this.store.saveRun(this.run)
     } catch (error) {
       try {
-        await lock.query('SELECT pg_advisory_unlock(73921002)')
+        await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
       } finally {
         lock.release()
       }
@@ -231,9 +235,7 @@ export class SyncOrchestrator {
   }
 
   private error(run: SyncRun, message: string) {
-    if (run.errors.length < 20) {
-      run.errors.push(redact(message, [this.config.WORKBENCH_LLM_API_KEY, this.currentConfig().WORKBENCH_LLM_API_KEY, ...this.currentConfig().sourceSecrets]))
-    }
+    if (run.errors.length < 20) run.errors.push(redact(message, this.logSecrets()))
   }
 
   private async failRecord(run: SyncRun, source: Source, file: string, fingerprint: string) {
@@ -243,10 +245,7 @@ export class SyncOrchestrator {
   }
 
   private logSecrets() {
-    const config = this.currentConfig()
-    let password = ''
-    try { password = decodeURIComponent(new URL(config.DATABASE_URL).password) } catch { password = '' }
-    return [this.config.WORKBENCH_LLM_API_KEY, config.WORKBENCH_LLM_API_KEY, password, ...config.sourceSecrets].filter(Boolean)
+    return [...new Set([...runtimeSecrets(this.config), ...runtimeSecrets(this.currentConfig())])]
   }
 
   private saveRunProgress(run: SyncRun): Promise<void> {
@@ -265,7 +264,7 @@ export class SyncOrchestrator {
       const channels = this.currentChannels().filter((channel) => channel.enabled && channel.collector !== 'none' && (!onlySource || channel.id === onlySource))
       const enabledSources = new Set(channels.filter((channel) => channel.collector !== 'zentao').map((channel) => channel.id))
       const cutoff = await this.store.cutoff()
-      const secrets = [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password), ...config.sourceSecrets]
+      const secrets = runtimeSecrets(config)
 
       for (const channel of channels) {
         if (this.stopping) break
@@ -332,7 +331,7 @@ export class SyncOrchestrator {
         await this.store.saveRun(run)
       } finally {
         try {
-          await lock.query('SELECT pg_advisory_unlock(73921002)')
+          await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
         } finally {
           lock.release()
         }
@@ -354,7 +353,8 @@ export class SyncOrchestrator {
     for (const { source, count } of counts) if (sources[source] && sources[source].collector !== 'zentao') sources[source] = { ...sources[source], sessionCount: count }
     const zentaoConn = this.settings?.zentaoConnection()
     if (sources.zentao && sources.zentao.available && sources.zentao.sessionCount === 0 && zentaoConn && typeof this.store.zentaoPendingCount === 'function') {
-      const dbCount = await this.store.zentaoPendingCount(zentaoConn.baseUrl.replace(/\/+$/, ''), zentaoConn.account).catch(() => 0)
+      const identity = zentaoIdentity(zentaoConn)
+      const dbCount = await this.store.zentaoPendingCount(identity.instance, identity.account).catch(() => 0)
       if (dbCount > 0) sources.zentao.sessionCount = dbCount
     }
     return {

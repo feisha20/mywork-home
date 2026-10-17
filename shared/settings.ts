@@ -23,6 +23,9 @@ export interface RecordMapping {
 export const EMPTY_RECORD_MAPPING: RecordMapping = { messages: '', role: '', text: '', timestamp: '', sessionId: '', messageId: '', projectPath: '' }
 export interface ZentaoSettings { baseUrl: string; account: string; hasPassword: boolean; management?: ZentaoManagementSettings }
 export interface ZentaoConnection { baseUrl: string; account: string; password: string }
+export function zentaoIdentity(connection: { baseUrl: string; account: string }) {
+  return { instance: connection.baseUrl.replace(/\/+$/, ''), account: connection.account }
+}
 export const EMPTY_ZENTAO_SETTINGS = { baseUrl: '', account: '', password: '', clearPassword: false, management: defaultZentaoManagement }
 export interface ChannelConfig {
   id: ChannelId

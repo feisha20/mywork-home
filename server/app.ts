@@ -14,10 +14,11 @@ import { PeriodicReportError, PeriodicReportService } from './periodicReport.js'
 import type { ReportAutomation } from './reportAutomation.js'
 import { SettingsError } from './settings.js'
 import { isRecordInReport } from '../shared/dailyReports.js'
-import { collectorSchema, pathCheckSchema } from '../shared/settings.js'
+import { collectorSchema, pathCheckSchema, zentaoIdentity } from '../shared/settings.js'
 import { registerMcp } from './mcp.js'
 import { WorkbenchEventStream } from './events.js'
 import { loggedError, loggerOptions, type LogStream } from './logger.js'
+import { runtimeSecrets } from './secrets.js'
 
 export interface AppLogOptions { logLevel?: string; logStream?: LogStream }
 
@@ -37,12 +38,7 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     },
     bodyLimit: 2 * 1024 * 1024,
   })
-  const secretValues = () => {
-    const runtime = sync.settings?.runtimeConfig() ?? config
-    let password = ''
-    try { password = decodeURIComponent(new URL(runtime.DATABASE_URL).password) } catch { password = '' }
-    return [runtime.WORKBENCH_LLM_API_KEY, password, ...runtime.sourceSecrets, ...(runtime.models ?? []).map((model) => model.apiKey)].filter(Boolean)
-  }
+  const secretValues = () => runtimeSecrets(sync.settings?.runtimeConfig() ?? config)
   const events = new WorkbenchEventStream(store, sync, secretValues)
   // 必须在等待 HTTP 连接关闭之前结束长连接，否则关停会一直等待 SSE。
   app.addHook('preClose', () => events.close())
@@ -117,13 +113,14 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
       projectId: z.string().max(100).optional(), executionId: z.string().max(100).optional(), severity: z.enum(['red', 'yellow', 'gray']).optional(),
       offset: z.coerce.number().int().min(0).max(1_000_000).default(0), limit: z.coerce.number().int().min(1).max(100).default(50) }).parse(request.query)
     const connection = sync.settings?.zentaoConnection()
-    return store.management.page(query, connection ? { instance: connection.baseUrl.replace(/\/+$/, ''), account: connection.account } : undefined)
+    return store.management.page(query, connection ? zentaoIdentity(connection) : undefined)
   })
   app.get('/api/zentao/management', async () => {
     const connection = sync.settings?.zentaoConnection()
     if (!connection) return { metrics: [], members: [], history: [], issues: ['请先配置禅道连接'], enabled: false, lastUpdatedAt: null }
     const enabled = !!sync.settings?.channels().find((entry) => entry.id === 'zentao')?.enabled && !!sync.settings?.zentaoManagementSettings().enabled
-    return store.management.overview(connection.baseUrl.replace(/\/+$/, ''), connection.account, enabled)
+    const { instance, account } = zentaoIdentity(connection)
+    return store.management.overview(instance, account, enabled)
   })
   app.get('/api/records', async (request) => {
     const query = z.object({ startDate: z.iso.date().optional(), endDate: z.iso.date().optional(), offset: z.coerce.number().int().min(0).max(1_000_000).default(0),

@@ -1,5 +1,5 @@
 import type { DateInput, ManagementBatch, ManagementExecution, ManagementStory, ManagementScope, ZentaoManagementSettings } from '../shared/zentaoManagement.js'
-import type { ZentaoConnection } from '../shared/settings.js'
+import { zentaoIdentity, type ZentaoConnection } from '../shared/settings.js'
 import { zentaoTimestamp, ZentaoError } from './zentao.js'
 
 type Row = Record<string, unknown>
@@ -44,7 +44,7 @@ export function mappedReleaseDate(row: Row, path: string, label: string): DateIn
 
 export async function readManagementBatch(connection: ZentaoConnection, settings: ZentaoManagementSettings,
   trackedIds: string[], request: (path: string) => Promise<Row>, clean: (value: string) => string): Promise<ManagementBatch> {
-  const instance = connection.baseUrl.replace(/\/+$/, ''), collectedAt = new Date().toISOString()
+  const { instance } = zentaoIdentity(connection), collectedAt = new Date().toISOString()
   const text = (value: unknown) => typeof value === 'string' ? clean(value).trim().slice(0, 300) : ''
   async function list(path: string, key: string, paged = false): Promise<Row[]> {
     const rows: Row[] = [], seen = new Set<string>()

@@ -4,6 +4,8 @@ import { mcpSchema, mcpTools, type McpClientView, type McpToolName } from '../sh
 import { McpData, mcpItem } from './mcpData.js'
 import { McpError } from './mcpAuth.js'
 import { redact } from './redact.js'
+import { runtimeSecrets } from './secrets.js'
+import { zentaoIdentity } from '../shared/settings.js'
 import type { Config } from './config.js'
 import type { Store } from './store.js'
 import type { SyncService } from './sync.js'
@@ -24,12 +26,12 @@ export class McpService {
   constructor(private store: Store, private sync: SyncService, private config: Config) {
     this.data = new McpData(store, () => {
       const identity = sync.settings?.zentaoConnection()
-      return identity ? { instance: identity.baseUrl.replace(/\/+$/, ''), account: identity.account } : null
+      return identity ? zentaoIdentity(identity) : null
     })
   }
   private secrets() {
     const config = this.sync.settings?.runtimeConfig() ?? this.config
-    return [config.WORKBENCH_LLM_API_KEY, decodeURIComponent(new URL(config.DATABASE_URL).password), ...config.sourceSecrets].filter(Boolean)
+    return runtimeSecrets(config)
   }
   async invoke(name: McpToolName, raw: unknown, client: McpClientView, token = '') {
     const tool = mcpTools.find((entry) => entry.name === name)!
@@ -63,7 +65,8 @@ export class McpService {
         const input = mcpSchema(name).parse(raw), identity = this.sync.settings?.zentaoConnection()
         if (!identity) { data = { enabled: false, lastUpdatedAt: null, metrics: [], members: [], history: [], issues: ['尚未配置禅道连接'] }; break }
         const enabled = !!this.sync.settings?.channels().find((channel) => channel.id === 'zentao')?.enabled && !!this.sync.settings?.zentaoManagementSettings().enabled
-        const view = await this.store.management.overview(identity.baseUrl.replace(/\/+$/, ''), identity.account, enabled)
+        const { instance, account } = zentaoIdentity(identity)
+        const view = await this.store.management.overview(instance, account, enabled)
         const matches = (entry: { projectId: string; executionId: string }) => (!input.projectId || entry.projectId === input.projectId) && (!input.executionId || entry.executionId === input.executionId)
         const metrics = view.metrics.filter(matches), members = view.members.filter(matches), history = view.history.filter((entry) => matches(entry.metrics))
         const take = <T>(items: T[]) => ({ items: items.slice(input.offset, input.offset + input.limit), total: items.length })

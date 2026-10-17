@@ -2,6 +2,7 @@ import type { SourceStatus, SyncRun, WorkbenchSnapshot } from '../../shared/cont
 import type { ChannelConfig } from '../../shared/settings.js'
 import type { SettingsService } from '../settings.js'
 import type { Store } from '../store.js'
+import { zentaoIdentity } from '../../shared/settings.js'
 import { ZentaoError, ZentaoV2Client } from '../zentao.js'
 
 export interface ZentaoSyncContext {
@@ -31,7 +32,8 @@ export class ZentaoSyncRunner {
 
     try {
       if (!zentaoConnection) throw new ZentaoError('请在采集源的禅道设置中填写地址、账号和密码')
-      const tracked = await this.store.zentaoTrackedItems(zentaoConnection.baseUrl.replace(/\/+$/, ''), zentaoConnection.account)
+      const identity = zentaoIdentity(zentaoConnection)
+      const tracked = await this.store.zentaoTrackedItems(identity.instance, identity.account)
       const snapshot = await new ZentaoV2Client(zentaoConnection).readWork(tracked)
       if (isStopping()) return
       run.phase = 'saving'
@@ -49,9 +51,9 @@ export class ZentaoSyncRunner {
     }
 
     if (zentaoConnection && managementSettings?.enabled && this.store.management) {
-      const instance = zentaoConnection.baseUrl.replace(/\/+$/, '')
+      const { instance, account } = zentaoIdentity(zentaoConnection)
       try {
-        const trackedIds = await this.store.management.trackedIds(instance, zentaoConnection.account)
+        const trackedIds = await this.store.management.trackedIds(instance, account)
         run.phase = 'scanning'
         await onProgress(run)
         const managementBatch = await new ZentaoV2Client(zentaoConnection).readManagement(managementSettings, trackedIds)
@@ -62,11 +64,11 @@ export class ZentaoSyncRunner {
         run.newTasks += counts.created
         run.updatedTasks += counts.updated
         for (const issue of counts.issues) onError(run, 'zentao：管理采集 · ' + issue)
-        const pending = await this.store.zentaoPendingCount(instance, zentaoConnection.account)
+        const pending = await this.store.zentaoPendingCount(instance, account)
         sources.zentao = { ...sources.zentao!, sessionCount: pending }
       } catch (error) {
         const reason = error instanceof ZentaoError ? error.message : '管理数据读取或保存失败，本轮保留已有事项'
-        await this.store.management.markFailed(instance, zentaoConnection.account, reason)
+        await this.store.management.markFailed(instance, account, reason)
         onError(run, 'zentao：管理采集 · ' + reason)
       }
     }

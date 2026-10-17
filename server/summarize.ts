@@ -5,6 +5,7 @@ import { loadConfig } from './config.js'
 import { HarnessExtractor } from './harness.js'
 import { Store } from './store.js'
 import { SettingsService } from './settings.js'
+import { SYNC_LOCK_ID } from './syncLock.js'
 
 // 旧事项只改写简介，不重置抽取批次；原文备份可用于人工复核。
 const config = (await SettingsService.open(loadConfig())).runtimeConfig()
@@ -13,7 +14,7 @@ const store = new Store(pool)
 const extractor = new HarnessExtractor(config)
 const lock = await pool.connect()
 try {
-  const result = await lock.query('SELECT pg_try_advisory_lock(73921002) AS locked')
+  const result = await lock.query('SELECT pg_try_advisory_lock($1) AS locked', [SYNC_LOCK_ID])
   if (!result.rows[0].locked) throw new Error('同步正在运行，请等待结束或暂停服务后整理')
   const tasks = (await store.tasks()).filter((task) => !['manual', 'zentao'].includes(task.source) && task.statusOrigin !== 'manual')
   await mkdir(config.WORKBENCH_RUNTIME_DIR, { recursive: true, mode: 0o700 })
@@ -32,6 +33,6 @@ try {
   process.exitCode = 1
 } finally {
   await extractor.close()
-  try { await lock.query('SELECT pg_advisory_unlock(73921002)') }
+  try { await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID]) }
   finally { lock.release(); await pool.end() }
 }

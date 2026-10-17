@@ -1,4 +1,4 @@
-import type { ZentaoConnection } from '../shared/settings.js'
+import { zentaoIdentity, type ZentaoConnection } from '../shared/settings.js'
 import type { Task } from '../src/domain/workbench.js'
 import { digest } from './records.js'
 import { redact } from './redact.js'
@@ -37,7 +37,7 @@ function workItem(row: unknown, type: WorkType, connection: ZentaoConnection, to
   const remoteId = integer(row.id), status = code(row.status), title = type === 'bug' ? row.title : row.name
   const statuses = type === 'bug' ? ['active', 'resolved', 'closed'] : ['wait', 'doing', 'pause', 'done', 'closed', 'cancel']
   if (!remoteId || typeof title !== 'string' || !title.trim() || !statuses.includes(status)) throw new ZentaoError('禅道事项缺少有效编号、标题或状态，本轮保留已有待办')
-  const instance = connection.baseUrl.replace(/\/+$/, '')
+  const { instance } = zentaoIdentity(connection)
   // 已解决但仍指派给本人时还需要验证；本人解决并转交验证后才记录解决时间。
   const assignedToMe = accountOf(row.assignedTo) === connection.account
   const isDone = type === 'bug'
@@ -70,7 +70,7 @@ export class ZentaoV2Client {
   private signal = AbortSignal.timeout(60_000)
   constructor(private connection: ZentaoConnection) {}
   private async request(path: string, body?: JsonObject, missingWork?: WorkType): Promise<JsonObject> {
-    const url = `${this.connection.baseUrl.replace(/\/+$/, '')}/api.php/v2${path}`
+    const url = `${zentaoIdentity(this.connection).instance}/api.php/v2${path}`
     let response: Response
     try {
       response = await fetch(url, { method: body ? 'POST' : 'GET', redirect: 'error',
@@ -190,7 +190,7 @@ export class ZentaoV2Client {
     if (items.some((item) => item.state === 'completed' && !item.completedAt && trackedKeys.has(`${item.zentao.type}:${item.zentao.id}`))) {
       throw new ZentaoError('禅道已完成事项缺少真实完成时间，本轮保留已有待办')
     }
-    return { instance: this.connection.baseUrl.replace(/\/+$/, ''), account: this.connection.account, items,
+    return { ...zentaoIdentity(this.connection), items,
       bugs: items.filter((item) => item.zentao.type === 'bug' && item.state === 'pending').length,
       tasks: items.filter((item) => item.zentao.type === 'task' && item.state === 'pending').length }
   }
