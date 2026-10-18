@@ -1,6 +1,6 @@
 import type { Task } from '../domain/workbench'
 import { decodeSnapshot } from '../domain/workbench'
-import type { DailyReport, SyncRun, WorkbenchSnapshot, RecordPage, RecordQuery, Evidence, ReportJob } from '../../shared/contracts'
+import type { DailyReport, SyncRun, WorkbenchSnapshot, RecordPage, RecordQuery, SearchPage, SearchQuery, Evidence, ReportJob } from '../../shared/contracts'
 import type { PeriodicReportModel } from '../domain/periodicReport'
 import type { CollectorKind, PathCheckResult, PathScanResult, RecordMapping, RecordPreview, SettingsUpdate, WorkbenchSettings } from '../../shared/settings'
 import type { ManagementFieldPreview } from '../../shared/zentaoManagement'
@@ -75,6 +75,12 @@ export const fetchRecords = (query: RecordQuery, signal?: AbortSignal) => {
   return request<RecordPage>(`/records?${params}`, { signal })
 }
 export const fetchTaskEvidence = (id: string, signal?: AbortSignal) => request<Evidence[]>(`/tasks/${encodeURIComponent(id)}/evidence`, { signal })
+// 命令面板检索：未输入关键词时列出最近记录，便于浏览；limit 由调用方决定条数。
+export const searchWorkItems = (query: Omit<SearchQuery, 'offset'>, signal?: AbortSignal) => {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
+  return request<SearchPage>(`/search?${params}`, { signal, cache: 'no-store' })
+}
 const periodPath = (type: 'weekly' | 'monthly', key: string) => `/periodic-reports/${type}/${encodeURIComponent(key)}`
 export const fetchPeriodicReport = (type: 'weekly' | 'monthly', key: string, signal?: AbortSignal) => request<PeriodicReportModel | null>(periodPath(type, key), { signal })
 export const fetchPeriodMaterial = (type: 'weekly' | 'monthly', key: string, signal?: AbortSignal) => request<{ tasks: Task[]; dailyReports: DailyReport[] }>(`${periodPath(type, key)}/material`, { signal })

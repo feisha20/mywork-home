@@ -2,10 +2,37 @@ import { randomUUID } from 'node:crypto'
 import type { Pool, PoolClient } from 'pg'
 import { isPendingTask, dateKey, recordTimestamp, type Task } from '../../src/domain/workbench.js'
 import { excludePersonalReportItems } from '../../shared/dailyReports.js'
-import type { RecordQuery, RecordPage } from '../../shared/contracts.js'
+import type { RecordQuery, RecordPage, SearchHit, SearchPage, SearchQuery } from '../../shared/contracts.js'
 import type { ZentaoSnapshot, ZentaoTrackedItem } from '../zentao.js'
 import type { ZentaoManagementStore } from '../zentaoManagementStore.js'
 import { taskFromRow, recordDateSql, scheduledRecordTimestampSql, taskSummaryColumns, visibleManagementSql, withTransaction } from './db.js'
+
+export interface SearchFilters { where: string; params: unknown[] }
+
+// 关键词可同时命中编号、标题和项目名；与 MCP 检索同口径，避免界面和助手看到不同结果。
+export function searchTaskFilters(input: SearchQuery): SearchFilters {
+  // 与 MCP 检索同口径：排除个人事项和不可见管理事项。
+  const filters = ['deleted_at IS NULL', 'NOT is_personal', `(${visibleManagementSql})`], params: unknown[] = []
+  // 占位符按追加顺序编号，与 PostgreSQL 参数约定一致。
+  const add = (expression: string, value: unknown) => { params.push(value); filters.push(expression.replace('?', `$${params.length}`)) }
+  if (input.source) add('source=?', input.source)
+  if (input.query) {
+    // 转义 ILIKE 通配符，让 % 和 _ 按字面匹配；同一关键词参数供三个位置复用。
+    params.push(`%${input.query.replace(/[\\%_]/g, '\\$&')}%`)
+    const position = `$${params.length}`
+    filters.push(`(title ILIKE ${position} OR reference ILIKE ${position} OR coalesce(nullif(regexp_replace(replace(project_path,chr(92),'/'),'^.*/',''),''),management->>'project',zentao->>'project') ILIKE ${position})`)
+  }
+  // 待办沿用界面口径：需人工完成且未完成；日志只取已归档到日期的记录。
+  if (input.kind === 'todo' || input.status === 'pending') filters.push(`source IN ('manual','zentao') AND completed_at IS NULL AND (${visibleManagementSql})`)
+  if (input.kind === 'log' || input.status === 'recorded' || input.status === 'completed' || input.status === 'needs_review') filters.push(`${recordDateSql} IS NOT NULL`)
+  if (input.status && input.status !== 'pending') {
+    params.push(input.status)
+    filters.push(`(CASE WHEN evidence_stale OR (completed_at IS NOT NULL AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(evidence) proof
+      WHERE coalesce(proof->>'valid','true')='true' AND nullif(proof->>'quote','') IS NOT NULL)) THEN 'needs_review'
+      WHEN completed_at IS NOT NULL THEN 'completed' ELSE 'recorded' END)=$${params.length}`)
+  }
+  return { where: filters.join(' AND '), params }
+}
 
 export class TaskRepository {
   constructor(
@@ -45,6 +72,18 @@ export class TaskRepository {
   async projectTasks(path: string): Promise<Task[]> {
     const { rows } = await this.pool.query("SELECT * FROM workbench.tasks WHERE project_path=$1 AND source<>'zentao' AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100", [path])
     return rows.map(taskFromRow)
+  }
+
+  // 跨周期检索：结果同时给出日志归属日期，供界面跳转到对应日历日。
+  async search(input: SearchQuery): Promise<SearchPage> {
+    const limit = input.limit ?? 30, offset = input.offset ?? 0
+    const { where, params } = searchTaskFilters(input)
+    const count = await this.pool.query(`SELECT count(*)::int AS count FROM workbench.tasks WHERE ${where}`, params)
+    const { rows } = await this.pool.query(`SELECT ${taskSummaryColumns},to_char(${recordDateSql},'YYYY-MM-DD') AS record_day FROM workbench.tasks
+      WHERE ${where} ORDER BY coalesce(${recordDateSql},(created_at AT TIME ZONE 'Asia/Shanghai')::date) DESC,created_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset])
+    const hits: SearchHit[] = rows.map((row) => ({ task: taskFromRow(row), day: row.record_day ?? null }))
+    return { hits, total: count.rows[0].count, offset, limit }
   }
 
   async periodTasks(_startDate: string, _endDate: string): Promise<Task[]> {

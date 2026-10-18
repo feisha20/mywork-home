@@ -74,6 +74,21 @@ export interface RecordQuery {
   limit?: number
 }
 export interface RecordPage { tasks: Task[]; total: number; offset: number; limit: number }
+// 界面命令面板的跨周期检索：不限定日期范围，按记录日期归类待办与日志。
+export interface SearchQuery {
+  query?: string
+  source?: string
+  kind?: 'all' | 'todo' | 'log'
+  status?: 'pending' | 'completed' | 'recorded' | 'needs_review'
+  offset?: number
+  limit?: number
+}
+export interface SearchHit extends Record<string, unknown> {
+  task: Task
+  // 事项所属的日志日期（北京时间），待办为 null，用于跳转到对应日历日。
+  day: string | null
+}
+export interface SearchPage { hits: SearchHit[]; total: number; offset: number; limit: number }
 export interface ReportJob {
   id: string; kind: 'daily' | 'weekly' | 'monthly'; day: string; periodKey: string
   scheduledAt: string; status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped'

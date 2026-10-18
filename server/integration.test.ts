@@ -179,6 +179,30 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     expect((await store.recordPage({ startDate: '2026-09-30', endDate: '2026-09-30', onlyRecords: true, limit: 100 })).tasks.some((task) => task.id === id)).toBe(true)
     expect(recordsForDate({ version: 1, tasks: [saved] }, '2026-10-01')).toHaveLength(0)
   })
+  it('全局检索跨周期匹配标题与项目，只查已归档记录和未完成待办，个人事项不进结果', async () => {
+    const id = randomUUID(), project = `/__workbench_test__/${id}`
+    await pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,recorded_at,project_path)
+      VALUES($1,$2,'claude','全局检索日志标题',$3,$3,$4)`, [id, 'CLI-' + id, '2026-10-05T02:00:00.000Z', project])
+    const manual = (await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: '全局检索待办标题' } })).json()
+    await pool.query(`INSERT INTO workbench.tasks(id,reference,source,title,created_at,recorded_at,project_path,is_personal)
+      VALUES($1,$2,'claude','全局检索日志标题的个人副本',$3,$3,$4,true)`, [randomUUID(), 'CLI-private', '2026-10-06T02:00:00.000Z', project])
+    const keyword = await store.search({ query: '全局检索日志标题', limit: 50 })
+    expect(keyword.hits.map((hit) => hit.task.id)).toEqual([id])
+    expect(keyword.hits[0].day).toBe('2026-10-05')
+    // 项目名直接命中，不依赖日期范围。
+    const byProject = await store.search({ query: id, limit: 50 })
+    expect(byProject.hits.some((hit) => hit.task.id === id)).toBe(true)
+    // 待办与日志分组口径：手工未完成即使没有记录日期也会出现。
+    const pending = await store.search({ kind: 'todo', limit: 100 })
+    expect(pending.hits.some((hit) => hit.task.id === manual.id)).toBe(true)
+    expect(pending.hits.every((hit) => !hit.day)).toBe(true)
+    const logs = await store.search({ kind: 'log', limit: 100 })
+    expect(logs.hits.every((hit) => hit.day !== null)).toBe(true)
+    // 接口口径与仓储一致。
+    const viaApi = (await app.inject({ method: 'GET', url: '/api/search?query=' + encodeURIComponent('全局检索待办标题') })).json()
+    expect(viaApi.hits.map((hit) => hit.task.title)).toContain('全局检索待办标题')
+    expect(viaApi.hits[0].total).toBe(viaApi.total)
+  })
   it('数据库持久化、重复完成与恢复未完成', async () => {
     expect((await app.inject({ url: '/api/health' })).statusCode).toBe(200)
     const created = await app.inject({ method: 'POST', url: '/api/tasks', payload: { title: '手工测试事项' } })

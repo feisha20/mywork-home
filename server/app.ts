@@ -128,6 +128,13 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     if (query.startDate && query.endDate && query.startDate > query.endDate) throw new PeriodicReportError('开始日期不能晚于结束日期', 400)
     return store.recordPage(query)
   })
+  app.get('/api/search', async (request) => {
+    const query = z.object({ query: z.string().trim().max(200).optional(), source: z.string().max(80).optional(),
+      kind: z.enum(['all', 'todo', 'log']).default('all'),
+      status: z.enum(['pending', 'completed', 'recorded', 'needs_review']).optional(),
+      offset: z.coerce.number().int().min(0).max(1_000_000).default(0), limit: z.coerce.number().int().min(1).max(100).default(30) }).parse(request.query)
+    return store.search(query)
+  })
   app.get('/api/tasks/:id/evidence', async (request, reply) => {
     const { id } = z.object({ id: z.string().min(1).max(100) }).parse(request.params)
     const evidence = await store.taskEvidence(id)

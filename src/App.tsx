@@ -19,6 +19,7 @@ import { createTransferJob, TransferLayer } from './components/TransferLayer'
 import type { TransferJob } from './components/TransferLayer'
 import { Icon } from './components/Icon'
 import { SettingsDialog } from './components/SettingsDialog'
+import { GlobalSearch } from './components/GlobalSearch'
 import { PerpetualCalendar } from './components/PerpetualCalendar'
 import { UserMenu } from './components/UserMenu'
 import { modelUsage } from '../shared/modelUsage'
@@ -55,6 +56,9 @@ export default function App() {
   const [syncRequested, setSyncRequested] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [spaceOpen, setSpaceOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  // 历史日志日期由 App 持有，让检索、日历和其他入口看到同一份状态。
+  const [historyDay, setHistoryDay] = useState<string | null>(null)
   const [pageVisible, setPageVisible] = useState(() => !document.hidden)
   const [captureOutputs, setCaptureOutputs] = useState<CaptureOutputEvent[]>([])
   const captureBaseline = useRef<Task[] | null>(null)
@@ -161,6 +165,16 @@ export default function App() {
     if (document.hidden && !notificationsActive) pollerRef.current?.pause()
     else void pollerRef.current?.refreshNow()
   }, [notificationsActive])
+  useEffect(() => {
+    // ⌘K / Ctrl+K 打开检索；输入框内不拦截，避免和其他快捷键冲突。
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey)) return
+      event.preventDefault()
+      setSearchOpen((open) => !open)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
   useEffect(() => {
     if (!recentId) return
     const timer = window.setTimeout(() => setRecentId(null), 2500)
@@ -308,11 +322,12 @@ export default function App() {
         <svg className="idle-bus-layer" viewBox="0 0 1400 680" preserveAspectRatio="none" aria-hidden="true">{busPaths.map((path) => <path key={path} className="idle-track" d={path} />)}</svg>
         <TaskPanel tasks={pending} panelRef={panelRef} activeId={changingId} deletingId={deletingId} disabled={loading || !connected || changingId !== null || deletingId !== null || classifyingId !== null || pinningId !== null} pinningId={pinningId} onTogglePinned={handleTogglePinned} onAdd={handleAdd} onTogglePersonal={handleTogglePersonal} onComplete={handleComplete} onDelete={handleDelete} onIgnore={(task) => { void handleManagementAction(task, 'ignore').catch(() => {}) }} />
         <ProcessorHub refs={processorRefs} phase={phase} routing={routing} activePin={job?.activePin ?? 0} pendingCount={pending.length} completedCount={completedCount} status={status} harness={snapshot?.harness} sources={snapshot?.sources} channels={snapshot?.channels} visible={pageVisible} onSync={handleSync} syncDisabled={loading || !connected || syncRequested} />
-        <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} onTogglePersonal={handleTogglePersonal} disabled={!connected || changingId !== null || deletingId !== null || classifyingId !== null} />
+        <DailyLogBook recordedDayKeys={snapshot?.recordedDays} dataVersion={snapshot?.dataVersion} state={state} reports={snapshot?.dailyReports ?? []} onReportSaved={handleReportSaved} today={today} deckRef={deckRef} recentId={recentId} onReopen={handleReopen} onTogglePersonal={handleTogglePersonal} disabled={!connected || changingId !== null || deletingId !== null || classifyingId !== null} historyDay={historyDay} onSelectDay={setHistoryDay} onOpenSearch={() => setSearchOpen(true)} />
       </main>
       <footer className="app-footer"><span className={connected ? 'save-state' : 'save-state save-unavailable'} role="status"><Icon name="check" />{connected ? '记录保存在本机数据库' : '服务暂不可用，页面保留已加载记录'}</span><span>{snapshot?.harness.autoSyncEnabled === false ? '自动采集已暂停' : `每 ${(snapshot?.harness.intervalMs ?? 600000) / 60000} 分钟自动采集`}</span></footer>
       {scheduledTasksOpen && <Suspense fallback={<p role="status">正在打开计划任务…</p>}><ScheduledTasksDialog onClose={() => { setScheduledTasksOpen(false); void pollerRef.current?.refreshNow() }} /></Suspense>}
       {settingsOpen && <SettingsDialog liveModelRuntime={liveModelRuntime} realtimeConnected={realtimeConnected} notificationsEnabled={notificationsEnabled} requestingNotifications={requestingNotifications} notificationDescription={notificationDescription} onToggleNotifications={() => { void toggleNotifications() }} onClose={() => setSettingsOpen(false)} onSaved={handleSettingsSaved} />}
+      {searchOpen && <GlobalSearch onSelectDay={setHistoryDay} onClose={() => setSearchOpen(false)} />}
       {job && <TransferLayer job={job} onPhase={setPhase} onDone={finishTransfer} />}
       {pageVisible && !job && captureOutputs.map((event) => <CaptureOutput key={event.id} event={event} chipRef={chip} panelRef={panelRef} deckRef={deckRef} onDone={finishCaptureOutput} />)}
     </div></RealtimeModelContext.Provider>

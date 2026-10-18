@@ -21,13 +21,16 @@ interface DailyLogBookProps {
   onReopen: (task: Task) => void
   onTogglePersonal: (task: Task) => Promise<Task>
   disabled: boolean
+  onOpenSearch: () => void
+  // 选中的历史日期由上层持有，检索跳转和其他入口共用同一状态。
+  historyDay: string | null
+  onSelectDay: (day: string | null) => void
 }
 
 const fullDate = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
 const headerDate = new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'short' })
 
-export const DailyLogBook = memo(function DailyLogBook({ recordedDayKeys, dataVersion, state, reports, onReportSaved, today, deckRef, recentId, onReopen, onTogglePersonal, disabled }: DailyLogBookProps) {
-  const [historyDay, setHistoryDay] = useState<string | null>(null)
+export const DailyLogBook = memo(function DailyLogBook({ recordedDayKeys, dataVersion, state, reports, onReportSaved, today, deckRef, recentId, onReopen, onTogglePersonal, disabled, onOpenSearch, historyDay, onSelectDay }: DailyLogBookProps) {
   const [reportOpen, setReportOpen] = useState(false)
   const records = useMemo(() => recordsForDate(state, today), [state, today])
   const workRecordCount = records.filter((task) => !task.isPersonal).length
@@ -41,7 +44,9 @@ export const DailyLogBook = memo(function DailyLogBook({ recordedDayKeys, dataVe
         <h2 id="daily-heading"><Icon name="book" />工作日志 <time className="log-heading-date" dateTime={today} title={fullDate.format(dateFromKey(today))}>{headerDate.format(dateFromKey(today))}</time></h2>
         <div className="log-header-actions">
           <button className="report-button report-generate" disabled={disabled || (!workRecordCount && !todayReport)} title={todayReport ? '查看已保存日报，可补充整理待整理的记录' : workRecordCount ? '归类总结今日工作日志，忽略个人事项' : '有工作记录后即可生成日报，个人事项不参与'} onClick={() => setReportOpen(true)}><Icon name="list" />{todayReport ? '查看日报' : '生成日报'}</button>
-          <LogCalendar selectedDay={historyDay ?? today} today={today} recordedDays={recordedDays} onSelectDay={setHistoryDay} />
+          <button type="button" className="report-button report-generate search-trigger" disabled={disabled} onClick={onOpenSearch}
+            title="按标题、编号或项目检索全部记录（快捷键 ⌘K）" aria-keyshortcuts="Meta+K Control+K"><Icon name="search" />检索</button>
+          <LogCalendar selectedDay={historyDay ?? today} today={today} recordedDays={recordedDays} onSelectDay={(day) => onSelectDay(day)} />
         </div>
       </div>
       <div className="book-wrapper">
@@ -52,7 +57,7 @@ export const DailyLogBook = memo(function DailyLogBook({ recordedDayKeys, dataVe
           </div>
         </div>
       </div>
-      {historyDay && <LogHistoryDialog key={historyDay} dataVersion={dataVersion} day={historyDay} records={historyRecords} dailyReport={historyReport} onReportSaved={onReportSaved} onReopen={onReopen} onTogglePersonal={onTogglePersonal} disabled={disabled} onClose={() => setHistoryDay(null)} />}
+      {historyDay && <LogHistoryDialog key={historyDay} dataVersion={dataVersion} day={historyDay} records={historyRecords} dailyReport={historyReport} onReportSaved={onReportSaved} onReopen={onReopen} onTogglePersonal={onTogglePersonal} disabled={disabled} onClose={() => onSelectDay(null)} />}
       {reportOpen && <DailyReportDialog key={today} day={today} records={records} savedReport={todayReport} onSaved={onReportSaved} onClose={() => setReportOpen(false)} />}
     </section>
   )

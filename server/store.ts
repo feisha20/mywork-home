@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import type { Task } from '../src/domain/workbench.js'
-import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob } from '../shared/contracts.js'
+import type { DailyReport, Evidence, SyncRun, RecordQuery, RecordPage, ReportJob, SearchPage, SearchQuery } from '../shared/contracts.js'
 import type { Cursor, Source, SourceMessage } from './records.js'
 import type { PeriodicReportModel } from '../src/domain/periodicReport.js'
 import type { ZentaoSnapshot, ZentaoTrackedItem } from './zentao.js'
@@ -68,6 +68,10 @@ export class Store {
 
   async recordPage(input: RecordQuery): Promise<RecordPage> {
     return this.tasksRepo.recordPage(input)
+  }
+
+  async search(input: SearchQuery): Promise<SearchPage> {
+    return this.tasksRepo.search(input)
   }
 
   async projectTasks(path: string): Promise<Task[]> {
