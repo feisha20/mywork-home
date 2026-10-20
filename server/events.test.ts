@@ -52,6 +52,13 @@ describe('SSE 服务端连接与资源边界', () => {
     await events.ready(); expect(store.pool.connect).toHaveBeenCalledTimes(2)
     await events.close()
   })
+
+  it('关闭实时订阅后仍保留连接级错误保护，延迟到达的错误不会崩溃', async () => {
+    const { events, client } = fixture()
+    await events.ready(); await events.close()
+    expect(() => client.emit('error', new Error('延迟到达的连接断开'))).not.toThrow()
+    expect(client.release).toHaveBeenCalledOnce()
+  })
   it('慢客户端背压时销毁连接，不影响其他客户端推送', async () => {
     const { events, response } = fixture(), slow = response(), normal = response()
     events.attach(slow as unknown as ServerResponse); events.attach(normal as unknown as ServerResponse)

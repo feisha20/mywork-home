@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -20,7 +21,15 @@ async function prepare() {
   await settings.save(draft)
   let run: SyncRun | null = null
   const applyZentaoSnapshot = vi.fn(async () => ({ created: 1, updated: 2 })), pendingMessages = vi.fn(async () => [])
-  const store = { pool: { connect: async () => ({ query: async () => ({ rows: [{ locked: true }] }), release: () => {} }) },
+  const cache = new Map<string, unknown>()
+  const store = { pool: {
+    connect: async () => Object.assign(new EventEmitter(), { query: async () => ({ rows: [{ locked: true }] }), release: () => {} }),
+    query: async (sql: string, params: string[]) => {
+      const key = JSON.stringify(params.slice(0, 2))
+      if (sql.startsWith('INSERT INTO workbench.zentao_collection_cache')) cache.set(key, JSON.parse(params[2]))
+      return { rows: cache.has(key) ? [{ data: structuredClone(cache.get(key)) }] : [] }
+    },
+  },
     latestRun: async () => run, interruptRuns: async () => {}, saveRun: async (value: SyncRun) => { run = structuredClone(value) },
     cutoff: async () => new Date().toISOString(), zentaoTrackedItems: vi.fn(async () => []), applyZentaoSnapshot, sourceCounts: async () => [], pendingMessages,
     snapshotTasks: async () => [], dailyReports: async () => [], recordedDays: async () => [], dataVersion: async () => 'fixture',
@@ -75,10 +84,10 @@ describe('禅道接入同步流程', () => {
     const draft = settingsDraft(settings.view()); draft.channels.forEach((channel) => { channel.enabled = false }); await settings.save(draft)
     let release!: () => void, unlocks = 0
     const gate = new Promise<void>((resolve) => { release = resolve })
-    const client = { query: async (sql: string) => {
+    const client = Object.assign(new EventEmitter(), { query: async (sql: string) => {
       if (sql.includes('pg_advisory_unlock') && ++unlocks === 1) await gate
       return { rows: [{ locked: true }] }
-    }, release: () => {} }
+    }, release: () => {} })
     store.pool.connect = vi.fn(async () => client) as never
     try {
       const first = await sync.trigger()
@@ -102,6 +111,23 @@ describe('禅道接入同步流程', () => {
       expect(JSON.stringify(run)).not.toContain('同步测试密码'); expect(JSON.stringify(run)).not.toContain('同步测试令牌')
       expect(applyZentaoSnapshot).not.toHaveBeenCalled(); expect(extract).not.toHaveBeenCalled()
       expect((await sync.snapshot()).sources.zentao?.available).toBe(false)
+    } finally { await sync.close() }
+  })
+
+  it('连接失败退避跨轮次保存，完整刷新可主动重试，成功后清除退避', async () => {
+    const { sync } = await prepare()
+    const fetch = vi.fn().mockRejectedValue(new Error('网络断开'))
+    vi.stubGlobal('fetch', fetch)
+    try {
+      await sync.trigger('zentao'); await sync.waitForIdle()
+      expect(fetch).toHaveBeenCalledTimes(1)
+      await sync.trigger('zentao'); await sync.waitForIdle()
+      expect(fetch).toHaveBeenCalledTimes(1)
+      fetch.mockResolvedValueOnce(json({ status: 'success', token: '重试令牌' }))
+        .mockResolvedValueOnce(json({ status: 'success', bugs: [], pager: { recTotal: 0, recPerPage: 100, pageID: 1 } }))
+        .mockResolvedValueOnce(json({ status: 'success', tasks: [], pager: { recTotal: 0, recPerPage: 100, pageID: 1 } }))
+      await sync.trigger('zentao', true); await sync.waitForIdle()
+      expect(fetch).toHaveBeenCalledTimes(4)
     } finally { await sync.close() }
   })
   it('停用禅道后保留配置和历史数据，手动同步也不再访问禅道', async () => {

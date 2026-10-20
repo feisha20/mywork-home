@@ -1,3 +1,4 @@
+import type { ManagementBatch } from './zentaoManagement.js'
 import type { Task } from '../src/domain/workbench.js'
 import type { ChannelSummary } from './settings.js'
 import type { ModelUsage } from './modelUsage.js'
@@ -47,6 +48,7 @@ export interface SyncRun {
   newTasks: number
   updatedTasks: number
   failedBatches: number
+  zentaoCollection?: ManagementBatch['collectionDiagnostics']
   processedBatches?: number
   ignoredFiles?: number
   skippedRecords?: number

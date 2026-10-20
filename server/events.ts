@@ -1,3 +1,4 @@
+import { acquireDatabaseClient, releaseDatabaseClient } from './database.js'
 import type { ServerResponse } from 'node:http'
 import type { PoolClient } from 'pg'
 import type { WorkbenchEvents, WorkbenchEventName } from '../shared/events.js'
@@ -10,6 +11,7 @@ import { redact } from './redact.js'
 export class WorkbenchEventStream {
   private clients = new Map<ServerResponse, () => void>()
   private listener?: PoolClient
+  private detachListener?: () => void
   private connecting?: Promise<void>
   private stopped = false
   private timer?: ReturnType<typeof setTimeout>
@@ -39,15 +41,20 @@ export class WorkbenchEventStream {
     await this.connecting
   }
   private async connect() {
-    const client = await this.store.pool.connect()
+    const client = await acquireDatabaseClient(this.store.pool)
     const failed = () => {
       if (this.listener !== client) return
       this.listener = undefined
-      client.removeAllListeners('notification'); client.removeListener('error', failed); client.removeListener('end', failed)
-      client.release(true)
+      detach()
+      releaseDatabaseClient(client, true)
       // 结束 SSE 让原生 EventSource 重连，前端同时恢复低频轮询。
       for (const cleanup of [...this.clients.values()]) cleanup()
     }
+    const detach = () => {
+      client.removeAllListeners('notification'); client.removeListener('error', failed); client.removeListener('end', failed)
+      if (this.detachListener === detach) this.detachListener = undefined
+    }
+    this.detachListener = detach
     client.on('error', failed); client.on('end', failed)
     client.on('notification', (message) => {
       if (message.channel !== 'workbench_events' || !this.clients.size) return
@@ -127,8 +134,9 @@ export class WorkbenchEventStream {
     if (this.listener) {
       const client = this.listener; this.listener = undefined
       await client.query('UNLISTEN workbench_events').catch(() => {})
-      client.removeAllListeners('notification'); client.removeAllListeners('error'); client.removeAllListeners('end')
-      client.release()
+      // 只移除本订阅的监听器，连接级断连保护必须保留到套接字彻底关闭。
+      this.detachListener?.()
+      releaseDatabaseClient(client)
     }
   }
 }

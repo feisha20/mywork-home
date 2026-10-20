@@ -18,6 +18,22 @@ describe('服务端日志与请求标识', () => {
     expect(text).not.toContain('private-token')
   })
 
+  it('数据库断连返回503并提示重试，数据库恢复后同一实例重新提供服务', async () => {
+    let available = false
+    const disconnected = Object.assign(new Error('Connection terminated unexpectedly'), { code: 'ECONNRESET' })
+    const store = { pool: { query: async () => { if (!available) throw disconnected; return { rows: [] } } } } as unknown as Store
+    const sync = { snapshot: async () => { if (!available) throw disconnected; return { recovered: true } } } as unknown as SyncService
+    const config = loadConfig({ DATABASE_URL: 'postgresql://app:fixture-password@localhost/test', STATIC_DIR: '/不存在' })
+    const app = await createApp(config, store, sync)
+    try {
+      const failed = await app.inject({ url: '/api/workbench' })
+      expect(failed.statusCode).toBe(503); expect(failed.headers['retry-after']).toBe('5')
+      available = true
+      expect((await app.inject({ url: '/api/health' })).statusCode).toBe(200)
+      expect((await app.inject({ url: '/api/workbench' })).json()).toEqual({ recovered: true })
+    } finally { await app.close() }
+  })
+
   it('健康检查失败和未处理异常记录请求标识与错误类型，响应不回显上游内容', async () => {
     const lines: string[] = []
     const store = { pool: { query: async () => { throw new Error('连接失败 password=db-secret-token') } } } as unknown as Store

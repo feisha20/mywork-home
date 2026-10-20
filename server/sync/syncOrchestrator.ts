@@ -1,3 +1,4 @@
+import { acquireDatabaseClient, releaseDatabaseClient, databaseClientError } from '../database.js'
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import type { SourceStatus, SyncRun, WorkbenchSnapshot } from '../../shared/contracts.js'
@@ -69,7 +70,7 @@ export class SyncOrchestrator {
 
   async start() {
     // 只有取得全局锁的实例才可把上次未完成执行标为中断。
-    const client = await this.store.pool.connect()
+    const client = await acquireDatabaseClient(this.store.pool)
     try {
       const { rows } = await client.query('SELECT pg_try_advisory_lock($1) AS locked', [SYNC_LOCK_ID])
       if (rows[0].locked) {
@@ -77,7 +78,7 @@ export class SyncOrchestrator {
         await client.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
       }
     } finally {
-      client.release()
+      releaseDatabaseClient(client)
     }
     this.run = await this.store.latestRun()
     // 接入状态由目录可读性恢复，不必重新读取会话或调用模型。
@@ -169,31 +170,33 @@ export class SyncOrchestrator {
     this.timer.unref()
   }
 
-  trigger(onlySource?: 'zentao'): Promise<SyncRun> {
+  trigger(onlySource?: 'zentao', fullRefresh = false): Promise<SyncRun> {
+    if (fullRefresh && (this.active || this.starting)) return Promise.reject(Object.assign(new Error('已有采集正在执行，请结束后再启动完整刷新'), { statusCode: 409 }))
     if (this.stopping) return Promise.reject(new Error('服务正在停止'))
     if (this.active && this.run) {
       if (this.run.status === 'running') return Promise.resolve(this.run)
       // 完成记录先于锁释放写入；此时的新请求等待清理结束再启动新一轮。
       return this.active.catch((error) => {
         logger.warn({ failure: loggedError(error, this.logSecrets()), runId: this.run?.id }, '等待上一轮同步结束时出现异常')
-      }).then(() => this.trigger(onlySource))
+      }).then(() => this.trigger(onlySource, fullRefresh))
     }
     if (this.starting) return this.starting
-    this.starting = this.beginTrigger(onlySource).finally(() => { this.starting = null })
+    this.starting = this.beginTrigger(onlySource, fullRefresh).finally(() => { this.starting = null })
     return this.starting
   }
 
-  private async beginTrigger(onlySource?: 'zentao'): Promise<SyncRun> {
-    const lock = await this.store.pool.connect()
+  private async beginTrigger(onlySource?: 'zentao', fullRefresh = false): Promise<SyncRun> {
+    const lock = await acquireDatabaseClient(this.store.pool)
     let rows: { locked: boolean }[]
     try {
       ({ rows } = await lock.query('SELECT pg_try_advisory_lock($1) AS locked', [SYNC_LOCK_ID]))
     } catch (error) {
-      lock.release(true)
+      releaseDatabaseClient(lock, true)
       throw error
     }
     if (!rows[0].locked) {
-      lock.release()
+      releaseDatabaseClient(lock)
+      if (fullRefresh) throw Object.assign(new Error('其他实例正在采集，请结束后再启动完整刷新'), { statusCode: 409 })
       const run = await this.store.latestRun()
       if (!run) throw new Error('其他实例正在启动同步，请稍后重试')
       return run
@@ -221,12 +224,12 @@ export class SyncOrchestrator {
       try {
         await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
       } finally {
-        lock.release()
+        releaseDatabaseClient(lock)
       }
       throw error
     }
     const run = this.run
-    this.active = this.execute(run, lock, onlySource).finally(() => { this.active = null })
+    this.active = this.execute(run, lock, onlySource, fullRefresh).finally(() => { this.active = null })
     // 后台运行的错误已保存在执行记录，避免未处理的拒绝。
     void this.active.catch((error) => {
       logger.error({ failure: loggedError(error, this.logSecrets()), runId: run.id }, '同步收尾失败')
@@ -257,7 +260,8 @@ export class SyncOrchestrator {
     return this.runSavePromise
   }
 
-  private async execute(run: SyncRun, lock: PoolClient, onlySource?: 'zentao') {
+  private async execute(run: SyncRun, lock: PoolClient, onlySource?: 'zentao', fullRefresh = false) {
+    const isStopping = () => this.stopping || !!databaseClientError(lock)
     try {
       // 每轮固定配置快照，设置保存不会改变正在运行的采集或模型请求。
       const config = this.currentConfig()
@@ -267,7 +271,7 @@ export class SyncOrchestrator {
       const secrets = runtimeSecrets(config)
 
       for (const channel of channels) {
-        if (this.stopping) break
+        if (isStopping()) break
         // 轮到该来源时才刷新状态，排队中的其他渠道保留已验证的连接。
         this.sourceSyncKeys.set(channel.id, this.sourceKey(channel))
         this.sources[channel.id as Source] = { available: false, sessionCount: 0, error: null }
@@ -275,9 +279,12 @@ export class SyncOrchestrator {
         if (channel.collector === 'zentao') {
           await this.zentaoSyncRunner.runZentaoSync({
             run,
+            fullRefresh,
+            requestBudget: config.WORKBENCH_ZENTAO_REQUEST_BUDGET,
+            trackedExecutionIds: config.WORKBENCH_ZENTAO_TRACKED_EXECUTIONS.split(',').filter(Boolean),
             channel,
             sources: this.sources,
-            isStopping: () => this.stopping,
+            isStopping,
             onError: (r, msg) => this.error(r, msg),
             onProgress: (r) => this.saveRunProgress(r),
             setSourceCheck: (id, key, status) => {
@@ -294,13 +301,14 @@ export class SyncOrchestrator {
           cutoff,
           secrets,
           sources: this.sources,
-          isStopping: () => this.stopping,
+          isStopping,
           onError: (r, msg) => this.error(r, msg),
           onFailRecord: (r, src, f, fp) => this.failRecord(r, src, f, fp),
           onProgress: (r) => this.saveRunProgress(r),
         })
       }
 
+      if (databaseClientError(lock)) throw databaseClientError(lock)
       const counts = await this.store.sourceCounts()
       this.sourceCounts = Promise.resolve(counts)
       for (const entry of counts) {
@@ -312,12 +320,13 @@ export class SyncOrchestrator {
         config,
         secrets,
         enabledSources,
-        isStopping: () => this.stopping,
+        isStopping,
         onError: (r, msg) => this.error(r, msg),
         onProgress: (r) => this.saveRunProgress(r),
       })
 
       await this.runSavePromise
+      if (databaseClientError(lock)) throw databaseClientError(lock)
       run.status = this.stopping ? 'interrupted' : run.errors.length ? 'partial_failed' : 'succeeded'
     } catch (error) {
       run.status = 'failed'
@@ -331,9 +340,9 @@ export class SyncOrchestrator {
         await this.store.saveRun(run)
       } finally {
         try {
-          await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
+          if (!databaseClientError(lock)) await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID])
         } finally {
-          lock.release()
+          releaseDatabaseClient(lock)
         }
       }
     }

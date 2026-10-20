@@ -1,3 +1,4 @@
+import { acquireDatabaseClient, releaseDatabaseClient } from './database.js'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Pool } from 'pg'
@@ -12,7 +13,7 @@ const config = (await SettingsService.open(loadConfig())).runtimeConfig()
 const pool = new Pool({ connectionString: config.DATABASE_URL })
 const store = new Store(pool)
 const extractor = new HarnessExtractor(config)
-const lock = await pool.connect()
+const lock = await acquireDatabaseClient(pool)
 try {
   const result = await lock.query('SELECT pg_try_advisory_lock($1) AS locked', [SYNC_LOCK_ID])
   if (!result.rows[0].locked) throw new Error('同步正在运行，请等待结束或暂停服务后整理')
@@ -34,5 +35,5 @@ try {
 } finally {
   await extractor.close()
   try { await lock.query('SELECT pg_advisory_unlock($1)', [SYNC_LOCK_ID]) }
-  finally { lock.release(); await pool.end() }
+  finally { releaseDatabaseClient(lock); await pool.end() }
 }

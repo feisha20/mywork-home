@@ -1,3 +1,4 @@
+import { emptyCollectionCache, type ManagementReadOptions, type CollectionDiagnostics } from './zentaoCollectionCache.js'
 import type { DateInput, ManagementBatch, ManagementExecution, ManagementStory, ManagementScope, ZentaoManagementSettings } from '../shared/zentaoManagement.js'
 import { zentaoIdentity, type ZentaoConnection } from '../shared/settings.js'
 import { zentaoTimestamp, ZentaoError } from './zentao.js'
@@ -43,8 +44,26 @@ export function mappedReleaseDate(row: Row, path: string, label: string): DateIn
 }
 
 export async function readManagementBatch(connection: ZentaoConnection, settings: ZentaoManagementSettings,
-  trackedIds: string[], request: (path: string) => Promise<Row>, clean: (value: string) => string): Promise<ManagementBatch> {
+  trackedIds: string[], upstream: (path: string) => Promise<Row>, clean: (value: string) => string, options: ManagementReadOptions = {}): Promise<ManagementBatch> {
   const { instance } = zentaoIdentity(connection), collectedAt = new Date().toISOString()
+  const startedAt = Date.now(), cache = options.cache ?? emptyCollectionCache()
+  const diagnostics: CollectionDiagnostics = { requests: 0, cacheHits: 0, executions: 0, monitored: 0, deferred: 0, connectionFailures: 0, durationMs: 0, oldestAssociationCheck: null }
+  trackedIds = [...new Set([...trackedIds, ...(options.trackedExecutionIds ?? [])])]
+  let paused = '', connectionFailures = 0
+  const request = async (path: string): Promise<Row> => {
+    if (options.shouldStop?.()) paused = '采集已停止，保留已有记录'
+    if (diagnostics.requests >= (options.requestBudget ?? 1500)) paused = '本轮禅道请求已达预算，未完成部分将在后续轮次继续核验'
+    if (paused) throw new ZentaoError(paused)
+    diagnostics.requests++
+    try {
+      const result = await upstream(path); connectionFailures = 0; return result
+    } catch (error) {
+      if (error instanceof ZentaoError && error.name === 'ZentaoConnectionError' && ++connectionFailures >= 3) {
+        paused = '禅道连接连续失败，暂停本轮远端请求并保留已有记录'
+      }
+      throw error
+    }
+  }
   const text = (value: unknown) => typeof value === 'string' ? clean(value).trim().slice(0, 300) : ''
   async function list(path: string, key: string, paged = false): Promise<Row[]> {
     const rows: Row[] = [], seen = new Set<string>()
@@ -110,12 +129,28 @@ export async function readManagementBatch(connection: ZentaoConnection, settings
   })
   const associations: Record<string, string[]> = {}, scopes: ManagementScope[] = [], issues: string[] = []
   let relationsComplete = true
-  const associationGaps = new Set<string>()
+  const associationGaps = new Set<string>(), cachedAssociationIds = new Set<string>()
   const cutoff = Date.parse(collectedAt) - 30 * 86_400_000
   const details = new Map<string, Row>()
-  for (const execution of executions) {
-    const monitored = trackedIds.includes(execution.id) || !['closed', 'done', 'cancel'].includes(execution.status) ||
-      !!execution.closedAt && Date.parse(execution.closedAt) >= cutoff
+  const isMonitored = (execution: ManagementExecution) => trackedIds.includes(execution.id) || !['closed', 'done', 'cancel'].includes(execution.status) ||
+    !!execution.closedAt && Date.parse(execution.closedAt) >= cutoff
+  diagnostics.executions = executions.length
+  diagnostics.monitored = executions.filter(isMonitored).length
+  const ordered = [...executions].sort((a, b) => Number(isMonitored(b)) - Number(isMonitored(a)))
+  const resumeAt = ordered.findIndex((entry) => entry.id === cache.nextExecutionId)
+  const queue = resumeAt > 0 ? [...ordered.slice(resumeAt), ...ordered.slice(0, resumeAt)] : ordered
+  delete cache.nextExecutionId
+  for (const execution of queue) {
+    const monitored = isMonitored(execution)
+    if (paused || options.shouldStop?.()) {
+      cache.nextExecutionId ??= execution.id
+      diagnostics.deferred++
+      associationGaps.add(execution.id); relationsComplete = false
+      if (monitored) scopes.push({ execution, stories: [], cases: [], testtasks: [], bugs: [],
+        readable: { stories: false, cases: false, testtasks: false, bugs: false },
+        issues: [paused || '采集已停止，保留已有记录'], collectedAt })
+      continue
+    }
     const scope: ManagementScope = { execution, stories: [], cases: [], testtasks: [], bugs: [],
       readable: { stories: true, cases: true, testtasks: true, bugs: true }, issues: [], collectedAt }
     if (execution.status === 'unreadable') {
@@ -125,7 +160,21 @@ export async function readManagementBatch(connection: ZentaoConnection, settings
     }
     if (execution.removed) { if (monitored) scopes.push(scope); continue }
     try {
-      const rows = await list('/executions/' + execution.id + '/stories', 'stories')
+      const key = 'associations:' + execution.id, signature = JSON.stringify(execution)
+      const previous = cache.entries[key]
+      const useCache = !monitored && !options.fullRefresh && previous?.signature === signature &&
+        Date.now() - previous.checkedAt < 86_400_000 && previous.checkedAt <= Date.now()
+      const rows = useCache ? previous.rows : await list('/executions/' + execution.id + '/stories', 'stories')
+      if (useCache) {
+        diagnostics.cacheHits++
+        cachedAssociationIds.add(execution.id)
+        const checked = new Date(previous.checkedAt).toISOString()
+        if (!diagnostics.oldestAssociationCheck || checked < diagnostics.oldestAssociationCheck) diagnostics.oldestAssociationCheck = checked
+        // 缓存保留跨冲刺关联，但不能作为本轮已完整复核的证明。
+        associationGaps.add(execution.id); relationsComplete = false
+      } else if (!monitored) {
+        cache.entries[key] = { signature, checkedAt: Date.now(), rows: rows.map((row) => ({ id: idOf(row.story) || idOf(row.id) })) }
+      }
       for (let row of rows) {
         const id = idOf(row.story) || idOf(row.id)
         if (!associations[id]) associations[id] = []
@@ -151,6 +200,7 @@ export async function readManagementBatch(connection: ZentaoConnection, settings
         scope.stories.push(story)
       }
     } catch (error) {
+      if (paused) { cache.nextExecutionId ??= execution.id; diagnostics.deferred++ }
       associationGaps.add(execution.id)
       relationsComplete = false; scope.readable.stories = false; scope.stories = []
       scope.issues.push(error instanceof ZentaoError ? error.message : '需求读取失败，保留上次判断')
@@ -163,10 +213,22 @@ export async function readManagementBatch(connection: ZentaoConnection, settings
         const rows = await list('/executions/' + execution.id + '/' + key + '?browseType=all', key, resource !== 'testtasks')
         for (let row of rows) {
           const id = idOf(resource === 'cases' ? row.caseID ?? row.case ?? row.id : row.id)
+          const creatorKey = 'case-creator:' + id
+          const creatorSignature = JSON.stringify([row.version ?? null, row.createdDate ?? null, row.lastEditedDate ?? null])
+          const creator = cache.entries[creatorKey]
+          // 只复用创建人和创建日期；评审、变更标记、版本等可变信息始终来自本轮响应。
+          if (resource === 'cases' && row.status !== undefined && row.version !== undefined && Object.hasOwn(row, 'lastEditedDate') && row.createdBy === undefined && !options.fullRefresh &&
+            creator?.signature === creatorSignature && Date.now() - creator.checkedAt < 3_600_000 && creator.checkedAt <= Date.now()) {
+            row = { ...creator.rows[0], ...row, createdBy: creator.rows[0].createdBy }
+            diagnostics.cacheHits++
+          }
           if (resource === 'cases' && (row.status === undefined || row.createdBy === undefined)) {
             const detail = await request('/testcases/' + id)
             const testcase = detail.testcase ?? detail.case
             if (!object(testcase) || idOf(testcase.id) !== id) throw new ZentaoError('用例详情格式或编号不匹配')
+            if (Object.hasOwn(testcase, 'createdBy')) cache.entries[creatorKey] = { signature: creatorSignature, checkedAt: Date.now(), rows: [{
+              createdBy: clean(account(testcase.createdBy)), createdDate: text(testcase.createdDate),
+            }] }
             row = { ...row, ...testcase }
           }
           const base = { id, title: text(row.title ?? row.name) || '事项 ' + id, owner: clean(account(row.owner ?? row.assignedTo ?? row.createdBy)),
@@ -196,12 +258,16 @@ export async function readManagementBatch(connection: ZentaoConnection, settings
       }
     }
     scopes.push(scope)
+    if (paused) cache.nextExecutionId ??= execution.id
   }
+  diagnostics.connectionFailures = connectionFailures
+  diagnostics.durationMs = Date.now() - startedAt
+  if (paused) issues.push(paused)
   const verifiedAt = new Date().toISOString()
   for (const scope of scopes) {
     scope.collectedAt = verifiedAt
     for (const story of scope.stories) story.executionIds = [...new Set(associations[story.id] ?? [])]
   }
   return { instance, account: connection.account, collectedAt: verifiedAt, executions, scopes, associations, relationsComplete,
-    associationGaps: [...associationGaps], issues: [...new Set(issues)] }
+    cachedAssociationIds: [...cachedAssociationIds], associationGaps: [...associationGaps], issues: [...new Set(issues)], collectionDiagnostics: diagnostics }
 }

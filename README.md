@@ -288,3 +288,5 @@ npm run test:integration
 - `compose.yaml`、`Dockerfile`：多阶段镜像与本机 Compose 部署。
 
 `.env`、`.runtime`、会话 SQLite 数据库及 WAL/SHM 文件、构建产物和日志均不进入 Git 或 Docker 构建上下文。代码备注、界面文案、日志和更新说明使用中文。
+
+采集缓存、请求预算、数据库断连恢复及Docker代理绕过操作详见[采集稳定性与故障恢复](docs/采集稳定性与故障恢复.md)。

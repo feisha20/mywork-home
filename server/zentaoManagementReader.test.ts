@@ -1,3 +1,5 @@
+import { emptyCollectionCache } from './zentaoCollectionCache.js'
+import { evaluateManagement } from './zentaoManagement.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { readManagementBatch } from './zentaoManagementReader.js'
 import { defaultZentaoManagement } from '../shared/zentaoManagement.js'
@@ -114,5 +116,116 @@ describe('禅道管理采集完整性', () => {
       execution: { status: 'unreadable' }, readable: { stories: false, cases: false, testtasks: false, bugs: false },
     })
     expect(batch.relationsComplete).toBe(false)
+  })
+})
+
+
+describe('禅道采集请求预算与持久化缓存', () => {
+  const cachedRead = (request: ReturnType<typeof mockReader>, options = {}) =>
+    readManagementBatch(connection, config, [], request, (value) => value, options)
+  it('历史关联跨重启复用，仍保留跨冲刺关系并标明历史核验时间', async () => {
+    const cache = emptyCollectionCache()
+    const historical = (path: string) => path.startsWith('/executions?') ? {
+      executions: [execution(10), execution(11, { status: 'closed', closedDate: '2020-01-01', end: '2020-01-01', realEnd: '2020-01-01' })],
+      pager: { recTotal: 2, recPerPage: 100, pageID: 1 },
+    } : undefined
+    const first = mockReader(historical)
+    const before = await cachedRead(first, { cache })
+    const second = mockReader(historical)
+    const after = await cachedRead(second, { cache: JSON.parse(JSON.stringify(cache)) })
+    expect(second.mock.calls.some(([path]) => path.startsWith('/executions/11/stories'))).toBe(false)
+    expect(after.associations).toEqual(before.associations)
+    expect(after.relationsComplete).toBe(false)
+    expect(after.associationGaps).toContain('11')
+    expect(after.collectionDiagnostics?.oldestAssociationCheck).toBeTruthy()
+    expect(after.collectionDiagnostics!.requests).toBeLessThan(before.collectionDiagnostics!.requests)
+    // 更早的历史关联缓存不会改变最晚冲刺日期选择，风险结果保持一致。
+    expect(evaluateManagement(after, config).risks).toEqual(evaluateManagement(before, config).risks)
+  })
+
+  it('813个冲刺重复同步时复用历史关联，风险结果一致且请求减少超过九成', async () => {
+    const cache = emptyCollectionCache()
+    const request = mockReader((path) => {
+      if (!path.startsWith('/executions?')) return
+      const page = Number(new URL(path, connection.baseUrl).searchParams.get('pageID'))
+      const all = [execution(10), ...Array.from({ length: 812 }, (_, i) => execution(11 + i, {
+        status: 'closed', closedDate: '2020-01-01', end: '2020-01-01', realEnd: '2020-01-01',
+      }))]
+      return { executions: all.slice((page - 1) * 100, page * 100), pager: { recTotal: all.length, recPerPage: 100, pageID: page } }
+    })
+    const first = await cachedRead(request, { cache })
+    const second = await cachedRead(request, { cache: JSON.parse(JSON.stringify(cache)) })
+    expect(second.collectionDiagnostics!.requests).toBeLessThan(first.collectionDiagnostics!.requests / 10)
+    expect(second.collectionDiagnostics?.cacheHits).toBe(812)
+    expect(evaluateManagement(second, config).risks).toEqual(evaluateManagement(first, config).risks)
+  })
+  it('不能用缓存中可能已撤销的历史关联自动解除上线风险', async () => {
+    const cache = emptyCollectionCache(), request = mockReader((path) => path.startsWith('/executions?') ? {
+      executions: [execution(10), execution(11, { status: 'closed', closedDate: '2020-01-01', end: '2027-01-01', realEnd: '2020-01-01' })],
+      pager: { recTotal: 2, recPerPage: 100, pageID: 1 },
+    } : undefined)
+    await cachedRead(request, { cache })
+    const second = await cachedRead(request, { cache })
+    const evaluation = evaluateManagement(second, config)
+    expect(evaluation.datesByStory['101'].actual.state).toBe('unavailable')
+    expect(evaluation.evaluatedKeys).not.toContain('release:101')
+  })
+  it('历史缓存到期、冲刺属性变化、手动完整刷新时重新读取', async () => {
+    const cache = emptyCollectionCache()
+    await cachedRead(mockReader(), { cache })
+    cache.entries['associations:11'].checkedAt -= 86_400_001
+    const expired = mockReader(); await cachedRead(expired, { cache })
+    expect(expired.mock.calls.some(([path]) => path.startsWith('/executions/11/stories'))).toBe(true)
+    const forced = mockReader(); await cachedRead(forced, { cache, fullRefresh: true })
+    expect(forced.mock.calls.some(([path]) => path.startsWith('/executions/11/stories'))).toBe(true)
+    const changed = mockReader((path) => path.startsWith('/executions?') ? {
+      executions: [execution(10), execution(11, { status: 'doing' })], pager: { recTotal: 2, recPerPage: 100, pageID: 1 },
+    } : undefined)
+    await cachedRead(changed, { cache })
+    expect(changed.mock.calls.some(([path]) => path.startsWith('/executions/11/testcases'))).toBe(true)
+  })
+  it('只缓存创建人元数据，列表中的最新评审状态、变更标记仍生效', async () => {
+    let status = 'wait', version = 1
+    const cache = emptyCollectionCache()
+    const request = mockReader((path) => {
+      if (path.includes('/testcases?')) return { testcases: [{ caseID: 201, story: 101, status, version, lastEditedDate: null, needconfirm: 1 }], pager: { recTotal: 1, recPerPage: 100, pageID: 1 } }
+      if (path === '/testcases/201') return { testcase: { id: 201, status, version, createdBy: { account: 'qa1' }, createdDate: '2026-10-01', steps: '不应缓存正文' } }
+    })
+    await cachedRead(request, { cache }); request.mockClear(); status = 'normal'
+    const second = await cachedRead(request, { cache })
+    expect(request.mock.calls.some(([path]) => path === '/testcases/201')).toBe(false)
+    expect(second.scopes[0].cases[0]).toMatchObject({ status: 'normal', createdBy: 'qa1', needConfirm: true })
+    expect(JSON.stringify(cache)).not.toContain('不应缓存正文')
+    request.mockClear(); version = 2; await cachedRead(request, { cache })
+    expect(request.mock.calls.some(([path]) => path === '/testcases/201')).toBe(true)
+  })
+  it('缺少评审状态时不能使用缓存冒充最新详情', async () => {
+    const cache = emptyCollectionCache(), request = mockReader((path) => {
+      if (path.includes('/testcases?')) return { testcases: [{ caseID: 201, story: 101 }], pager: { recTotal: 1, recPerPage: 100, pageID: 1 } }
+      if (path === '/testcases/201') return { testcase: { id: 201, status: 'wait', createdBy: 'qa1' } }
+    })
+    await cachedRead(request, { cache }); request.mockClear(); await cachedRead(request, { cache })
+    expect(request.mock.calls.some(([path]) => path === '/testcases/201')).toBe(true)
+  })
+  it('请求达到预算后保留未知状态，下一轮从未完成冲刺续采', async () => {
+    const cache = emptyCollectionCache(), request = mockReader()
+    const first = await cachedRead(request, { cache, requestBudget: 3 })
+    expect(request).toHaveBeenCalledTimes(3)
+    expect(first.scopes[0].readable.cases).toBe(false)
+    expect(first.issues.join('')).toContain('预算')
+    expect(cache.nextExecutionId).toBe('10')
+    const next = mockReader(); await cachedRead(next, { cache, requestBudget: 100 })
+    expect(cache.nextExecutionId).toBeUndefined()
+    expect(next.mock.calls.some(([path]) => path.startsWith('/executions/10/testcases'))).toBe(true)
+  })
+  it('连续三次连接失败后不再继续发起网络请求', async () => {
+    const request = mockReader((path) => {
+      if (path.startsWith('/executions/10/')) throw Object.assign(new ZentaoError('连接断开'), { name: 'ZentaoConnectionError' })
+    })
+    const batch = await cachedRead(request)
+    expect(request).toHaveBeenCalledTimes(5)
+    expect(batch.collectionDiagnostics?.connectionFailures).toBe(3)
+    expect(batch.issues.join('')).toContain('连续失败')
+    expect(batch.scopes[0].readable).toEqual({ stories: false, cases: false, testtasks: false, bugs: false })
   })
 })

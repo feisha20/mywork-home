@@ -1,3 +1,4 @@
+import { withTransaction } from './repositories/db.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { Task } from '../src/domain/workbench.js';
@@ -15,23 +16,14 @@ export const visibleManagementSql = "(management IS NULL OR completed_at IS NOT 
 export class ZentaoManagementStore {
   constructor(private pool: Pool, private mapTask: (row: any) => Task) { }
   private async transaction<T>(action: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await action(client);
-      await client.query('COMMIT');
-      return result;
-    }
-    catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    }
-    finally {
-      client.release();
-    }
+    return withTransaction(this.pool, action);
   }
   async trackedIds(instance: string, account: string): Promise<string[]> {
-    const result = await this.pool.query('SELECT execution_id FROM workbench.zentao_management_scopes WHERE instance=$1 AND account=$2', [instance, account]);
+    const result = await this.pool.query(`SELECT DISTINCT linked.id AS execution_id FROM workbench.tasks t CROSS JOIN LATERAL (
+      SELECT t.management->>'executionId' AS id UNION
+      SELECT jsonb_array_elements_text(coalesce(t.management->'scopeIds','[]'::jsonb)) AS id
+    ) linked WHERE t.deleted_at IS NULL AND t.management->>'instance'=$1 AND t.management->>'account'=$2
+      AND t.management->>'riskState'='active' AND linked.id ~ '^[0-9]+$'`, [instance, account]);
     return result.rows.map((row) => row.execution_id);
   }
   async markFailed(instance: string, account: string, message: string) {

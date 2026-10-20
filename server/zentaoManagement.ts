@@ -71,6 +71,8 @@ export function isLateRelease(dates: ReleaseDates): boolean {
     ? dates.actual.day! > dates.planned.day! : dates.actual.timestamp! > dates.planned.timestamp!
 }
 function fallbackRelationsComplete(batch: ManagementBatch, fallback: ManagementExecution | null, now: Date) {
+  // 历史缓存中的关联可能已经撤销，不能用其所属冲刺自动解除上线风险。
+  if (fallback && batch.cachedAssociationIds?.includes(fallback.id)) return false
   if (batch.relationsComplete) return true
   if (!batch.associationGaps?.length) return false
   // 已知结束时间早于候选冲刺的历史缺口不可能改变最晚日期选择。

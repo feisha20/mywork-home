@@ -74,6 +74,8 @@ export interface ManagementBatch {
   instance: string; account: string; collectedAt: string
   executions: ManagementExecution[]; scopes: ManagementScope[]
   associations: Record<string, string[]>; relationsComplete: boolean; issues: string[]
+  collectionDiagnostics?: { requests: number; cacheHits: number; executions: number; monitored: number; deferred: number; connectionFailures: number; durationMs: number; oldestAssociationCheck: string | null }
+  cachedAssociationIds?: string[]
   associationGaps?: string[]
 }
 export interface ManagementMetrics {

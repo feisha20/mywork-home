@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { appendFile, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -29,7 +30,7 @@ function memoryStore() {
   const messages = new Map<string, SourceMessage>(), cursors = new Map<string, Cursor>()
   const extracted = new Set<string>()
   let run: SyncRun | null = null
-  const client = { query: async () => ({ rows: [{ locked: true }] }), release: () => {} }
+  const client = Object.assign(new EventEmitter(), { query: async () => ({ rows: [{ locked: true }] }), release: () => {} })
   const store = {
     pool: { connect: async () => client }, latestRun: async () => run, interruptRuns: async () => {},
     saveRun: async (next: SyncRun) => { run = structuredClone(next) }, cutoff: async () => new Date(Date.now() - 7 * 86400000).toISOString(),

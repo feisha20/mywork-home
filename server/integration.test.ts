@@ -66,6 +66,32 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     sync = new SyncService(store, config, fake); await sync.start(); app = await createApp(config, store, sync, reports, new PeriodicReportService(store))
   })
   afterAll(async () => { await app?.close(); await sync?.close(); await pool?.end(); if (directory) await rm(directory, { recursive: true, force: true }) })
+
+  it('采集缓存按账号隔离并持久化，不把历史快照永久视为监控对象', async () => {
+    try {
+      const { ZentaoCollectionCache } = await import('./zentaoCollectionCache.js')
+      const cache = new ZentaoCollectionCache(pool)
+      await cache.save('https://cache-fixture.example', 'qa1', { entries: {
+        'associations:11': { signature: '历史关联', checkedAt: Date.now(), rows: [{ id: '101' }] },
+      }, nextExecutionId: '11' })
+      expect((await new ZentaoCollectionCache(pool).load('https://cache-fixture.example', 'qa1')).nextExecutionId).toBe('11')
+      expect((await cache.load('https://cache-fixture.example', 'qa2')).entries).toEqual({})
+      const batch = managementBatch()
+      batch.instance = 'https://tracked-fixture.example'; batch.account = 'tracked-qa'
+      await store.management.apply(batch, defaultZentaoManagement)
+      const id = batch.scopes[0].execution.id
+      expect(await store.management.trackedIds(batch.instance, batch.account)).toContain(id)
+      await pool.query("UPDATE workbench.tasks SET management=jsonb_set(management,'{riskState}','\"resolved\"') WHERE management->>'instance'=$1 AND management->>'account'=$2", [batch.instance, batch.account])
+      expect(await store.management.trackedIds(batch.instance, batch.account)).toEqual([])
+      expect((await pool.query('SELECT 1 FROM workbench.zentao_management_scopes WHERE instance=$1 AND account=$2', [batch.instance, batch.account])).rowCount).toBeGreaterThan(0)
+    } finally {
+      await pool.query("DELETE FROM workbench.zentao_risk_registry WHERE instance='https://tracked-fixture.example'")
+      await pool.query("DELETE FROM workbench.tasks WHERE management->>'instance'='https://tracked-fixture.example'")
+      for (const table of ['zentao_management_scopes', 'zentao_management_daily', 'zentao_management_status', 'zentao_collection_cache']) {
+        await pool.query('DELETE FROM workbench.' + table + ' WHERE instance=ANY($1::text[])', [['https://tracked-fixture.example', 'https://cache-fixture.example']])
+      }
+    }
+  })
   it('旧自动记录按来源时间迁移，保留原完成状态并可重复执行迁移', async () => {
     const id = randomUUID(), at = '2026-09-25T03:20:00Z'
     const evidence = [{ messageId: 'legacy', sessionId: 'legacy', source: 'codex', projectPath: '/legacy', timestamp: at, quote: '整理工作记录' }]
@@ -201,7 +227,8 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     // 接口口径与仓储一致。
     const viaApi = (await app.inject({ method: 'GET', url: '/api/search?query=' + encodeURIComponent('全局检索待办标题') })).json()
     expect(viaApi.hits.map((hit) => hit.task.title)).toContain('全局检索待办标题')
-    expect(viaApi.hits[0].total).toBe(viaApi.total)
+    expect(viaApi.total).toBe(1)
+    expect(viaApi.hits[0].task.id).toBe(manual.id)
   })
   it('数据库持久化、重复完成与恢复未完成', async () => {
     expect((await app.inject({ url: '/api/health' })).statusCode).toBe(200)
@@ -986,11 +1013,15 @@ describe.skipIf(!enabled).sequential('PostgreSQL与工作台接口', () => {
     batch.scopes[0].stories[0].actualReleaseAt = valueDate('2026-10-06')
     await store.management.apply(batch, defaultZentaoManagement)
     const resolved = (await store.tasks()).find((task) => task.id === first.id)!
-    expect(resolved).toMatchObject({ completedAt: null, management: { handlingState: 'pending', riskState: 'resolved', resolutionReason: '已取得上线节点', stale: false } })
-    expect(resolved.management?.history?.length).toBeGreaterThan(0)
+    expect(resolved).toMatchObject({ completedAt: null, management: { handlingState: 'pending', riskState: 'resolved', stale: false } })
+    expect(resolved.management?.resolutionReason).toBeTruthy()
+    // 上线待办已按冲刺汇总；逐需求的日期变更历史保存在scope，不能再读取旧单需求提醒的history。
+    expect(first.management?.dateChecks?.map((entry) => entry.storyId)).toEqual(['101'])
     const savedScope = (await pool.query('SELECT data FROM workbench.zentao_management_scopes WHERE instance=$1 AND account=$2', [batch.instance, batch.account])).rows[0].data.scope
     expect(savedScope.stories[0].releaseDates).toMatchObject({ planned: { source: 'story', fieldPath: '计划上线时间' }, actual: { source: 'story' }, fallbackExecutionId: '10' })
     expect(savedScope.stories[0].dateHistory.length).toBeGreaterThan(0)
+    expect(savedScope.stories[0].dateHistory.at(-1).dates.actual.state).toBe('empty')
+    expect(savedScope.stories[0].releaseDates.actual.value).toBe('2026-10-06')
     expect((await store.snapshotTasks('2026-10-07')).some((task) => task.id === first.id)).toBe(false)
     expect((await store.management.overview(batch.instance, batch.account)).metrics[0]).toMatchObject({ released: 1, datedReleased: 1, onTimeReleased: 0 })
     expect((await app.inject({ method: 'PATCH', url: '/api/tasks/' + first.id, payload: { action: 'restore' } })).statusCode).toBe(409)

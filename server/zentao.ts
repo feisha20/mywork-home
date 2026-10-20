@@ -1,3 +1,4 @@
+import type { ManagementReadOptions } from './zentaoCollectionCache.js'
 import { zentaoIdentity, type ZentaoConnection } from '../shared/settings.js'
 import type { Task } from '../src/domain/workbench.js'
 import { digest } from './records.js'
@@ -76,7 +77,7 @@ export class ZentaoV2Client {
       response = await fetch(url, { method: body ? 'POST' : 'GET', redirect: 'error',
         headers: { 'Content-Type': 'application/json', ...(this.token ? { token: this.token } : {}) },
         body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.any([this.signal, AbortSignal.timeout(15_000)]) })
-    } catch { throw new ZentaoError('禅道连接失败或超时，请检查地址与网络') }
+    } catch { throw Object.assign(new ZentaoError('禅道连接失败或超时，请检查地址与网络'), { name: 'ZentaoConnectionError' }) }
     if (!response.ok) {
       await response.body?.cancel()
       const reasons: Record<number, string> = { 401: '禅道认证失败，请检查账号和密码', 403: '禅道账号没有读取该事项或工作列表的权限', 404: '禅道 V2 接口不存在，请检查禅道地址和版本' }
@@ -194,10 +195,10 @@ export class ZentaoV2Client {
       bugs: items.filter((item) => item.zentao.type === 'bug' && item.state === 'pending').length,
       tasks: items.filter((item) => item.zentao.type === 'task' && item.state === 'pending').length }
   }
-  async readManagement(settings: ZentaoManagementSettings, trackedIds: string[] = []) {
+  async readManagement(settings: ZentaoManagementSettings, trackedIds: string[] = [], options: ManagementReadOptions = {}) {
     this.signal = AbortSignal.timeout(600_000)
     if (!this.token) await this.login()
     return readManagementBatch(this.connection, settings, trackedIds, (path) => this.request(path),
-      (value) => redact(value, [this.connection.password, this.token]))
+      (value) => redact(value, [this.connection.password, this.token]), options)
   }
 }

@@ -1,3 +1,4 @@
+import { acquireDatabaseClient, releaseDatabaseClient } from './database.js'
 import type { Pool } from 'pg'
 
 export const realtimeNotificationSql = `
@@ -215,10 +216,16 @@ CREATE INDEX tasks_log_day_idx ON workbench.tasks(((CASE
  END AT TIME ZONE 'Asia/Shanghai')::date)) WHERE deleted_at IS NULL;
 ` },
 // 旧库可能已登记版本 15 但缺少通知对象；使用新版本幂等补齐，不能删除历史迁移记录。
-{ version: 17, sql: realtimeNotificationSql.replaceAll('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION').replaceAll('CREATE TRIGGER', 'CREATE OR REPLACE TRIGGER') }]
+{ version: 17, sql: realtimeNotificationSql.replaceAll('CREATE FUNCTION', 'CREATE OR REPLACE FUNCTION').replaceAll('CREATE TRIGGER', 'CREATE OR REPLACE TRIGGER') }, { version: 18, sql: `
+CREATE TABLE workbench.zentao_collection_cache (
+ instance text NOT NULL, account text NOT NULL, data jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY(instance,account)
+);
+` }]
 
 export async function migrate(pool: Pool) {
-  const client = await pool.connect()
+  const client = await acquireDatabaseClient(pool)
+  let failed = false
   try {
     await client.query('SELECT pg_advisory_lock(73921001)')
     await client.query('CREATE SCHEMA IF NOT EXISTS workbench')
@@ -231,10 +238,13 @@ export async function migrate(pool: Pool) {
         await client.query(migration.sql)
         await client.query('INSERT INTO workbench.schema_migrations(version) VALUES($1)', [migration.version])
         await client.query('COMMIT')
-      } catch (error) { await client.query('ROLLBACK'); throw error }
+      } catch (error) { await client.query('ROLLBACK').catch(() => {}); throw error }
     }
-  } finally {
-    try { await client.query('SELECT pg_advisory_unlock(73921001)') }
-    finally { client.release() }
+  } catch (error) { failed = true; throw error }
+  finally {
+    try {
+      if (!failed) await client.query('SELECT pg_advisory_unlock(73921001)')
+    } catch (error) { failed = true; throw error }
+    finally { releaseDatabaseClient(client, failed) }
   }
 }

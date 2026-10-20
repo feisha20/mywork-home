@@ -1,3 +1,4 @@
+import { isDatabaseUnavailable } from './database.js'
 import { randomUUID } from 'node:crypto'
 import Fastify from 'fastify'
 import { ScheduledTasks } from './scheduledTasks.js'
@@ -66,6 +67,10 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     if (error instanceof SettingsError || error instanceof PeriodicReportError) {
       request.log.warn({ failure: safe, statusCode: error.statusCode }, '请求被拒绝')
       return reply.code(error.statusCode).send({ error: error.message })
+    }
+    if (isDatabaseUnavailable(error)) {
+      request.log.warn({ failure: safe }, '数据库暂不可用，等待连接恢复')
+      return reply.code(503).header('Retry-After', '5').send({ error: '数据库暂不可用，请稍后重试；已有记录已保留' })
     }
     const status = error instanceof z.ZodError ? 400 : (error as { statusCode?: number }).statusCode ?? 500
     if (status >= 500) request.log.error({ failure: safe, statusCode: status }, '请求处理失败')
@@ -246,8 +251,8 @@ export async function createApp(config: Config, store: Store, sync: SyncService,
     return store.importTasks(tasks)
   })
   app.post('/api/sync', async (request, reply) => {
-    const { source } = z.object({ source: z.literal('zentao').optional() }).default({}).parse(request.body)
-    return reply.code(202).send(await sync.trigger(source))
+    const { source, fullRefresh } = z.object({ source: z.literal('zentao').optional(), fullRefresh: z.boolean().default(false) }).default({ fullRefresh: false }).parse(request.body)
+    return reply.code(202).send(await sync.trigger(source, fullRefresh))
   })
   app.get('/api/sync/:id', async (request, reply) => {
     const { id } = z.object({ id: z.uuid() }).parse(request.params)

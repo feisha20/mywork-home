@@ -8,7 +8,7 @@ node_modules/
 # 前端构建与本机开发产物
 dist/
 dist-server/
-# 会话抽取和工作日报模型的本机运行数据
+# 会话抽取、工作日报模型运行数据及Docker代理设置备份（可能含本机配置）
 .runtime/
 # 设置密钥与本机路径备份（运行目录之外的手工备份也不入库）
 workbench-settings*.json

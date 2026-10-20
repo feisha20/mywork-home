@@ -1,3 +1,4 @@
+import { acquireDatabaseClient, releaseDatabaseClient, databaseClientError, isDatabaseUnavailable } from '../database.js'
 import type { Pool, PoolClient } from 'pg'
 import type { Task } from '../../src/domain/workbench.js'
 import type { ReportJob } from '../../shared/contracts.js'
@@ -59,16 +60,18 @@ export interface ExtractedItem {
 }
 
 export async function withTransaction<T>(pool: Pool, action: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect()
+  const client = await acquireDatabaseClient(pool)
+  let failed = false
   try {
     await client.query('BEGIN')
     const result = await action(client)
     await client.query('COMMIT')
     return result
   } catch (error) {
-    await client.query('ROLLBACK')
+    failed = !!databaseClientError(client) || isDatabaseUnavailable(error)
+    await client.query('ROLLBACK').catch(() => { failed = true })
     throw error
   } finally {
-    client.release()
+    releaseDatabaseClient(client, failed)
   }
 }
