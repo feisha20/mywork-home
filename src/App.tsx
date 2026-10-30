@@ -43,6 +43,7 @@ export default function App() {
   const [realtimeConnected, setRealtimeConnected] = useState(false)
   const [liveModelRuntime, setLiveModelRuntime] = useState<ModelRuntimeStatus>()
   const [notice, setNotice] = useState<string | null>(null)
+  const [archiveNotice, setArchiveNotice] = useState<{ day: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const today = dateKey(clock)
@@ -176,6 +177,11 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
   useEffect(() => {
+    if (!archiveNotice) return
+    const timer = window.setTimeout(() => setArchiveNotice(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [archiveNotice])
+  useEffect(() => {
     if (!recentId) return
     const timer = window.setTimeout(() => setRecentId(null), 2500)
     return () => window.clearTimeout(timer)
@@ -191,7 +197,7 @@ export default function App() {
     const now = new Date(), archivedAt = saved && recordTimestamp(saved)
     const archivedDay = archivedAt ? dateKey(new Date(archivedAt)) : dateKey(now)
     setClock(now); setRecentId(archivedDay === dateKey(now) ? taskId : null)
-    if (archivedDay !== dateKey(now)) setNotice(`已完成，已归档至 ${archivedDay} 的工作日志，可从日历查看。`)
+    if (archivedDay !== dateKey(now)) setArchiveNotice({ day: archivedDay })
     setPhase('idle'); setJob(null); setChangingId(null); completedTask.current = null; busy.current = false
     mutationVersion.current++
     void pollerRef.current?.refreshNow()
@@ -316,6 +322,7 @@ export default function App() {
           />
         </div>
       </header>
+      {archiveNotice && <p className="storage-notice" role="status">已完成，已归档至 {archiveNotice.day} 的工作日志，可从日历查看。</p>}
       {notice && <p className="storage-notice" role="status">{notice}</p>}
       {error && <p className="storage-notice request-error" role="alert">{error}<button onClick={() => { setError(null); void pollerRef.current?.refreshNow() }}>重新连接</button></p>}
       <main className={`stage-container${working ? ' is-working' : ''}`}>
