@@ -121,7 +121,7 @@ describe('模型自动切换', () => {
     await new ModelRouter().run(config(), 180_000, request)
     expect(request).toHaveBeenCalledTimes(1)
   })
-  it('复杂周月报给首选模型 90 秒并为全部备用保留时间，总预算不超过 180 秒', async () => {
+  it('多个周月报候选均有生成时间，总预算不超过 180 秒', async () => {
     vi.useFakeTimers()
     const value = config()
     value.models.push(...value.models.map((model) => ({ ...model, id: `${model.id}-extra` })))
@@ -130,8 +130,22 @@ describe('模型自动切换', () => {
       budgets.push(budget); vi.advanceTimersByTime(budget)
       throw new ModelConnectionError('模型请求超时')
     }, 'long-form')).rejects.toThrow('模型请求超时')
-    expect(budgets).toEqual([90000, 60000, 15000, 15000])
+    expect(budgets).toEqual([45000, 45000, 45000, 45000])
     expect(budgets.reduce((sum, budget) => sum + budget, 0)).toBe(180000)
+  })
+  it('三个周月报候选依次超时后仍给最后一个完整的 60 秒', async () => {
+    vi.useFakeTimers()
+    const value = config()
+    value.models.push({ ...value.models[0], id: 'third', name: 'third' })
+    const budgets: number[] = []
+    const result = await new ModelRouter().run(value, 210000, async (candidate, budget) => {
+      budgets.push(budget)
+      if (candidate.WORKBENCH_LLM_MODEL === 'third') { vi.advanceTimersByTime(45000); return '完成' }
+      vi.advanceTimersByTime(budget)
+      throw new ModelConnectionError('模拟超时', 'TIMEOUT')
+    }, 'long-form')
+    expect(result).toBe('完成')
+    expect(budgets).toEqual([90000, 60000, 60000])
   })
   it('周月报首选模型超过 30 秒仍可成功，不发起不必要的切换', async () => {
     vi.useFakeTimers()

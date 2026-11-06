@@ -27,10 +27,8 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
       let raw = ''; for await (const chunk of request) raw += chunk
       requests.push(JSON.parse(raw))
       const result = { achievements: [{ topic: '合成项目', outcomes: ['完成合成月报校验'], sourceIds: Array.from({ length: requests.length === 1 ? 74 : 75 }, (_, index) => `R${index + 1}`) }], omittedSourceIds: [], inProgress: [], nextPlan: [] }
-      response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-      response.write(`data: ${JSON.stringify({ id: 'monthly-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: JSON.stringify(result) }, finish_reason: null }] })}\n\n`)
-      response.write(`data: ${JSON.stringify({ id: 'monthly-fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
-      response.end('data: [DONE]\n\n')
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) }, finish_reason: 'stop' }] }))
     })
     await listenFixtureServer(server)
     runtime = await mkdtemp(join(tmpdir(), 'workbench-monthly-'))
@@ -39,6 +37,9 @@ describe.skipIf(!enabled)('真实Harness与本地模型请求桩', () => {
     const sections = await extractor.generatePeriodicReport('monthly', data)
     expect(sections[0].items).toEqual(['【合成项目】完成合成月报校验'])
     expect(requests).toHaveLength(2)
+    expect(requests[0].stream).toBe(false)
+    expect(requests[0]).not.toHaveProperty('max_tokens')
+    expect(requests[1]).not.toHaveProperty('max_tokens')
     expect(JSON.stringify(requests[1])).toContain('周期报告遗漏成果素材：缺少 1 条，请补齐 R75')
     expect(JSON.stringify(requests)).not.toContain('database-secret')
     expect(JSON.stringify(requests)).not.toContain('monthly-fixture-key')

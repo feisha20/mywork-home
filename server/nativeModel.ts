@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { randomUUID } from 'node:crypto'
 import { modelApiEndpoint, modelApiFormat } from '../shared/modelApi.js'
 import type { Config } from './config.js'
 import { loggedError, logger } from './logger.js'
@@ -16,8 +17,16 @@ export const extractionJsonSchema = {
   },
 }
 
-export function nativeRequest(config: Config, prompt: string, system: string, schema?: object) {
+type OutputLimit = 'bounded' | 'provider-default'
+
+export function nativeRequest(config: Config, prompt: string, system: string, schema?: object, outputLimit: OutputLimit = 'bounded') {
   const format = modelApiFormat(config.WORKBENCH_LLM_API_FORMAT)
+  const bounded = outputLimit === 'bounded'
+  // 官方 DeepSeek 默认高强度思考；恢复原 Harness 的 low 设置。
+  // 仅作用于已确认支持该参数的官方模型，不向其他兼容服务强塞参数。
+  // 协议依据：https://api-docs.deepseek.com/guides/thinking_mode/
+  const deepSeekLow = new URL(config.WORKBENCH_LLM_BASE_URL).hostname === 'api.deepseek.com'
+    && ['deepseek-flash', 'deepseek-v4-pro'].includes(config.WORKBENCH_LLM_MODEL)
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   let body: object
   if (format === 'gemini_native') {
@@ -26,11 +35,13 @@ export function nativeRequest(config: Config, prompt: string, system: string, sc
     const thinkingConfig = /^gemini-2\.5-(?:flash|pro)(?:-|$)/.test(model) ? { thinkingBudget: 1024 }
       : /^gemini-3(?:[.-]|$)/.test(model) ? { thinkingLevel: 'low' } : undefined
     body = { systemInstruction: { parts: [{ text: system }] }, contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 8192, responseMimeType: 'application/json', ...(schema ? { responseJsonSchema: schema } : {}),
+      generationConfig: { ...(bounded ? { maxOutputTokens: 8192 } : {}), responseMimeType: 'application/json', ...(schema ? { responseJsonSchema: schema } : {}),
         ...(thinkingConfig ? { thinkingConfig } : {}) } }
   } else if (format === 'anthropic-messages') {
+    // Messages 协议强制要求 max_tokens；其他可省略的协议允许周月报使用服务端默认额度。
     headers['x-api-key'] = config.WORKBENCH_LLM_API_KEY; headers['anthropic-version'] = '2023-06-01'
     body = { model: config.WORKBENCH_LLM_MODEL, system, max_tokens: 8192, stream: false,
+      ...(deepSeekLow ? { thinking: { type: 'enabled' }, output_config: { effort: 'low' } } : {}),
       messages: [{ role: 'user', content: prompt }],
       ...(schema ? { tools: [{ name: 'workbench_extract', strict: true, description: '返回事项抽取结果', input_schema: schema }],
         tool_choice: { type: 'tool', name: 'workbench_extract', disable_parallel_tool_use: true } } : {}) }
@@ -38,10 +49,12 @@ export function nativeRequest(config: Config, prompt: string, system: string, sc
     headers.Authorization = `Bearer ${config.WORKBENCH_LLM_API_KEY}`
     const jsonSchema = { name: 'workbench_extract', strict: true, schema }
     body = format === 'openai-responses'
-      ? { model: config.WORKBENCH_LLM_MODEL, instructions: system, input: prompt, max_output_tokens: 8192, stream: false,
+      ? { model: config.WORKBENCH_LLM_MODEL, instructions: system, input: prompt, ...(bounded ? { max_output_tokens: 8192 } : {}), stream: false,
+        ...(deepSeekLow ? { reasoning: { effort: 'low' } } : {}),
         ...(schema ? { text: { format: { type: 'json_schema', ...jsonSchema } } } : {}) }
       : { model: config.WORKBENCH_LLM_MODEL, messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
-        max_tokens: 8192, stream: false, ...(schema ? { response_format: { type: 'json_schema', json_schema: jsonSchema } } : {}) }
+        ...(bounded ? { max_tokens: 8192 } : {}), stream: false, ...(schema ? { response_format: { type: 'json_schema', json_schema: jsonSchema } } : {}) }
+    if (deepSeekLow && format === 'openai-completions') body = { ...body, thinking: { type: 'enabled' }, reasoning_effort: 'low' }
   }
   return { url: modelApiEndpoint(config.WORKBENCH_LLM_BASE_URL, format, config.WORKBENCH_LLM_MODEL), headers, body }
 }
@@ -72,47 +85,75 @@ export class NativeModelClient {
   private active = new Set<AbortController>()
   private stopped = false
   close() { this.stopped = true; for (const controller of this.active) controller.abort() }
-  async run<T>(prompt: string, system: string, parse: (raw: string) => T, timeoutMs: number, attempts: number, config: Config, schema?: object): Promise<T> {
+  async run<T>(prompt: string, system: string, parse: (raw: string) => T, timeoutMs: number, attempts: number, config: Config, schema?: object, outputLimit: OutputLimit = 'bounded'): Promise<T> {
     if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     this.active.add(controller)
+    const started = Date.now()
+    const context = { callId: randomUUID(), apiFormat: modelApiFormat(config.WORKBENCH_LLM_API_FORMAT),
+      modelId: config.models?.find((model) => model.name === config.WORKBENCH_LLM_MODEL && model.baseUrl === config.WORKBENCH_LLM_BASE_URL
+        && model.apiKey === config.WORKBENCH_LLM_API_KEY)?.id ?? 'default' }
     let feedback = ''
     try {
       for (let attempt = 0; attempt < attempts; attempt++) {
         if (controller.signal.aborted) throw new ModelConnectionError('模型请求超时', 'TIMEOUT')
-        const request = nativeRequest(config, `${prompt}${attempt ? `\n上次输出未通过校验：${feedback}。请重新按约定输出，新事项必须省略 taskId 或使用 null。` : ''}`, system, schema)
+        const request = nativeRequest(config, `${prompt}${attempt ? `\n上次输出未通过校验：${feedback}。请重新严格按约定格式和来源引用输出。` : ''}`, system, schema, outputLimit)
+        const attemptStarted = Date.now()
+        let stage = '等待响应头', receivedBytes = 0, firstByteMs: number | undefined
+        const timing = () => ({ ...context, attempt: attempt + 1, stage, elapsedMs: Date.now() - attemptStarted,
+          totalElapsedMs: Date.now() - started, receivedBytes, firstByteMs })
+        logger.info({ ...timing(), remainingMs: Math.max(0, timeoutMs - (Date.now() - started)) }, '原生模型请求开始')
         let result: unknown
         try {
           const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body),
             signal: controller.signal, redirect: 'error' })
-          if (!response.ok) { await response.body?.cancel(); throw new ModelConnectionError('模型连接失败，请检查协议支持、密钥及额度', 'CONNECTION') }
+          logger.info({ ...timing(), statusCode: response.status }, '原生模型收到响应头')
+          stage = '读取响应体'
+          if (!response.ok) {
+            logger.warn({ ...timing(), statusCode: response.status }, '模型接口返回错误状态')
+            await response.body?.cancel(); throw new ModelConnectionError('模型连接失败，请检查协议支持、密钥及额度', 'CONNECTION', response.status)
+          }
           const reader = response.body!.getReader()
           const chunks: Uint8Array[] = []
-          let length = 0
           try {
             while (true) {
               const part = await reader.read()
               if (part.done) break
-              length += part.value.length
-              if (length > 2 * 1024 * 1024) throw new ModelConnectionError('模型响应超过大小限制', 'CONNECTION')
+              firstByteMs ??= Date.now() - attemptStarted
+              receivedBytes += part.value.length
+              if (receivedBytes > 2 * 1024 * 1024) throw new ModelConnectionError('模型响应超过大小限制', 'CONNECTION')
               chunks.push(part.value)
             }
           } finally { await reader.cancel().catch(() => { /* 响应已读完时取消失败可以忽略。 */ }) }
+          stage = '解析响应体'
           result = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+          logger.info(timing(), '原生模型响应接收完成')
         } catch (error) {
+          logger.warn({ ...timing(), code: this.stopped ? 'SHUTTING_DOWN' : controller.signal.aborted ? 'TIMEOUT'
+            : error instanceof ModelConnectionError ? error.code : 'CONNECTION' }, '原生模型请求中断')
           if (this.stopped) throw new ModelConnectionError('抽取服务正在关闭', 'SHUTTING_DOWN')
           if (error instanceof ModelConnectionError) throw error
           logger.warn({ failure: loggedError(error, runtimeSecrets(config)) }, '原生模型请求失败')
           const aborted = controller.signal.aborted || (error instanceof Error && error.name === 'AbortError')
           throw new ModelConnectionError(aborted ? '模型请求超时' : '模型连接失败', aborted ? 'TIMEOUT' : 'CONNECTION')
         }
-        try { return parse(responseText(result, config)) }
+        stage = '校验输出'
+        try {
+          const parsed = parse(responseText(result, config))
+          logger.info(timing(), '原生模型输出校验通过')
+          return parsed
+        }
         catch (error) {
+          // 只记录固定类别，不记录模型正文、思考内容或任意校验错误原文。
+          const category = error instanceof z.ZodError ? '字段格式' : error instanceof SyntaxError ? 'JSON格式'
+            : error instanceof Error && error.message === '模型响应不完整' ? '响应未完整结束'
+              : error instanceof Error && error.message.startsWith('周期报告遗漏成果素材：') ? '遗漏成果素材' : '结构或来源校验'
+          logger.warn({ ...timing(), category, willRetry: attempt < attempts - 1 }, '原生模型输出校验失败')
           // 本地校验只返回固定类别或字段路径，避免模型正文随修复提示再次传播。
           feedback = error instanceof z.ZodError ? error.issues.map((issue) => issue.path.join('.')).join('；').slice(0, 500)
             : error instanceof SyntaxError ? 'JSON格式无效'
-              : error instanceof Error && /^(输出包含未知来源证据|输出包含未知事项 ID|输出没有引用本批新增消息)/.test(error.message) ? error.message : '输出结构不符合约定'
+              : error instanceof Error && /^(输出包含未知来源证据|输出包含未知事项 ID|输出没有引用本批新增消息|周期报告遗漏成果素材：缺少 \d+ 条，请补齐 R\d+(?:、R\d+)*$|成果素材引用未知或重复，所有成果素材必须且只能归入一个主题或省略列表$|相同项目主题必须合并$|风险或计划引用了未知素材$)/.test(error.message) ? error.message : '输出结构不符合约定'
           if (attempt === attempts - 1) throw Object.assign(new Error('模型输出多次未通过格式或来源证据校验'), { validationFeedback: feedback })
         }
       }

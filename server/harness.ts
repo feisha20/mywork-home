@@ -200,12 +200,13 @@ export class HarnessExtractor implements Extractor {
     const secrets = runtimeSecrets(config)
     const input = periodicReportSummaryInput(type, data, secrets)
     return this.runPrompt(JSON.stringify(input), periodicReportGuidance, (raw) => parsePeriodicReportSummary(raw, input)
-      .map((section) => ({ ...section, items: section.items.map((text) => redact(text, secrets)) })), config.WORKBENCH_BATCH_TIMEOUT_MS, 3, config, undefined, 'long-form')
+      .map((section) => ({ ...section, items: section.items.map((text) => redact(text, secrets)) })), config.WORKBENCH_PERIODIC_REPORT_TIMEOUT_MS, 3, config, undefined, 'long-form')
   }
   private async runPrompt<T>(prompt: string, systemPrompt: string, parse: (raw: string) => T,
     timeoutMs = this.config.WORKBENCH_BATCH_TIMEOUT_MS, maxAttempts = 2, config = this.currentConfig(), schema?: object, routingMode: 'default' | 'long-form' = 'default'): Promise<T> {
-    return modelRouter.run(config, timeoutMs, (candidate, budget) => candidate.WORKBENCH_LLM_API_FORMAT === 'gemini_native' || (schema && candidate.structuredOutputs)
-      ? this.native.run(prompt, systemPrompt, parse, budget, maxAttempts, candidate, schema)
+    // 周月报仅需一次文本归纳，不启动 Agent 子进程，直接保留 HTTP 状态和超时原因。
+    return modelRouter.run(config, timeoutMs, (candidate, budget) => routingMode === 'long-form' || candidate.WORKBENCH_LLM_API_FORMAT === 'gemini_native' || (schema && candidate.structuredOutputs)
+      ? this.native.run(prompt, systemPrompt, parse, budget, maxAttempts, candidate, schema, routingMode === 'long-form' ? 'provider-default' : 'bounded')
       : this.runModelPrompt(prompt, systemPrompt, parse, budget, maxAttempts, candidate), routingMode)
   }
   private async runModelPrompt<T>(prompt: string, systemPrompt: string, parse: (raw: string) => T,

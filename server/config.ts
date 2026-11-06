@@ -22,6 +22,8 @@ const environment = z.object({
   GEMINI_SESSIONS_DIR: z.string().default(join(homedir(), '.gemini/tmp')),
   WORKBENCH_RUNTIME_DIR: z.string().default(resolve('.runtime')),
   WORKBENCH_BATCH_TIMEOUT_MS: z.coerce.number().int().min(100).default(180_000),
+  // 为前端 240 秒等待保留响应和保存时间，长报告不与采集批次共用时限。
+  WORKBENCH_PERIODIC_REPORT_TIMEOUT_MS: z.coerce.number().int().min(100).max(210_000).default(210_000),
   WORKBENCH_SYNC_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
   WORKBENCH_ZENTAO_REQUEST_BUDGET: z.coerce.number().int().min(50).max(10_000).default(1500),
   WORKBENCH_ZENTAO_TRACKED_EXECUTIONS: z.string().regex(/^(?:[1-9]\d*(?:,[1-9]\d*)*)?$/, '指定冲刺请使用英文逗号分隔正整数编号').default(''),

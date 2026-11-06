@@ -168,6 +168,9 @@ Docker 部署只能读取容器已挂载的目录。设置页依据当前容器�
 
 ## 模型与同步规则
 
+- 周月报在 OpenAI Chat Completions、Responses 和 Gemini 原生协议中不传输出 token 上限，采用服务端默认额度；Anthropic Messages 协议要求必填 `max_tokens`，暂保留 8192 以维持兼容。事项抽取等其他任务维持原输出额度。省略输出额度不表示无限生成，模型服务自身的默认额度、上下文上限与工作台请求超时仍然有效。
+- 官方 DeepSeek 的 `deepseek-flash`、`deepseek-v4-pro` 原生调用显式设置低强度思考，覆盖 Chat Completions、Responses 和 Messages 协议；其他地址和未确认的模型保持原参数。每次调用使用独立编号记录各次尝试的响应头耗时、首字节耗时、接收字节数、完成接收和校验结果，区分网络等待与格式修复，不记录报告正文或思考内容。
+- 周月报通过直接 HTTP 调用已配置模型，不启动 Harness 子进程；保留完整成果来源校验，每个候选模型最多尝试三次（含首次生成）。`WORKBENCH_PERIODIC_REPORT_TIMEOUT_MS` 单独控制总时限，默认及上限为 210 秒，前端等待 240 秒。按剩余预算为各备用模型预留最多 60 秒（候选过多时均分）；失败日志记录模型编号、耗时、错误类别和 HTTP 状态，不记录凭证、上游正文或报告内容。生成失败仍保留已有报告，未保存的周期只显示素材预览。
 - DeepSeek Harness、SDK、模型适配器固定为 `0.2.0-rc.2`。
 - 火山 **Coding Plan** 地址为 `https://ark.cn-beijing.volces.com/api/coding/v3`，协议为 OpenAI Chat Completions，套餐模型名称为 `glm-5.3-flash`。
 - 使用工作台独立 Harness home，不改写本机 `~/.dsh` 配置；关闭 Shell、额外会话上传及插件清单上传，只向模型发送脱敏后的会话文字。

@@ -1,6 +1,7 @@
 import { modelApiFormat } from '../shared/modelApi.js'
 import type { ModelRuntimeStatus } from '../shared/settings.js'
 import type { Config } from './config.js'
+import { logger } from './logger.js'
 
 export const MODEL_ERROR_CODES = ['TIMEOUT', 'CONNECTION', 'NO_API_KEY', 'VALIDATION', 'SHUTTING_DOWN'] as const
 export type ModelErrorCode = typeof MODEL_ERROR_CODES[number]
@@ -8,7 +9,7 @@ export type ModelErrorCode = typeof MODEL_ERROR_CODES[number]
 // 连接和超时允许切换备用模型；关闭与输出校验必须原样抛出，避免把停机当成故障转移。
 export class ModelConnectionError extends Error {
   readonly code: ModelErrorCode
-  constructor(message: string, code: ModelErrorCode = 'CONNECTION') {
+  constructor(message: string, code: ModelErrorCode = 'CONNECTION', readonly httpStatus?: number) {
     super(message)
     this.name = 'ModelConnectionError'
     this.code = code
@@ -72,13 +73,14 @@ export class ModelRouter {
     for (const [index, model] of models.entries()) {
       const remaining = deadline - Date.now()
       if (remaining <= 0) break
-      // 周月报给候选模型最多 90 秒，并为每个后续模型保留 15 秒；总预算不变。
+      // 长报告为每个备用模型预留最多 60 秒，避免最后的候选只剩 15 秒。
       const count = models.length - index
-      const reserve = Math.min(15_000, Math.floor(remaining / count))
+      const reserve = Math.min(mode === 'long-form' ? 60_000 : 15_000, Math.floor(remaining / count))
       const budget = index === models.length - 1 ? remaining : mode === 'long-form'
         ? Math.min(90_000, Math.max(1, remaining - reserve * (count - 1)))
         : Math.min(30_000, Math.max(1, Math.floor(remaining / count)))
       const identity = this.identity(model)
+      const started = Date.now()
       this.active.set(identity, (this.active.get(identity) ?? 0) + 1)
       this.changed(index > 0 ? { from: models[index - 1].id, to: model.id } : {})
       try {
@@ -87,8 +89,12 @@ export class ModelRouter {
         this.lastUsedIdentity = this.identity(model)
         this.failures.delete(this.identity(model))
         this.scheduleRecovery()
+        if (mode === 'long-form') logger.info({ modelId: model.id, mode, budgetMs: budget, elapsedMs: Date.now() - started }, '周月报模型生成成功')
         return result
       } catch (error) {
+        if (mode === 'long-form') logger.warn({ modelId: model.id, mode, budgetMs: budget, elapsedMs: Date.now() - started,
+          code: error instanceof ModelConnectionError ? error.code : 'VALIDATION',
+          httpStatus: error instanceof ModelConnectionError ? error.httpStatus : undefined }, '周月报候选模型失败')
         if (!(error instanceof ModelConnectionError) || error.code === 'SHUTTING_DOWN' || error.code === 'VALIDATION') throw error
         this.failures.set(this.identity(model), Date.now() + 60_000)
         this.scheduleRecovery()
